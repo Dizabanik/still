@@ -14,19 +14,20 @@ LD      = $(CC)
 # -Wvla \
 
 
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
+TIMBR_DIR = timbr
+
 # Flags
 CFLAGS  = -g -O3 -Wall -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L \
-          -I include/ $(shell llvm-config --cflags)
+          -I include/ -I $(TIMBR_DIR) $(shell llvm-config --cflags)
 
 LDFLAGS = $(shell llvm-config --ldflags --link-shared --libs --system-libs \
             core executionengine analysis native passes coroutines bitwriter)
 
-# Directories
-SRC_DIR = src
-BUILD_DIR = build
-
 # Files
-SRCS  = $(wildcard $(SRC_DIR)/*.c)
+SRCS  = $(wildcard $(SRC_DIR)/*.c) $(TIMBR_DIR)/timbr.c
 OBJS  = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 TARGET = kawac
 
