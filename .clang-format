@@ -1,0 +1,11 @@
+BasedOnStyle: LLVM
+
+# Use tabs for indentation
+UseTab: Always
+
+# A tab counts as 4 spaces
+TabWidth: 4
+
+# Indentation level also treated as 4 columns
+IndentWidth: 4
+

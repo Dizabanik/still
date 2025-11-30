@@ -1,0 +1,73 @@
+import stdc;
+
+// Structs
+struct User {
+    u32 id;
+    u8 age;
+}
+impl User {
+    fn int add(){
+        return 0;
+    }
+}
+
+alias Millisecond = u32;
+
+fn Millisecond test(Millisecond input){
+    return (input + 1);
+}
+
+fn i32 main() {
+    // C-Style Declarations
+    u32 count = 10;
+    char c = 'K';
+    bool ok = true;
+    Millisecond mil = 20;
+    Millisecond ret = test(mil);
+    User k;
+    k.add();
+    stdc.printf("Char: %c, Bool: %d, Mil: %d\n", c, ok, ret);
+
+    let x = 10;
+    if(x >= 11) {
+    return 42;
+    }
+    orbit y := x + 5;
+
+    stdc.printf("Orbit: x=%d, y=%d\n", x, y);
+    x = 50;
+    stdc.printf("Orbit Updated: x=%d, y=%d\n", x, y);
+
+    // Pour Operator
+    let nums = set { 1, 2 };
+    nums ~= 3;
+    dyn testMut = 2;
+    stdc.printf("Dyn: %d\n", testMut);
+
+    testMut = 2.5;
+
+
+
+    batch (n in nums) {
+        stdc.printf("Batch: %d\n", n);
+    }
+
+    let task_handle = brew {
+        i32 sum = 0;
+        while (sum < 1000000) {
+        sum = sum + 1;
+        }
+        stdc.printf("Async Done. Sum: %d\n", sum);
+        return sum;
+    };
+
+    defer stdc.printf("Main working...\n");
+    stdc.printf("%d\n", sip(task_handle));
+
+
+
+    i8* ptr = stdc.malloc(16);
+    stdc.free(ptr);
+
+    stdc.printf("End.\n");
+}
