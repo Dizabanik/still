@@ -31,6 +31,12 @@ typedef struct Type {
 	char *name;			// For struct/alias names
 } Type;
 
+typedef struct StructInitItem {
+	char *field_name; // NULL if positional
+	struct ASTNode *value;
+	struct StructInitItem *next;
+} StructInitItem;
+
 // --- NODES ---
 typedef enum {
 	NODE_PROGRAM,
@@ -61,7 +67,10 @@ typedef enum {
 	NODE_FILTER,
 	NODE_PRESS,
 	NODE_ALIAS,
-	NODE_IMPORT
+	NODE_CAST,
+	NODE_IMPORT,
+	NODE_STRUCT_LITERAL,
+	NODE_DEREF
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -94,6 +103,9 @@ struct ASTNode {
 			ASTNode *fields;
 		} struct_decl;
 		struct {
+			struct ASTNode *val;
+		} cast;
+		struct {
 			char *struct_name;
 			ASTNode *methods;
 		} impl;
@@ -104,9 +116,12 @@ struct ASTNode {
 			int is_const;
 		} var_decl;
 		struct {
-			char *name;
-			ASTNode *value;
+			struct ASTNode *target;
+			struct ASTNode *value;
 		} assign;
+		struct {
+			StructInitItem *items;
+		} struct_lit;
 		struct {
 			int op;
 			ASTNode *left, *right;
@@ -172,6 +187,9 @@ struct ASTNode {
 			char *name;
 			Type *target_type;
 		} alias;
+		struct {
+			struct ASTNode *expr;
+		} deref;
 		struct {
 			char *lib_name;
 		} import;

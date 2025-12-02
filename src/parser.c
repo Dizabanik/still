@@ -104,6 +104,31 @@ static ASTNode *find_decl(Parser *p, const char *name) {
 static int is_type_token(TokenType t) {
 	return (t >= TOK_VOID && t <= TOK_F64) || t == TOK_IDENTIFIER;
 }
+static int is_likely_cast(Parser *p) {
+	// Lookahead logic:
+	// Case 1: (Primitive) -> e.g. (u64)
+	// Case 2: (Ident)     -> e.g. (User)
+	// Case 3: (Ident*)    -> e.g. (User*)
+
+	Lexer temp = *p->lexer; // Clone lexer state
+	Token t1 = lexer_next(&temp);
+
+	// Primitive types are definitely casts
+	if (t1.type >= TOK_VOID && t1.type <= TOK_F64)
+		return 1;
+
+	// Identifier types are ambiguous: (x) could be cast (Type) or grouping
+	// (var)
+	if (t1.type == TOK_IDENTIFIER) {
+		Token t2 = lexer_next(&temp);
+		// If followed by ')' or '*', it's likely a type (Cast)
+		// If followed by '+', '-', etc., it's a variable (Grouping)
+		if (t2.type == TOK_RPAREN || t2.type == TOK_STAR) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 static Type *parse_type(Parser *p) {
 	Type *t = arena_alloc(p->arena, sizeof(Type));
@@ -154,13 +179,123 @@ static Type *parse_type(Parser *p) {
 	return t;
 }
 
+static ASTNode *parse_postfix(Parser *p);
+// 2. Implement parse_unary
+static ASTNode *parse_unary(Parser *p) {
+	if (p->cur.type == TOK_STAR) {
+		advance(p); // Eat '*'
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_DEREF;
+		n->data.deref.expr = parse_unary(p); // Recurse for **ptr
+
+		// Type Inference: If expr is T*, this node is T
+		if (n->data.deref.expr->data_type &&
+			n->data.deref.expr->data_type->kind == TYPE_PTR) {
+			n->data_type = n->data.deref.expr->data_type->inner;
+		}
+		return n;
+	}
+	return parse_postfix(p); // Fall through to postfix/primary
+}
 static ASTNode *parse_expr(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static ASTNode *parse_block(Parser *p);
 static ASTNode *parse_grind(Parser *p);
 
-// ... (parse_primary, parse_postfix, parse_binop_rhs, parse_expr, parse_block,
-// register_dependencies, parse_grind same as before) ... Re-pasting for safety
+static ASTNode *parse_struct_literal(Parser *p);
+static int peek_is_struct_literal(Parser *p);
+
+// Returns 1 if the upcoming '{ ... }' looks like a struct literal.
+// Returns 0 if it looks like a block code.
+static int peek_is_struct_literal(Parser *p) {
+	Lexer temp = *p->lexer; // Clone lexer state to peek without consuming
+
+	// We assume current token is '{'. Skip it.
+	Token t = lexer_next(&temp);
+
+	// Case 1: Empty {} -> Ambiguous, default to Block (or empty struct?)
+	// In Kawa, empty blocks are common, empty structs less so.
+	if (t.type == TOK_RBRACE)
+		return 0;
+
+	// Case 2: Designated Initializer: { .field = ... }
+	if (t.type == TOK_DOT)
+		return 1;
+
+	// Case 3: Scan for separator
+	// If we find a comma (,) before a semicolon (;), it is a Struct Literal.
+	// If we find a semicolon (;) first, it is a Block.
+	int depth = 1;
+	while (t.type != TOK_EOF && depth > 0) {
+		if (t.type == TOK_LBRACE)
+			depth++;
+		if (t.type == TOK_RBRACE) {
+			depth--;
+			if (depth == 0)
+				break;
+		}
+
+		if (depth == 1) {
+			if (t.type == TOK_COMMA)
+				return 1; // Found comma at top level -> Struct
+			if (t.type == TOK_SEMICOLON)
+				return 0; // Found semicolon -> Block
+			// If we see keywords like 'return', 'let', 'while', it's a block
+			if (t.type == TOK_RETURN || t.type == TOK_LET ||
+				t.type == TOK_WHILE)
+				return 0;
+		}
+		t = lexer_next(&temp);
+	}
+
+	// Fallback: If we scanned the whole thing and found neither,
+	// it's a single expression { expr }. treat as Block (Expression Block)
+	// or Struct? Let's default to Block for { 1 } grouping behavior.
+	return 0;
+}
+
+// ---------------------------------------------------------
+// 2. STRUCT LITERAL PARSER
+// ---------------------------------------------------------
+static ASTNode *parse_struct_literal(Parser *p) {
+	ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+	n->type = NODE_STRUCT_LITERAL;
+	n->data_type = NULL; // Type is usually inferred from context (assignment)
+
+	consume(p, TOK_LBRACE, "Expected '{'");
+
+	StructInitItem *head = NULL;
+	StructInitItem **tail = &head;
+
+	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		StructInitItem *item = arena_alloc(p->arena, sizeof(StructInitItem));
+		item->field_name = NULL;
+
+		// Handle Designated Init: .age = 10
+		if (p->cur.type == TOK_DOT) {
+			advance(p);
+			item->field_name = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected field name");
+			consume(p, TOK_ASSIGN, "Expected '='");
+		}
+
+		item->value = parse_expr(p);
+		item->next = NULL;
+		*tail = item;
+		tail = &item->next;
+
+		if (p->cur.type == TOK_COMMA) {
+			advance(p);
+		} else if (p->cur.type != TOK_RBRACE) {
+			report_error(p, "Expected ',' or '}' in struct literal");
+			break;
+		}
+	}
+	consume(p, TOK_RBRACE, "Expected '}'");
+	n->data.struct_lit.items = head;
+	return n;
+}
+
 static ASTNode *parse_primary(Parser *p) {
 	ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
 	if (p->cur.type == TOK_INT_LIT) {
@@ -206,15 +341,39 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_GRIND) {
 		advance(p);
 		return parse_grind(p);
+	} else if (p->cur.type == TOK_LBRACE) {
+		if (peek_is_struct_literal(p)) {
+			return parse_struct_literal(p);
+		} else {
+			return parse_block(p);
+		}
 	} else if (p->cur.type == TOK_IDENTIFIER) {
 		n->type = NODE_VAR_REF;
 		n->data.var_ref.name = p->cur.text;
 		advance(p);
 	} else if (p->cur.type == TOK_LPAREN) {
-		advance(p);
-		ASTNode *expr = parse_expr(p);
-		consume(p, TOK_RPAREN, "Expected ')'");
-		return expr;
+		// [FIX] Use lookahead to distinguish Cast vs Grouping
+		if (is_likely_cast(p)) {
+			// --- Parse as CAST ---
+			advance(p); // eat '('
+			Type *cast_type = parse_type(p);
+			consume(p, TOK_RPAREN, "Expected ')' after cast type");
+
+			// [CHANGE] Use parse_unary to allow casting things like *ptr
+			ASTNode *val = parse_unary(p);
+
+			// Rewrite 'n' as a CAST node
+			n->type = NODE_CAST;
+			n->data_type = cast_type;
+			n->data.cast.val = val;
+			return n;
+		} else {
+			// --- Parse as GROUPING ---
+			advance(p); // eat '('
+			ASTNode *expr = parse_expr(p);
+			consume(p, TOK_RPAREN, "Expected ')'");
+			return expr;
+		}
 	} else if (p->cur.type == TOK_BREW) {
 		advance(p);
 		n->type = NODE_BREW;
@@ -386,7 +545,7 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			return lhs;
 		int op = p->cur.type;
 		advance(p);
-		ASTNode *rhs = parse_primary(p);
+		ASTNode *rhs = parse_postfix(p);
 		if (op == TOK_TILDE_EQ) {
 			ASTNode *pour = arena_alloc(p->arena, sizeof(ASTNode));
 			pour->type = NODE_SET_POUR;
@@ -405,7 +564,7 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 }
 
 static ASTNode *parse_expr(Parser *p) {
-	ASTNode *lhs = parse_postfix(p);
+	ASTNode *lhs = parse_unary(p); // Changed from parse_postfix(p)
 	return parse_binop_rhs(p, 0, lhs);
 }
 
@@ -647,24 +806,47 @@ static ASTNode *parse_statement(Parser *p) {
 		char *name = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Alias name");
 		consume(p, TOK_ASSIGN, "=");
-		parse_type(p);
+
+		// [FIX] Capture the type!
+		Type *target_type = parse_type(p);
+
 		consume(p, TOK_SEMICOLON, ";");
 		ASTNode *alias = arena_alloc(p->arena, sizeof(ASTNode));
 		alias->type = NODE_ALIAS;
 		alias->data.alias.name = name;
+
+		// [FIX] Store the target type in the node's data_type field
+		alias->data_type = target_type;
+
 		return alias;
 	}
 	if (p->cur.type == TOK_LBRACE)
 		return parse_block(p);
 	ASTNode *expr = parse_expr(p);
 	if (p->cur.type == TOK_ASSIGN) {
-		advance(p);
+		advance(p); // Eat '='
+
 		ASTNode *assign = arena_alloc(p->arena, sizeof(ASTNode));
 		assign->type = NODE_ASSIGN;
-		if (expr->type == NODE_VAR_REF)
-			assign->data.assign.name = expr->data.var_ref.name;
+
+		// Validate LHS is an L-Value
+		if (expr->type == NODE_VAR_REF || expr->type == NODE_MEMBER_ACCESS) {
+			assign->data.assign.target = expr;
+		} else {
+			report_error(
+				p, "Invalid assignment target. Must be variable or field.");
+		}
+
+		// Special Case: Variable Decl with implicit struct literal
+		// User a = { ... };
+		// (Note: This specific path is for re-assignment.
+		// Decl parsing happens in the LET block above, which you should also
+		// update to use parse_expr() for the init value, which calls
+		// parse_primary, which now handles struct literals automatically thanks
+		// to peek_is_struct_literal).
+
 		assign->data.assign.value = parse_expr(p);
-		consume(p, TOK_SEMICOLON, ";");
+		consume(p, TOK_SEMICOLON, "Expected ';'");
 		return assign;
 	}
 	consume(p, TOK_SEMICOLON, "Expected ';'");

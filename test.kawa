@@ -6,10 +6,21 @@ struct User {
     u8 age;
 }
 impl User {
-    fn int add(){
-        return 0;
+    fn int add(User a, User b){
+       stdc.printf("%d %d\n", a.id + b.id, a.age + b.age);
+       return a.id+b.id;
     }
 }
+// Structs
+struct Car {
+    float speed;
+    float accel;
+}
+//impl Car {
+//    fn Car create(Car* c){
+//        (*c).speed = 0;
+//    }
+//}
 
 alias Millisecond = u32;
 
@@ -24,8 +35,14 @@ fn i32 main() {
     bool ok = true;
     Millisecond mil = 20;
     Millisecond ret = test(mil);
-    User k;
-    k.add();
+    User k = {0,90};
+    stdc.printf("%d %d\n", k.id, k.age);
+    User a;
+    User b = {.id = 90, .age = 18};
+    a.id = 2;
+    a.age = 40;
+    k.add(a,b);
+
     stdc.printf("Char: %c, Bool: %d, Mil: %d\n", c, ok, ret);
 
     let x = 10;
@@ -41,10 +58,7 @@ fn i32 main() {
     // Pour Operator
     let nums = set { 1, 2 };
     nums ~= 3;
-    dyn testMut = 2;
-    stdc.printf("Dyn: %d\n", testMut);
 
-    testMut = 2.5;
 
 
 
@@ -66,7 +80,7 @@ fn i32 main() {
 
 
 
-    i8* ptr = stdc.malloc(16);
+    i8* ptr = stdc.malloc((u64)16);
     stdc.free(ptr);
 
     stdc.printf("End.\n");
