@@ -32,12 +32,16 @@ char *get_line_text_parser(Parser *p) {
 
 	return ret;
 }
-
-static void report_error(Parser *p, const char *fmt, ...) {
+static inline bool parser_err(Parser *p) {
 	if (p->panic_mode)
-		return;
+		return false;
 	p->panic_mode = 1;
 	p->had_error = 1;
+	return true;
+}
+static void report_error(Parser *p, const char *fmt, ...) {
+	if (!parser_err(p))
+		return;
 	va_list args;
 	va_start(args, fmt);
 	char buffer[256];
@@ -83,7 +87,7 @@ static void advance(Parser *p) {
 	p->prev = p->cur;
 	p->cur = lexer_next(p->lexer);
 	if (p->cur.type == TOK_ERROR)
-		report_error(p, "Lexing failed");
+		parser_err(p);
 }
 
 static void consume(Parser *p, TokenType t, const char *err) {
@@ -168,13 +172,21 @@ static Type *parse_type(Parser *p) {
 		return t;
 	}
 	advance(p);
-
-	while (p->cur.type == TOK_STAR) {
+	TokenType cur_t = p->cur.type;
+	while (cur_t == TOK_STAR || cur_t == TOK_AMP) {
 		advance(p);
-		Type *ptr = arena_alloc(p->arena, sizeof(Type));
-		ptr->kind = TYPE_PTR;
-		ptr->inner = t;
-		t = ptr;
+		if (cur_t == TOK_STAR) {
+			Type *ptr = arena_alloc(p->arena, sizeof(Type));
+			ptr->kind = TYPE_PTR;
+			ptr->inner = t;
+			t = ptr;
+		} else {
+			Type *amp = arena_alloc(p->arena, sizeof(Type));
+			amp->kind = TYPE_AMP;
+			amp->inner = t;
+			t = amp;
+		}
+		cur_t = p->cur.type;
 	}
 	return t;
 }
@@ -191,6 +203,18 @@ static ASTNode *parse_unary(Parser *p) {
 		// Type Inference: If expr is T*, this node is T
 		if (n->data.deref.expr->data_type &&
 			n->data.deref.expr->data_type->kind == TYPE_PTR) {
+			n->data_type = n->data.deref.expr->data_type->inner;
+		}
+		return n;
+	} else if (p->cur.type == TOK_AMP) {
+		advance(p); // Eat '&'
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_AMP;
+		n->data.deref.expr = parse_unary(p); // Recurse for &&var
+
+		// Type Inference: If expr is T*, this node is T
+		if (n->data.deref.expr->data_type &&
+			n->data.deref.expr->data_type->kind == TYPE_AMP) {
 			n->data_type = n->data.deref.expr->data_type->inner;
 		}
 		return n;

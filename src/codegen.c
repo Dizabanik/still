@@ -1,6 +1,8 @@
 #include "codegen.h"
+#include "arena.h"
 #include "ast.h"
 #include "timbr.h"
+#include <_inttypes.h>
 #include <lexer.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
@@ -8,6 +10,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +62,42 @@ Type *resolve_alias_type(const char *name) {
 
 Scope *scope_find(KawaCompiler *c, const char *name);
 LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n);
+
+char *get_var_path(const char *s) {
+	if (!s)
+		return NULL;
+
+	size_t len = strlen(s);
+
+	// Allocate output buffer same size or smaller
+	char *out = malloc(len + 1);
+	if (!out)
+		return NULL;
+
+	size_t i = 0, j = 0;
+
+	while (i < len) {
+		// Check for "__" (non-overlapping)
+		if (i + 1 < len && s[i] == '_' && s[i + 1] == '_') {
+			int at_start = (i == 0);
+			int at_end = (i + 2 == len);
+
+			if (!at_start && !at_end) {
+				// Replace with '.'
+				out[j++] = '.';
+				i += 2;
+				continue;
+			}
+		}
+
+		// Normal copy
+		out[j++] = s[i++];
+	}
+
+	out[j] = '\0';
+	return out;
+}
+
 const char *resolve_type_name(KawaCompiler *c, ASTNode *n) {
 	if (n->type == NODE_VAR_REF) {
 		Scope *s = scope_find(c, n->data.var_ref.name);
@@ -68,6 +107,9 @@ const char *resolve_type_name(KawaCompiler *c, ASTNode *n) {
 	}
 	if (n->type == NODE_MEMBER_ACCESS) {
 		return n->data.member_access.member;
+	}
+	if (n->type == NODE_DEREF) {
+		return resolve_type_name(c, n->data.deref.expr);
 	}
 	return "unknown";
 }
@@ -356,7 +398,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	if (n->type == NODE_VAR_REF) {
 		Scope *s = scope_find(c, n->data.var_ref.name);
 		if (!s) {
-			timbr_err("Undefined variable '%s'\n", n->data.var_ref.name);
+			char *v_path = get_var_path(n->data.var_ref.name);
+			timbr_err("Undefined variable '%s'\n", v_path);
+			free(v_path);
 			exit(1);
 		}
 		LLVMValueRef load =
@@ -409,7 +453,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			} else if (strcmp(func_name, "free") == 0) {
 				fn = c->free_fn;
 			} else {
-				timbr_err("Undefined function: %s\n", func_name);
+				char *f_path = get_var_path(func_name);
+				timbr_err("Undefined function: %s\n", f_path);
+				free(f_path);
 				exit(1);
 			}
 		}
@@ -563,6 +609,96 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		default:
 			return l;
 		}
+	}
+	if (n->type == NODE_SET_POUR) {
+		// 1. Resolve the address of the Set struct (the LHS of ~=)
+		LLVMTypeRef ignored;
+		LLVMValueRef set_ptr =
+			get_address(c, n->data.set_pour.target, &ignored);
+		LLVMValueRef val_to_add = codegen_expr(c, n->data.set_pour.value);
+
+		// Reconstruct Set Struct Type: { i32*, i64, i64 }
+		// Corresponds to the definition in get_llvm_type for TYPE_SET
+		LLVMTypeRef i32_ptr_t =
+			LLVMPointerType(LLVMInt32TypeInContext(c->context), 0);
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(c->context);
+		LLVMTypeRef set_struct_t = LLVMStructTypeInContext(
+			c->context, (LLVMTypeRef[]){i32_ptr_t, i64_t, i64_t}, 3, 0);
+
+		// 2. Load Buffer, Count, and Capacity pointers (GEP)
+		LLVMValueRef buf_gep =
+			LLVMBuildStructGEP2(c->builder, set_struct_t, set_ptr, 0, "buf_p");
+		LLVMValueRef cnt_gep =
+			LLVMBuildStructGEP2(c->builder, set_struct_t, set_ptr, 1, "cnt_p");
+		LLVMValueRef cap_gep =
+			LLVMBuildStructGEP2(c->builder, set_struct_t, set_ptr, 2, "cap_p");
+
+		LLVMValueRef cur_cnt =
+			LLVMBuildLoad2(c->builder, i64_t, cnt_gep, "cur_cnt");
+		LLVMValueRef cur_cap =
+			LLVMBuildLoad2(c->builder, i64_t, cap_gep, "cur_cap");
+
+		// 3. Check if resize is needed: if (cnt >= cap)
+		LLVMValueRef is_full =
+			LLVMBuildICmp(c->builder, LLVMIntUGE, cur_cnt, cur_cap, "is_full");
+
+		LLVMBasicBlockRef grow_bb =
+			LLVMAppendBasicBlock(c->current_func, "set_grow");
+		LLVMBasicBlockRef append_bb =
+			LLVMAppendBasicBlock(c->current_func, "set_append");
+
+		LLVMBuildCondBr(c->builder, is_full, grow_bb, append_bb);
+
+		// --- GROW BLOCK (Realloc) ---
+		LLVMPositionBuilderAtEnd(c->builder, grow_bb);
+
+		// New Capacity = Capacity * 2
+		LLVMValueRef new_cap = LLVMBuildMul(
+			c->builder, cur_cap, LLVMConstInt(i64_t, 2, 0), "new_cap");
+		// New Size in Bytes = new_cap * 4 (since elements are i32)
+		LLVMValueRef new_bytes = LLVMBuildMul(
+			c->builder, new_cap, LLVMConstInt(i64_t, 4, 0), "new_bytes");
+
+		LLVMValueRef old_buf =
+			LLVMBuildLoad2(c->builder, i32_ptr_t, buf_gep, "old_buf");
+		// Cast to i8* for realloc
+		LLVMValueRef old_buf_void = LLVMBuildBitCast(
+			c->builder, old_buf,
+			LLVMPointerType(LLVMInt8TypeInContext(c->context), 0), "void_ptr");
+
+		// Call realloc(void* ptr, i64 size)
+		LLVMValueRef new_mem = LLVMBuildCall2(
+			c->builder, c->realloc_type, c->realloc_fn,
+			(LLVMValueRef[]){old_buf_void, new_bytes}, 2, "new_mem");
+
+		// Cast back to i32*
+		LLVMValueRef new_buf =
+			LLVMBuildBitCast(c->builder, new_mem, i32_ptr_t, "new_buf_cast");
+
+		// Update struct fields
+		LLVMBuildStore(c->builder, new_buf, buf_gep);
+		LLVMBuildStore(c->builder, new_cap, cap_gep);
+		LLVMBuildBr(c->builder, append_bb);
+
+		// --- APPEND BLOCK ---
+		LLVMPositionBuilderAtEnd(c->builder, append_bb);
+
+		// Reload buffer (it might have changed in grow_bb)
+		LLVMValueRef final_buf =
+			LLVMBuildLoad2(c->builder, i32_ptr_t, buf_gep, "final_buf");
+
+		// buffer[count] = value
+		LLVMValueRef slot =
+			LLVMBuildGEP2(c->builder, LLVMInt32TypeInContext(c->context),
+						  final_buf, &cur_cnt, 1, "slot");
+		LLVMBuildStore(c->builder, val_to_add, slot);
+
+		// count++
+		LLVMValueRef next_cnt = LLVMBuildAdd(
+			c->builder, cur_cnt, LLVMConstInt(i64_t, 1, 0), "next_cnt");
+		LLVMBuildStore(c->builder, next_cnt, cnt_gep);
+
+		return val_to_add;
 	}
 	if (n->type == NODE_MEMBER_ACCESS) {
 		LLVMTypeRef field_type = NULL;
@@ -840,6 +976,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		codegen_expr(c, n);
 		return;
 	}
+	if (n->type == NODE_SET_POUR) {
+		codegen_expr(c, n);
+		return;
+	}
 	if (n->type == NODE_BLOCK) {
 		ASTNode *s = n->data.block.stmts;
 		while (s) {
@@ -851,7 +991,6 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef val_ptr =
 			create_entry_block_alloca(c, var_type, n->data.var_decl.name);
 		scope_push(c, n->data.var_decl.name, val_ptr, var_type, n);
-
 		LLVMValueRef init_val = NULL;
 		if (n->data.var_decl.init) {
 			// [FIX] Propagate Decl Type to Struct Literal Init
@@ -961,7 +1100,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		}
 		LLVMValueRef set_ptr = s_coll->val;
 		LLVMValueRef len_ptr = LLVMBuildStructGEP2(c->builder, s_coll->type,
-												   set_ptr, 2, "len_ptr");
+												   set_ptr, 1, "len_ptr");
 		LLVMValueRef len = LLVMBuildLoad2(
 			c->builder, LLVMInt64TypeInContext(c->context), len_ptr, "len");
 		attach_tbaa(c, len, LLVMInt64TypeInContext(c->context));
@@ -1502,7 +1641,11 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	if (LLVMWriteBitcodeToFile(c->module, filename) != 0) {
 		timbr_err("Error writing bitcode\n");
 	}
-	LLVMDumpModule(c->module);
+	// char *text = LLVMPrintModuleToString(c->module);
+	// LLVMDumpModule(c->module);
+	if (LLVMPrintModuleToFile(c->module, "output.ll", &error_msg)) {
+		timbr_err("Writing file failed: %s\n", error_msg);
+	};
 
 	LLVMDisposeTargetMachine(machine);
 }

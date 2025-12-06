@@ -112,6 +112,8 @@ Token lexer_next(Lexer *l) {
 			return make_token(l, TOK_MINUS, "-");
 		if (c == '*')
 			return make_token(l, TOK_STAR, "*");
+		if (c == '&')
+			return make_token(l, TOK_AMP, "&");
 		if (c == '/')
 			return make_token(l, TOK_SLASH, "/");
 

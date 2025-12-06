@@ -80,6 +80,7 @@ typedef enum {
 	TOK_ISEQ,	// ==
 	TOK_LEQ,
 	TOK_REQ, // <= and >=
+	TOK_AMP
 
 } TokenType;
 

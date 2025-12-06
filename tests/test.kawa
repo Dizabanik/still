@@ -13,14 +13,14 @@ impl User {
 }
 // Structs
 struct Car {
-    float speed;
-    float accel;
+    u32 speed;
+    u32 accel;
 }
-//impl Car {
-//    fn Car create(Car* c){
-//        (*c).speed = 0;
-//    }
-//}
+impl Car {
+    fn u32 create(Car* c){
+        (*c).speed = 90 + 1;
+    }
+}
 
 alias Millisecond = u32;
 
@@ -42,6 +42,10 @@ fn i32 main() {
     a.id = 2;
     a.age = 40;
     k.add(a,b);
+    //Car* car = stdc.malloc(sizeof(Car));
+    //(*car).speed = 90;
+    //(*car).create(car);
+    //stdc.printf("Car: %u\n", car.speed);
 
     stdc.printf("Char: %c, Bool: %d, Mil: %d\n", c, ok, ret);
 

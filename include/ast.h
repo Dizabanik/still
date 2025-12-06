@@ -22,7 +22,8 @@ typedef enum {
 	TYPE_HANDLE,
 	TYPE_STRUCT,
 	TYPE_ALIAS,
-	TYPE_PTR
+	TYPE_PTR,
+	TYPE_AMP
 } TypeKind;
 
 typedef struct Type {
@@ -70,7 +71,8 @@ typedef enum {
 	NODE_CAST,
 	NODE_IMPORT,
 	NODE_STRUCT_LITERAL,
-	NODE_DEREF
+	NODE_DEREF,
+	NODE_AMP
 } NodeType;
 
 typedef struct ASTNode ASTNode;

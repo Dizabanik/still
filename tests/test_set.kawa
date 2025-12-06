@@ -1,0 +1,10 @@
+
+import stdc;
+
+fn i32 main() {
+    let a = set {1,2};
+    a ~= 3;
+    batch (n in a) {
+        stdc.printf("Batch: %d\n", n);
+    }
+}
