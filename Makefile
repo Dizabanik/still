@@ -20,7 +20,7 @@ BUILD_DIR = build
 TIMBR_DIR = timbr
 
 # Flags
-CFLAGS  = -g -O3 -Wall -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L \
+CFLAGS  = -g -O3 -Wall -Wno-unused-parameter -march=native -funroll-loops -std=c11 -D_POSIX_C_SOURCE=200809L \
           -I include/ -I $(TIMBR_DIR) $(shell llvm-config --cflags)
 
 LDFLAGS = $(shell llvm-config --ldflags --link-shared --libs --system-libs \

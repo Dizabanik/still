@@ -3,6 +3,6 @@
 make
 rm output.bc
 rm output.ll
-./kawac test.kawa
+./kawac tests/test.kawa
 
 lli output.bc

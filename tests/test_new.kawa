@@ -1,0 +1,40 @@
+import stdc;
+
+
+// Structs
+struct Car {
+    u32 speed;
+    u32 accel;
+}
+impl Car {
+    fn u32 create(Car* c, double d){
+        (*c).speed = 90 + d;
+    }
+    fn float create2(Car* c, float d){
+        (*c).speed = 90 - d;
+    }
+}
+
+alias Millisecond = u32;
+
+fn Millisecond test(Millisecond input){
+    return (input + 1);
+}
+
+fn i32 main() {
+    Car c = {0,0};
+    c.create(&c, 1.0);
+    stdc.printf("Car: %d\n", c.speed);
+    Car* car2 = stdc.malloc(sizeof(Car));
+    car2->speed = 90;
+    stdc.printf("Car2: %d\n", car2->speed);
+    car2->create(car2, 1.5);
+    stdc.printf("Car2: %f\n", car2->speed);
+    (*car2).create(car2, 5.98);
+    stdc.printf("Car2: %f\n", (*car2).speed);
+    stdc.free(car2);
+    Car** p = &car2;
+    stdc.printf("Car2: %f\n", (*p)->speed);
+    
+    return 0;
+}

@@ -334,10 +334,14 @@ Token lexer_next(Lexer *l) {
 
 Token lexer_peek(Lexer *l) {
 	size_t save_pos = l->pos;
+	size_t save_posA = l->posA;
+	size_t save_posL = l->posL;
 	int save_line = l->line;
 	int save_err = l->had_error;
 	Token t = lexer_next(l);
 	l->pos = save_pos;
+	l->posA = save_posA;
+	l->posL = save_posL;
 	l->line = save_line;
 	l->had_error = save_err;
 	return t;
