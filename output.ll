@@ -1,7 +1,7 @@
 ; ModuleID = 'kawa_main'
 source_filename = "kawa_main"
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
-target triple = "arm64-apple-darwin25.1.0"
+target triple = "arm64-apple-darwin25.5.0"
 
 %User = type { i32, i8 }
 

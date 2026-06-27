@@ -64,6 +64,7 @@ typedef enum {
 	TOK_STAR,
 	TOK_SLASH,
 	TOK_TILDE_EQ, // ~= (Pour)
+	TOK_ARROW,	  // -> (Arrow)
 	TOK_DOT,	  // . (Member access)
 	TOK_LBRACE,
 	TOK_RBRACE,

@@ -27,8 +27,10 @@ LDFLAGS = $(shell llvm-config --ldflags --link-shared --libs --system-libs \
             core executionengine analysis native passes coroutines bitwriter)
 
 # Files
-SRCS  = $(wildcard $(SRC_DIR)/*.c) $(TIMBR_DIR)/timbr.c
-OBJS  = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+SRCS      = $(wildcard $(SRC_DIR)/*.c) $(TIMBR_DIR)/timbr.c
+CGEN_SRCS = $(wildcard $(SRC_DIR)/codegen/*.c)
+OBJS      = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS)) \
+            $(patsubst $(SRC_DIR)/codegen/%.c,$(BUILD_DIR)/codegen_%.o,$(CGEN_SRCS))
 TARGET = kawac
 
 # Pretty Colors
@@ -49,6 +51,11 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	@echo "$(YELLOW)[Compiling]$(RESET) $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Build codegen submodule files
+$(BUILD_DIR)/codegen_%.o: $(SRC_DIR)/codegen/%.c | $(BUILD_DIR)
+	@echo "$(YELLOW)[Compiling]$(RESET) $<"
+	@$(CC) $(CFLAGS) -I $(SRC_DIR)/codegen -c $< -o $@
+
 # Create build directory if missing
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -58,4 +65,4 @@ clean:
 	@rm -rf $(BUILD_DIR) $(TARGET) *.ll *.bc
 	@echo "$(GREEN)[Clean complete]$(RESET)"
 
-.PHONY: all clean
+.PHONY: all clean debug

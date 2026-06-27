@@ -108,8 +108,13 @@ Token lexer_next(Lexer *l) {
 		}
 		if (c == '+')
 			return make_token(l, TOK_PLUS, "+");
-		if (c == '-')
+		if (c == '-') {
+			if (peek(l) == '>') {
+				advance(l);
+				return make_token(l, TOK_ARROW, "->");
+			}
 			return make_token(l, TOK_MINUS, "-");
+		}
 		if (c == '*')
 			return make_token(l, TOK_STAR, "*");
 		if (c == '&')
@@ -322,6 +327,10 @@ Token lexer_next(Lexer *l) {
 			else if (strcmp(text, "f32") == 0)
 				type = TOK_F32;
 			else if (strcmp(text, "f64") == 0)
+				type = TOK_F64;
+			else if (strcmp(text, "float") == 0)
+				type = TOK_F32;
+			else if (strcmp(text, "double") == 0)
 				type = TOK_F64;
 
 			return make_token(l, type, text);

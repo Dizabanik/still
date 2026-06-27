@@ -68,8 +68,11 @@ typedef enum {
 	NODE_FILTER,
 	NODE_PRESS,
 	NODE_ALIAS,
+	NODE_SIZEOF,
 	NODE_CAST,
 	NODE_IMPORT,
+
+	// --- Internal / Lowering ---
 	NODE_STRUCT_LITERAL,
 	NODE_DEREF,
 	NODE_AMP
@@ -128,6 +131,10 @@ struct ASTNode {
 			int op;
 			ASTNode *left, *right;
 		} bin_op;
+		struct {
+			struct ASTNode *value; // Optional expr
+			struct Type *type_val; // Optional type
+		} size_of;
 		struct {
 			int i_val;
 			double f_val;

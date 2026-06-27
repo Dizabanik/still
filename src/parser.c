@@ -348,20 +348,52 @@ static ASTNode *parse_primary(Parser *p) {
 		advance(p);
 	} else if (p->cur.type == TOK_SIZEOF) {
 		advance(p);
-		consume(p, TOK_LPAREN, "(");
-		int depth = 1;
-		while (depth > 0 && p->cur.type != TOK_EOF) {
-			if (p->cur.type == TOK_LPAREN)
-				depth++;
-			if (p->cur.type == TOK_RPAREN)
-				depth--;
-			if (depth > 0)
-				advance(p);
+		consume(p, TOK_LPAREN, "Expected '(' after sizeof");
+
+		Type *t_val = NULL;
+		ASTNode *ctx = NULL;
+
+		// Check if it's a type or an expression
+		if (is_type_token(p->cur.type)) {
+			// It is a type!
+			// Special check for identifiers: Is it a type name or variable?
+			// Parser doesn't track type names perfectly, but let's try
+			// parse_type If it fails, we fallback? No, let's treat as type if
+			// it looks like one.
+
+			// Wait, identifiers are ambiguous.
+			// If we can resolve it as a known type/struct, cool.
+			// Currently `is_type_token` includes IDENTIFIER.
+			// But variables are identifiers too.
+
+			// Lookahead: If it's a primitive type token, it's a type.
+			// If identifier... assume Type if followed by `*` or `)`?
+			// parse_type eats `*`.
+
+			// [FIX] Simple heuristic: Try parse_type.
+			// Any identifier can be a struct name.
+			// Parsing a type that is just "ident" is same as parsing expr
+			// "ident" except for the AST Node.
+
+			// Let's rely on standard parse_type if starts with primitive or we
+			// want to support user types. Actually, let's try to parse as Type
+			// first.
+			t_val = parse_type(p);
+		} else {
+			// Expression
+			ctx = parse_expr(p);
 		}
-		if (p->cur.type == TOK_RPAREN)
-			advance(p);
-		n->type = NODE_LITERAL;
-		n->data.literal.i_val = 4;
+
+		consume(p, TOK_RPAREN, "Expected ')'");
+
+		n->type = NODE_SIZEOF;
+		n->data.size_of.type_val = t_val;
+		n->data.size_of.value = ctx;
+		// The RESULT of sizeof is a u32/u64 literal (constant folded usually,
+		// or computed) We'll set type as U32 for now
+		n->data_type = arena_alloc(p->arena, sizeof(Type));
+		n->data_type->kind = TYPE_U32;
+
 	} else if (p->cur.type == TOK_GRIND) {
 		advance(p);
 		return parse_grind(p);
@@ -473,6 +505,24 @@ static ASTNode *parse_postfix(Parser *p) {
 			member->data.member_access.member = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected member name");
 			expr = member;
+		} else if (p->cur.type == TOK_ARROW) {
+			advance(p);
+			// Transform expr->member to (*expr).member
+			ASTNode *deref = arena_alloc(p->arena, sizeof(ASTNode));
+			deref->type = NODE_DEREF;
+			deref->data.deref.expr = expr;
+
+			// Type Inference for Deref
+			if (expr->data_type && expr->data_type->kind == TYPE_PTR) {
+				deref->data_type = expr->data_type->inner;
+			}
+
+			ASTNode *member = arena_alloc(p->arena, sizeof(ASTNode));
+			member->type = NODE_MEMBER_ACCESS;
+			member->data.member_access.object = deref;
+			member->data.member_access.member = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected member name after ->");
+			expr = member;
 		} else if (p->cur.type == TOK_LPAREN) {
 			advance(p);
 
@@ -494,6 +544,18 @@ static ASTNode *parse_postfix(Parser *p) {
 						decl->data_type->kind == TYPE_STRUCT) {
 						struct_name = decl->data_type->name;
 						is_method_call = 1;
+					}
+				} else if (self_obj->type == NODE_DEREF) {
+					ASTNode *inner = self_obj->data.deref.expr;
+					if (inner->type == NODE_VAR_REF) {
+						ASTNode *decl = find_decl(p, inner->data.var_ref.name);
+						if (decl && decl->data_type &&
+							decl->data_type->kind == TYPE_PTR &&
+							decl->data_type->inner &&
+							decl->data_type->inner->kind == TYPE_STRUCT) {
+							struct_name = decl->data_type->inner->name;
+							is_method_call = 1;
+						}
 					}
 				}
 			}
