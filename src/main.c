@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
 
 	printf("[Kawa] Compiling to LLVM IR...\n");
 	KawaCompiler kc;
-	kawa_init(&kc, "kawa_main");
+	kawa_init(&kc, "kawa_main", &a);
 	kawa_compile(&kc, root);
 
 	printf("[Kawa] Optimizing & Writing 'output.bc'...\n");

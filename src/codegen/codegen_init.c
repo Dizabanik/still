@@ -1,6 +1,16 @@
 #include "codegen_internal.h"
 
-void kawa_init(KawaCompiler *c, const char *module_name) {
+void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
+	// Zero everything first so any field we forget to initialize below
+	// is at least NULL/0 and not garbage.
+	memset(c, 0, sizeof(*c));
+
+	if (!arena) {
+		timbr_err("kawa_init: arena must not be NULL\n");
+		exit(1);
+	}
+	c->arena = arena;
+
 	LLVMInitializeNativeTarget();
 	LLVMInitializeNativeAsmPrinter();
 	LLVMInitializeNativeAsmParser();
@@ -8,10 +18,6 @@ void kawa_init(KawaCompiler *c, const char *module_name) {
 	c->context = LLVMContextCreate();
 	c->module = LLVMModuleCreateWithNameInContext(module_name, c->context);
 	c->builder = LLVMCreateBuilderInContext(c->context);
-	c->scope_stack = NULL;
-	c->coro_resume = NULL;
-	c->lambda_counter = 0;
-	c->in_coroutine = 0;
 
 	init_metadata(c);
 
@@ -19,22 +25,19 @@ void kawa_init(KawaCompiler *c, const char *module_name) {
 	LLVMTypeRef i64 = LLVMInt64TypeInContext(c->context);
 	LLVMTypeRef void_t = LLVMVoidTypeInContext(c->context);
 
-	// Malloc
+	// Malloc / Realloc / Free. Declared as plain `nounwind` (set per-call by
+	// the runtime), vararg = 0 because we always pass i64 for size.
 	c->malloc_type = LLVMFunctionType(i8ptr, &i64, 1, 0);
 	c->malloc_fn = LLVMAddFunction(c->module, "malloc", c->malloc_type);
-	// [FIX] Attributes removed for stability
 
-	// Realloc
 	LLVMTypeRef realloc_args[] = {i8ptr, i64};
 	c->realloc_type = LLVMFunctionType(i8ptr, realloc_args, 2, 0);
 	c->realloc_fn = LLVMAddFunction(c->module, "realloc", c->realloc_type);
 
-	// Free
 	c->free_type = LLVMFunctionType(void_t, &i8ptr, 1, 0);
 	c->free_fn = LLVMAddFunction(c->module, "free", c->free_type);
-	// [FIX] Attributes removed for stability
 
-	// Coroutines (Intrinsics)
+	// Coroutine intrinsics.
 	LLVMTypeRef token = LLVMTokenTypeInContext(c->context);
 	LLVMTypeRef i32 = LLVMInt32TypeInContext(c->context);
 
@@ -66,16 +69,14 @@ void kawa_init(KawaCompiler *c, const char *module_name) {
 	c->coro_save =
 		LLVMAddFunction(c->module, "llvm.coro.save", c->coro_save_type);
 
-	// llvm.coro.end
-	LLVMTypeRef end_args[] = {i8ptr, LLVMInt1TypeInContext(c->context)};
+	// llvm.coro.end -- LLVM 21 expects (ptr, i1, token). The token argument
+	// is unused by the intrinsic itself but is part of the signature; pass
+	// `null` from the call sites.
+	LLVMTypeRef end_args[] = {i8ptr, LLVMInt1TypeInContext(c->context),
+							  token};
 	c->coro_end_type =
-		LLVMFunctionType(LLVMInt1TypeInContext(c->context), end_args, 2, 0);
+		LLVMFunctionType(LLVMInt1TypeInContext(c->context), end_args, 3, 0);
 	c->coro_end = LLVMAddFunction(c->module, "llvm.coro.end", c->coro_end_type);
-
-	// llvm.coro.free
-	c->coro_free_type = LLVMFunctionType(i8ptr, begin_args, 2, 0);
-	c->coro_free =
-		LLVMAddFunction(c->module, "llvm.coro.free", c->coro_free_type);
 
 	// llvm.coro.promise
 	LLVMTypeRef prom_args[] = {i8ptr, i32, LLVMInt1TypeInContext(c->context)};
@@ -96,6 +97,18 @@ void kawa_init(KawaCompiler *c, const char *module_name) {
 	c->coro_done =
 		LLVMAddFunction(c->module, "llvm.coro.done", c->coro_done_type);
 
+	// llvm.coro.resume -- eagerly declared so sip() doesn't rebuild the type
+	// on every call (each rebuild would defeat caching via LLVMTypeRef identity).
+	{
+		LLVMTypeRef resume_args[] = {i8ptr};
+		c->coro_resume_type = LLVMFunctionType(void_t, resume_args, 1, 0);
+		c->coro_resume =
+			LLVMAddFunction(c->module, "llvm.coro.resume", c->coro_resume_type);
+	}
+
+	// Promise layout index for the int "yield" slot. 8 = byte offset of
+	// the second word-sized slot in the promise; matches the layout used by
+	// drip/brew promise storage.
 	c->drip_promise_index = 8;
 	c->brew_promise_index = 8;
 }

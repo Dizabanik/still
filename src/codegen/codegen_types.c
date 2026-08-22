@@ -1,119 +1,222 @@
 #include "codegen_internal.h"
 
-StructDef *struct_defs = NULL;
-AliasDef *alias_defs = NULL;
+// --- Type Registries ---
+// Heads of singly-linked lists; both live on the KawaCompiler struct so each
+// compiler owns its own. Nodes are arena-allocated.
 
-void register_alias(const char *name, Type *target) {
-	AliasDef *ad = malloc(sizeof(AliasDef));
-	ad->name = strdup(name);
+void register_alias(KawaCompiler *c, const char *name, Type *target) {
+	AliasDef *ad = arena_alloc(c->arena, sizeof(AliasDef));
+	ad->name = arena_strdup(c->arena, name);
 	ad->target = target;
-	ad->next = alias_defs;
-	alias_defs = ad;
+	ad->next = c->alias_defs;
+	c->alias_defs = ad;
 }
 
-Type *resolve_alias_type(const char *name) {
-	AliasDef *cur = alias_defs;
-	while (cur) {
+Type *resolve_alias_type(KawaCompiler *c, const char *name) {
+	for (AliasDef *cur = c->alias_defs; cur; cur = cur->next) {
 		if (strcmp(cur->name, name) == 0)
 			return cur->target;
-		cur = cur->next;
 	}
 	return NULL;
 }
 
-void register_struct(const char *name, LLVMTypeRef type) {
-	StructDef *sd = malloc(sizeof(StructDef));
-	sd->name = strdup(name);
+// Register a struct by name and LLVMTypeRef. Populates the field table from
+// the AST field list (so callers don't need a separate "fill" pass that can
+// disagree with what `register_struct` already saw).
+void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
+					 ASTNode *fields) {
+	StructDef *sd = arena_alloc(c->arena, sizeof(StructDef));
+	sd->name = arena_strdup(c->arena, name);
 	sd->type = type;
 	sd->field_count = 0;
-	sd->next = struct_defs;
-	struct_defs = sd;
+	sd->next = c->struct_defs;
+	c->struct_defs = sd;
+
+	int idx = 0;
+	for (ASTNode *f = fields; f && idx < 64; f = f->next) {
+		sd->fields[idx].name = arena_strdup(c->arena, f->data.var_decl.name);
+		sd->fields[idx].type = get_llvm_type(c, f->data_type);
+		idx++;
+	}
+	sd->field_count = idx;
+}
+
+// Locate the StructDef whose LLVM type matches `struct_type` (pointer
+// identity on LLVMTypeRef, since each named struct has a unique handle).
+static StructDef *find_struct_def(KawaCompiler *c, LLVMTypeRef struct_type) {
+	for (StructDef *sd = c->struct_defs; sd; sd = sd->next) {
+		if (sd->type == struct_type)
+			return sd;
+	}
+	return NULL;
 }
 
 int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name) {
-	StructDef *sd = struct_defs;
-	while (sd) {
-		if (sd->type == struct_type) {
-			for (int i = 0; i < sd->field_count; i++) {
-				if (strcmp(sd->fields[i].name, field_name) == 0)
-					return i;
-			}
-		}
-		sd = sd->next;
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd) {
+		char *name = LLVMPrintTypeToString(struct_type);
+		timbr_err("Internal error: unknown struct type in get_field_index "
+				  "(type=%s, field=%s)\n",
+				  name, field_name);
+		LLVMDisposeMessage(name);
+		exit(1);
 	}
-	return 0;
+	for (int i = 0; i < sd->field_count; i++) {
+		if (strcmp(sd->fields[i].name, field_name) == 0)
+			return i;
+	}
+	timbr_err("Internal error: no field '%s' on struct (LLVM verifier should "
+			  "have caught this earlier)\n",
+			  field_name);
+	exit(1);
 }
 
 LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 						   const char *field_name) {
-	StructDef *sd = struct_defs;
-	while (sd) {
-		if (sd->type == struct_type) {
-			for (int i = 0; i < sd->field_count; i++) {
-				if (strcmp(sd->fields[i].name, field_name) == 0)
-					return sd->fields[i].type;
-			}
-		}
-		sd = sd->next;
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd) {
+		timbr_err("Internal error: unknown struct type in get_field_type\n");
+		exit(1);
 	}
-	return LLVMInt32TypeInContext(c->context);
+	for (int i = 0; i < sd->field_count; i++) {
+		if (strcmp(sd->fields[i].name, field_name) == 0)
+			return sd->fields[i].type;
+	}
+	timbr_err("Internal error: no field '%s' on struct (LLVM verifier should "
+			  "have caught this earlier)\n",
+			  field_name);
+	exit(1);
 }
 
+// Returns 1 if integer types are signed, 0 otherwise (including for floats,
+// which carry their own sign via IEEE semantics and don't need a separate
+// is_signed flag for div purposes).
+static int kind_is_signed_int(TypeKind k) {
+	switch (k) {
+	case TYPE_I8:
+	case TYPE_I16:
+	case TYPE_I32:
+	case TYPE_I64:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+int type_is_signed(KawaCompiler *c, Type *t) {
+	(void)c;
+	if (!t)
+		return 0;
+	return kind_is_signed_int(t->kind);
+}
+
+// Map a Type* to an LLVMTypeRef. Sets t->is_signed as a side effect for
+// integer kinds (so callers can read sign without re-checking the kind).
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	if (!t)
 		return LLVMInt32TypeInContext(c->context);
 
-	if (t->kind == TYPE_PTR) {
-		// Recursively resolve inner type so Car* becomes %Car* (struct ptr),
-		// not i8*
-		return LLVMPointerType(get_llvm_type(c, t->inner), 0);
-	}
-	if (t->kind == TYPE_HANDLE) {
-		return LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
-	}
 	switch (t->kind) {
 	case TYPE_VOID:
+		t->is_signed = 0;
 		return LLVMVoidTypeInContext(c->context);
 	case TYPE_BOOL:
+		t->is_signed = 0;
 		return LLVMInt1TypeInContext(c->context);
 	case TYPE_CHAR:
+		t->is_signed = 0;
 		return LLVMInt8TypeInContext(c->context);
 	case TYPE_I8:
 	case TYPE_U8:
+		t->is_signed = kind_is_signed_int(t->kind);
 		return LLVMInt8TypeInContext(c->context);
 	case TYPE_I16:
 	case TYPE_U16:
+		t->is_signed = kind_is_signed_int(t->kind);
 		return LLVMInt16TypeInContext(c->context);
 	case TYPE_I32:
 	case TYPE_U32:
+		t->is_signed = kind_is_signed_int(t->kind);
 		return LLVMInt32TypeInContext(c->context);
 	case TYPE_I64:
 	case TYPE_U64:
+		t->is_signed = kind_is_signed_int(t->kind);
 		return LLVMInt64TypeInContext(c->context);
 	case TYPE_F32:
+		t->is_signed = 1; // IEEE float, signed-ness per op
 		return LLVMFloatTypeInContext(c->context);
 	case TYPE_F64:
+		t->is_signed = 1;
 		return LLVMDoubleTypeInContext(c->context);
+
+	case TYPE_PTR: {
+		// Resolve inner so `Car*` becomes `%Car*` (named struct ptr), not i8*.
+		// The O3 pipeline keeps named pointer types so struct-aware
+		// alias analysis still works.
+		LLVMTypeRef inner = get_llvm_type(c, t->inner);
+		t->is_signed = 0;
+		return LLVMPointerType(inner, 0);
+	}
+
+	case TYPE_AMP: {
+		// `&x` produces a pointer to the pointee's value type, same as TYPE_PTR
+		// in Kawa's memory model.
+		LLVMTypeRef inner = t->inner ? get_llvm_type(c, t->inner)
+									 : LLVMInt8TypeInContext(c->context);
+		t->is_signed = 0;
+		return LLVMPointerType(inner, 0);
+	}
+
+	case TYPE_HANDLE:
+		t->is_signed = 0;
+		return LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+
 	case TYPE_SET: {
+		// Fixed representation: { i32* buf, i64 len, i64 cap }.
+		// Note: only i32 elements are supported (matching the rest of the
+		// codebase's set literal codegen). Generic set<T> would need a
+		// different shape.
 		LLVMTypeRef elems[] = {
 			LLVMPointerType(LLVMInt32TypeInContext(c->context), 0),
 			LLVMInt64TypeInContext(c->context),
 			LLVMInt64TypeInContext(c->context)};
+		t->is_signed = 0;
 		return LLVMStructTypeInContext(c->context, elems, 3, 0);
 	}
+
 	case TYPE_STRUCT: {
-		Type *alias_target = resolve_alias_type(t->name);
-		if (alias_target) {
+		// Follow alias chains first: `alias Bar = Foo` means a value of
+		// declared type Bar is laid out exactly like Foo.
+		Type *alias_target = resolve_alias_type(c, t->name);
+		if (alias_target)
 			return get_llvm_type(c, alias_target);
-		}
+
+		// Already-declared struct in the module -> reuse.
 		LLVMTypeRef struct_t = LLVMGetTypeByName(c->module, t->name);
-		if (!struct_t) {
-			struct_t = LLVMStructCreateNamed(c->context, t->name);
-		}
-		return struct_t;
+		if (struct_t)
+			return struct_t;
+
+		// Forward reference or typo: create a named opaque placeholder so
+		// the verifier can still produce a precise diagnostic. (Previously
+		// this branch silently succeeded with a phantom struct, which made
+		// typos turn into segfaults at runtime.)
+		return LLVMStructCreateNamed(c->context, t->name);
 	}
-	default:
+
+	case TYPE_ALIAS: {
+		// Resolve via registry; fall back to opaque placeholder on miss.
+		Type *alias_target = resolve_alias_type(c, t->name);
+		if (alias_target)
+			return get_llvm_type(c, alias_target);
 		return LLVMInt32TypeInContext(c->context);
+	}
+
+	default:
+		// An unknown TypeKind is a compiler bug -- refuse to silently
+		// emit i32 (which previously caused miscompiles).
+		timbr_err("Internal error: unknown TypeKind %d in get_llvm_type\n",
+				  t->kind);
+		exit(1);
 	}
 }

@@ -29,12 +29,12 @@ fn i32 main() {
     car2->speed = 90;
     stdc.printf("Car2: %d\n", car2->speed);
     car2->create(car2, 1.5);
-    stdc.printf("Car2: %f\n", car2->speed);
+    stdc.printf("Car2: %d\n", car2->speed);
     (*car2).create(car2, 5.98);
-    stdc.printf("Car2: %f\n", (*car2).speed);
+    stdc.printf("Car2: %d\n", (*car2).speed);
     stdc.free(car2);
     Car** p = &car2;
-    stdc.printf("Car2: %f\n", (*p)->speed);
-    
+    stdc.printf("Car2: %d\n", (*p)->speed);
+
     return 0;
 }

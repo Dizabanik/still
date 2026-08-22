@@ -28,6 +28,9 @@ typedef enum {
 
 typedef struct Type {
 	TypeKind kind;
+	int is_signed; // 1 for signed integer/float (i8/16/32/64, f32/f64),
+				   // 0 for unsigned integer (u8/16/32/64), bool, char, void,
+				   // and any other kind. Conservatively defaults to 0.
 	struct Type *inner; // For set<T> or T*
 	char *name;			// For struct/alias names
 } Type;
