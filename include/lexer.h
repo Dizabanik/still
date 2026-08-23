@@ -89,8 +89,18 @@ typedef enum {
 	TOK_ISEQ,	 // ==
 	TOK_NOTEQ,	 // !=
 	TOK_LEQ,
-	TOK_REQ, // <= and >=
-	TOK_AMP
+	TOK_REQ,	 // <= and >=
+	TOK_AMP,	 // & (address-of / bitwise and)
+	TOK_PIPE,	 // |
+	TOK_CARET,	 // ^
+	TOK_TILDE,	 // ~ (bitwise not)
+	TOK_SHL,	 // <<
+	TOK_SHR,	 // >>
+	TOK_AND_EQ,	 // &=
+	TOK_OR_EQ,	 // |=
+	TOK_XOR_EQ,	 // ^=
+	TOK_SHL_EQ,	 // <<=
+	TOK_SHR_EQ,  // >>=
 
 } TokenType;
 

@@ -573,7 +573,22 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		}
 	}
 
-	// Integer path. Use sign info from AST types where available.
+	// Integer path. Use sign info from AST types where available; bare
+	// variable references carry no parser-side type, so resolve (and stamp)
+	// from their declaration -- otherwise i32 vars would shift/compare as
+	// unsigned.
+	if (!n->data.bin_op.left->data_type &&
+		n->data.bin_op.left->type == NODE_VAR_REF) {
+		Scope *sv = scope_find(c, n->data.bin_op.left->data.var_ref.name);
+		if (sv && sv->node && sv->node->data_type)
+			n->data.bin_op.left->data_type = sv->node->data_type;
+	}
+	if (!n->data.bin_op.right->data_type &&
+		n->data.bin_op.right->type == NODE_VAR_REF) {
+		Scope *sv = scope_find(c, n->data.bin_op.right->data.var_ref.name);
+		if (sv && sv->node && sv->node->data_type)
+			n->data.bin_op.right->data_type = sv->node->data_type;
+	}
 	int l_signed = n->data.bin_op.left->data_type
 					   ? type_is_signed(c, n->data.bin_op.left->data_type)
 					   : 0;
@@ -631,6 +646,20 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 			return res;
 		return l;
 	}
+	case TOK_AMP:
+		return LLVMBuildAnd(c->builder, l, r, "and");
+	case TOK_PIPE:
+		return LLVMBuildOr(c->builder, l, r, "or");
+	case TOK_CARET:
+		return LLVMBuildXor(c->builder, l, r, "xor");
+	case TOK_SHL:
+		return LLVMBuildShl(c->builder, l, r, "shl");
+	case TOK_SHR:
+		// Arithmetic shift for signed operands, logical for unsigned --
+		// mirrors C semantics with zero extra instructions.
+		return (l_signed || r_signed)
+				   ? LLVMBuildAShr(c->builder, l, r, "ashr")
+				   : LLVMBuildLShr(c->builder, l, r, "lshr");
 	default:
 		return l;
 	}

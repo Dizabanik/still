@@ -136,6 +136,10 @@ Token lexer_next(Lexer *l) {
 				advance(l);
 				return make_token(l, TOK_ANDAND, "&&");
 			}
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_AND_EQ, "&=");
+			}
 			return make_token(l, TOK_AMP, "&");
 		}
 		if (c == '|') {
@@ -143,7 +147,18 @@ Token lexer_next(Lexer *l) {
 				advance(l);
 				return make_token(l, TOK_OROR, "||");
 			}
-			return error_token(l, "Unexpected character '|'");
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_OR_EQ, "|=");
+			}
+			return make_token(l, TOK_PIPE, "|");
+		}
+		if (c == '^') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_XOR_EQ, "^=");
+			}
+			return make_token(l, TOK_CARET, "^");
 		}
 		if (c == '/') {
 			if (peek(l) == '=') {
@@ -158,7 +173,7 @@ Token lexer_next(Lexer *l) {
 				advance(l);
 				return make_token(l, TOK_TILDE_EQ, "~=");
 			}
-			return error_token(l, "Unexpected character '~'");
+			return make_token(l, TOK_TILDE, "~");
 		}
 
 		if (c == '=') {
@@ -169,6 +184,14 @@ Token lexer_next(Lexer *l) {
 			return make_token(l, TOK_ASSIGN, "=");
 		}
 		if (c == '<') {
+			if (peek(l) == '<' ) {
+				advance(l);
+				if (peek(l) == '=') {
+					advance(l);
+					return make_token(l, TOK_SHL_EQ, "<<=");
+				}
+				return make_token(l, TOK_SHL, "<<");
+			}
 			if (peek(l) == '=') {
 				advance(l);
 				return make_token(l, TOK_LEQ, "<=");
@@ -176,6 +199,14 @@ Token lexer_next(Lexer *l) {
 			return make_token(l, TOK_LANGLE, "<");
 		}
 		if (c == '>') {
+			if (peek(l) == '>') {
+				advance(l);
+				if (peek(l) == '=') {
+					advance(l);
+					return make_token(l, TOK_SHR_EQ, ">>=");
+				}
+				return make_token(l, TOK_SHR, ">>");
+			}
 			if (peek(l) == '=') {
 				advance(l);
 				return make_token(l, TOK_REQ, ">=");

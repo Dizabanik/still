@@ -1,0 +1,29 @@
+import stdc;
+
+// Bitwise ops, shifts, compound bitwise assignment.
+// Signed >> must be arithmetic (ashr); unsigned >> logical (lshr).
+fn i32 main() {
+    u32 a = 12;
+    u32 b = 10;
+    stdc.printf("and=%d or=%d xor=%d\n", a & b, a | b, a ^ b);
+    stdc.printf("not=%d shl=%d shr=%d\n", ~a, a << 2, 255 >> 4);
+
+    // Flag masking idiom
+    u32 flags = 12;
+    u32 mask = 10;
+    stdc.printf("set=%d clear=%d toggle=%d test=%d\n",
+                flags | mask, flags & ~mask, flags ^ mask, (flags & mask) != 0);
+
+    // Compound forms
+    u32 m = 240;
+    m |= 15;
+    m &= 255;
+    m ^= 255;
+    m <<= 2;
+    m >>= 4;
+    stdc.printf("m=%d\n", m);
+
+    // Signed arithmetic shift
+    i32 neg = -16;
+    stdc.printf("neg>>2=%d\n", neg >> 2);
+}

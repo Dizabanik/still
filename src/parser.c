@@ -251,12 +251,44 @@ static ASTNode *parse_unary(Parser *p) {
 			n->data_type = n->data.deref.expr->data_type->inner;
 		}
 		return n;
-	} else if (p->cur.type == TOK_MINUS || p->cur.type == TOK_BANG) {
-		// Unary minus / logical not. Desugared to binary ops so codegen
-		// needs no new node kinds: -x => 0 - x, !x => x == 0.
+	} else if (p->cur.type == TOK_MINUS || p->cur.type == TOK_BANG ||
+			   p->cur.type == TOK_TILDE) {
+		// Unary minus / logical not / bitwise not. Desugared to binary ops
+		// so codegen needs no new node kinds: -x => 0 - x, !x => x == 0,
+		// ~x => x ^ all-ones.
 		int op = p->cur.type;
 		advance(p);
 		ASTNode *operand = parse_unary(p);
+
+		if (op == TOK_MINUS && operand->type == NODE_LITERAL &&
+			operand->data_type && operand->data_type->kind == TYPE_U32 &&
+			operand->data.literal.i_val > 0) {
+			// Negative int literal: fold to a signed literal directly
+			// instead of `0 - x` (which would keep u32 typing and turn
+			// shifts/comparisons unsigned).
+			operand->data.literal.i_val = -operand->data.literal.i_val;
+			operand->data_type = arena_alloc(p->arena, sizeof(Type));
+			operand->data_type->kind = TYPE_I32;
+			return operand;
+		}
+
+		if (op == TOK_TILDE) {
+			// ~x => x ^ (-1): all-ones of the operand's width. The literal
+			// carries the operand type so the folder handles it at comptime.
+			ASTNode *ones = arena_alloc(p->arena, sizeof(ASTNode));
+			ones->type = NODE_LITERAL;
+			ones->data.literal.i_val = -1;
+			ones->data_type = operand->data_type;
+
+			ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+			n->type = NODE_BINARY_OP;
+			n->data.bin_op.op = TOK_CARET;
+			n->data.bin_op.left = operand; // note: operand on the LEFT
+			n->data.bin_op.right = ones;
+			n->data_type = operand->data_type;
+			return n;
+		}
+
 		ASTNode *zero = arena_alloc(p->arena, sizeof(ASTNode));
 		zero->type = NODE_LITERAL;
 		zero->data.literal.i_val = 0;
@@ -683,8 +715,16 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			tok_prec = 3;
 		if (p->cur.type == TOK_OROR)
 			tok_prec = 2;
+		if (p->cur.type == TOK_PIPE)
+			tok_prec = 4; // bitwise: | < ^ < & < compare (C convention)
+		if (p->cur.type == TOK_CARET)
+			tok_prec = 6;
+		if (p->cur.type == TOK_AMP)
+			tok_prec = 7;
 		if (p->cur.type == TOK_PLUS || p->cur.type == TOK_MINUS)
 			tok_prec = 10;
+		if (p->cur.type == TOK_SHL || p->cur.type == TOK_SHR)
+			tok_prec = 9; // below +/-, above & (C convention)
 		if (p->cur.type == TOK_STAR || p->cur.type == TOK_SLASH ||
 			p->cur.type == TOK_PERCENT)
 			tok_prec = 20;
@@ -999,7 +1039,9 @@ static ASTNode *parse_statement(Parser *p) {
 	ASTNode *expr = parse_expr(p);
 	if (p->cur.type == TOK_ASSIGN || p->cur.type == TOK_PLUS_EQ ||
 		p->cur.type == TOK_MINUS_EQ || p->cur.type == TOK_STAR_EQ ||
-		p->cur.type == TOK_SLASH_EQ) {
+		p->cur.type == TOK_SLASH_EQ || p->cur.type == TOK_AND_EQ ||
+		p->cur.type == TOK_OR_EQ || p->cur.type == TOK_XOR_EQ ||
+		p->cur.type == TOK_SHL_EQ || p->cur.type == TOK_SHR_EQ) {
 		int op = p->cur.type;
 		advance(p); // Eat '=' / '+=' / '-=' / '*=' / '/='
 
@@ -1031,6 +1073,21 @@ static ASTNode *parse_statement(Parser *p) {
 				break;
 			case TOK_STAR_EQ:
 				bin_op = TOK_STAR;
+				break;
+			case TOK_AND_EQ:
+				bin_op = TOK_AMP;
+				break;
+			case TOK_OR_EQ:
+				bin_op = TOK_PIPE;
+				break;
+			case TOK_XOR_EQ:
+				bin_op = TOK_CARET;
+				break;
+			case TOK_SHL_EQ:
+				bin_op = TOK_SHL;
+				break;
+			case TOK_SHR_EQ:
+				bin_op = TOK_SHR;
 				break;
 			default:
 				bin_op = TOK_SLASH;

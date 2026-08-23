@@ -1,0 +1,5 @@
+and=8 or=14 xor=6
+not=-13 shl=48 shr=15
+set=14 clear=4 toggle=6 test=1
+m=0
+neg>>2=-4
