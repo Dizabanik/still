@@ -308,6 +308,8 @@ static ASTNode *parse_expr(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static ASTNode *parse_block(Parser *p);
 static ASTNode *parse_grind(Parser *p);
+static ASTNode *parse_var_or_expr_no_semi(Parser *p);
+static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr, int need_semi);
 
 static ASTNode *parse_struct_literal(Parser *p);
 static int peek_is_struct_literal(Parser *p);
@@ -959,6 +961,53 @@ static ASTNode *parse_statement(Parser *p) {
 		loop->data.while_stmt.body = body;
 		return loop;
 	}
+	if (p->cur.type == TOK_FOR) {
+		advance(p);
+		consume(p, TOK_LPAREN, "(");
+		// for init; cond; step { body } -- any clause may be empty.
+		// Declarations and expression statements consume their own ';' via
+		// parse_statement/parse_expr_stmt_tail; an empty init consumes it
+		// here. After this block p->cur is always just past the first ';'.
+		ASTNode *init = NULL;
+		if (p->cur.type != TOK_SEMICOLON) {
+			init = parse_var_or_expr_no_semi(p);
+		} else
+			consume(p, TOK_SEMICOLON, ";");
+
+		ASTNode *cond = NULL;
+		if (p->cur.type != TOK_SEMICOLON)
+			cond = parse_expr(p);
+		consume(p, TOK_SEMICOLON, "Expected ';' after for condition");
+
+		ASTNode *step = NULL;
+		if (p->cur.type != TOK_RPAREN)
+			step = parse_expr_stmt_tail(p, parse_expr(p), 0);
+		consume(p, TOK_RPAREN, ")");
+
+		ASTNode *body = parse_block(p);
+
+		ASTNode *loop = arena_alloc(p->arena, sizeof(ASTNode));
+		loop->type = NODE_FOR;
+		loop->data.for_stmt.init = init;
+		loop->data.for_stmt.cond = cond;
+		loop->data.for_stmt.step = step;
+		loop->data.for_stmt.body = body;
+		return loop;
+	}
+	if (p->cur.type == TOK_BREAK) {
+		advance(p);
+		consume(p, TOK_SEMICOLON, "Expected ';' after 'break'");
+		ASTNode *brk = arena_alloc(p->arena, sizeof(ASTNode));
+		brk->type = NODE_BREAK;
+		return brk;
+	}
+	if (p->cur.type == TOK_CONTINUE) {
+		advance(p);
+		consume(p, TOK_SEMICOLON, "Expected ';' after 'continue'");
+		ASTNode *cont = arena_alloc(p->arena, sizeof(ASTNode));
+		cont->type = NODE_CONTINUE;
+		return cont;
+	}
 	if (p->cur.type == TOK_BATCH) {
 		advance(p);
 		consume(p, TOK_LPAREN, "(");
@@ -1037,6 +1086,20 @@ static ASTNode *parse_statement(Parser *p) {
 	if (p->cur.type == TOK_LBRACE)
 		return parse_block(p);
 	ASTNode *expr = parse_expr(p);
+	return parse_expr_stmt_tail(p, expr, 1);
+}
+
+// for-loop init clause: a variable declaration or an expression statement.
+// Both consume their own trailing ';' (the for-parser consumes it only for
+// an empty init, keeping "p is past the first ';'" invariant afterwards).
+static ASTNode *parse_var_or_expr_no_semi(Parser *p) {
+	return parse_statement(p);
+}
+// token is an assignment operator, build NODE_ASSIGN (desugaring compound
+// ops to binops). Consumes the trailing ';' only when requested -- for
+// clauses are terminated by ';' / ')' respectively.
+static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr,
+									 int need_semi) {
 	if (p->cur.type == TOK_ASSIGN || p->cur.type == TOK_PLUS_EQ ||
 		p->cur.type == TOK_MINUS_EQ || p->cur.type == TOK_STAR_EQ ||
 		p->cur.type == TOK_SLASH_EQ || p->cur.type == TOK_AND_EQ ||
@@ -1101,10 +1164,12 @@ static ASTNode *parse_statement(Parser *p) {
 			bin->data_type = expr->data_type;
 			assign->data.assign.value = bin;
 		}
-		consume(p, TOK_SEMICOLON, "Expected ';'");
+		if (need_semi)
+			consume(p, TOK_SEMICOLON, "Expected ';'");
 		return assign;
 	}
-	consume(p, TOK_SEMICOLON, "Expected ';'");
+	if (need_semi)
+		consume(p, TOK_SEMICOLON, "Expected ';'");
 	return expr;
 }
 void parse_function(Parser *p, ASTNode ***tail, char *prefix) {

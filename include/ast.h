@@ -69,6 +69,9 @@ typedef enum {
 	NODE_DROP,
 	NODE_IF,
 	NODE_WHILE,
+	NODE_FOR,
+	NODE_BREAK,
+	NODE_CONTINUE,
 	NODE_BATCH,
 	NODE_DEFER,
 	NODE_FILTER,
@@ -185,6 +188,15 @@ struct ASTNode {
 		struct {
 			ASTNode *cond, *body;
 		} while_stmt;
+		struct {
+			ASTNode *init;   // may be NULL
+			ASTNode *cond;   // may be NULL = true
+			ASTNode *step;   // may be NULL; expression statement (e.g. `i += 1`)
+			ASTNode *body;
+		} for_stmt;
+		struct {
+			// int unused -- leaf nodes
+		} break_stmt;
 		struct {
 			char *iterator_var;
 			ASTNode *collection;

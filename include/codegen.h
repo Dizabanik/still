@@ -63,6 +63,14 @@ typedef struct {
 	// defer stack (top = most recently deferred; run in reverse on return).
 	DeferFrame *defer_stack;
 
+	// Innermost loop targets for break/continue. continue_bb points at the
+	// step/condition block; break_bb at the exit block.
+	struct LoopTargets {
+		LLVMBasicBlockRef break_bb;
+		LLVMBasicBlockRef continue_bb;
+		struct LoopTargets *next;
+	} *loop_stack;
+
 	int in_coroutine;
 	LLVMBasicBlockRef coro_cleanup_block;
 	LLVMBasicBlockRef coro_suspend_block;

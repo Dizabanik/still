@@ -240,9 +240,10 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	// Coroutine transforms must run before the main pipeline so coro-split
 	// lowers the frame before inlining decisions are made.
 	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
-	LLVMRunPasses(c->module,
-				  "coro-early,coro-split,coro-elide,coro-cleanup,default<O3>",
-				  machine, opts);
+	if (!getenv("KAWA_NO_OPT"))
+		LLVMRunPasses(c->module,
+					  "coro-early,coro-split,coro-elide,coro-cleanup,default<O3>",
+					  machine, opts);
 	LLVMDisposePassBuilderOptions(opts);
 
 	if (LLVMWriteBitcodeToFile(c->module, filename) != 0)

@@ -366,6 +366,12 @@ Token lexer_next(Lexer *l) {
 				type = TOK_ELSE;
 			else if (strcmp(text, "while") == 0)
 				type = TOK_WHILE;
+			else if (strcmp(text, "for") == 0)
+				type = TOK_FOR;
+			else if (strcmp(text, "break") == 0)
+				type = TOK_BREAK;
+			else if (strcmp(text, "continue") == 0)
+				type = TOK_CONTINUE;
 			else if (strcmp(text, "in") == 0)
 				type = TOK_IN;
 			else if (strcmp(text, "true") == 0)

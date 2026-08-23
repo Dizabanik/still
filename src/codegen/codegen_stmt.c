@@ -127,9 +127,72 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		set_branch_weights(c, br, 64, 1); // loops iterate more often than not
 		add_loop_metadata(c, br);
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
+
+		struct LoopTargets targets = {exit_bb, cond_bb, c->loop_stack};
+		c->loop_stack = &targets;
 		codegen_stmt(c, n->data.while_stmt.body);
+		c->loop_stack = targets.next;
+
 		LLVMBuildBr(c->builder, cond_bb);
 		LLVMPositionBuilderAtEnd(c->builder, exit_bb);
+		return;
+	}
+
+	case NODE_FOR: {
+		// for init; cond; step { body }
+		// Lowered as its own block structure so `continue` lands on the
+		// step (not the condition) and per-iteration allocas stay scoped.
+		if (n->data.for_stmt.init)
+			codegen_stmt(c, n->data.for_stmt.init);
+
+		LLVMBasicBlockRef cond_bb =
+			LLVMAppendBasicBlock(c->current_func, "for_cond");
+		LLVMBasicBlockRef body_bb =
+			LLVMAppendBasicBlock(c->current_func, "for_body");
+		LLVMBasicBlockRef step_bb =
+			LLVMAppendBasicBlock(c->current_func, "for_step");
+		LLVMBasicBlockRef exit_bb =
+			LLVMAppendBasicBlock(c->current_func, "for_exit");
+
+		LLVMBuildBr(c->builder, cond_bb);
+		LLVMPositionBuilderAtEnd(c->builder, cond_bb);
+		if (n->data.for_stmt.cond) {
+			LLVMValueRef cond_val =
+				cond_to_bool(c, codegen_expr(c, n->data.for_stmt.cond));
+			LLVMValueRef br =
+				LLVMBuildCondBr(c->builder, cond_val, body_bb, exit_bb);
+			set_branch_weights(c, br, 64, 1);
+			add_loop_metadata(c, br);
+		} else {
+			LLVMBuildBr(c->builder, body_bb); // `for (;;)` = infinite
+		}
+
+		LLVMPositionBuilderAtEnd(c->builder, body_bb);
+		struct LoopTargets targets = {exit_bb, step_bb, c->loop_stack};
+		c->loop_stack = &targets;
+		codegen_stmt(c, n->data.for_stmt.body);
+		c->loop_stack = targets.next;
+
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+			LLVMBuildBr(c->builder, step_bb);
+		LLVMPositionBuilderAtEnd(c->builder, step_bb);
+		if (n->data.for_stmt.step)
+			codegen_stmt(c, n->data.for_stmt.step);
+		LLVMBuildBr(c->builder, cond_bb);
+		LLVMPositionBuilderAtEnd(c->builder, exit_bb);
+		return;
+	}
+
+	case NODE_BREAK:
+	case NODE_CONTINUE: {
+		if (!c->loop_stack) {
+			timbr_err("%s outside of a loop\n",
+					  n->type == NODE_BREAK ? "break" : "continue");
+			exit(1);
+		}
+		LLVMBuildBr(c->builder, n->type == NODE_BREAK
+									? c->loop_stack->break_bb
+									: c->loop_stack->continue_bb);
 		return;
 	}
 

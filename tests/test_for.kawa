@@ -1,0 +1,39 @@
+import stdc;
+
+fn i32 main() {
+    u32 total = 0;
+    for (u32 i = 0; i < 10; i += 1) {
+        total += i;
+    }
+    stdc.printf("total=%d\n", total);
+
+    // break
+    u32 hit = 0;
+    for (u32 i = 0; i < 1000000; i += 1) {
+        if (i == 7) {
+            hit = i;
+            break;
+        }
+    }
+    stdc.printf("hit=%d\n", hit);
+
+    // continue skips odds
+    u32 evens = 0;
+    for (u32 i = 0; i < 10; i += 1) {
+        if (i % 2 == 1) {
+            continue;
+        }
+        evens += 1;
+    }
+    stdc.printf("evens=%d\n", evens);
+
+    // empty clauses = infinite loop with break
+    u32 spins = 0;
+    for (;;) {
+        spins += 1;
+        if (spins == 5) {
+            break;
+        }
+    }
+    stdc.printf("spins=%d\n", spins);
+}
