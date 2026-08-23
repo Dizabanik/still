@@ -37,6 +37,7 @@ typedef enum {
 	TOK_IMPORT,
 	TOK_SIZEOF,
 	TOK_MUT,
+	TOK_ENUM,
 	// Primitive Types
 	TOK_VOID,
 	TOK_STR,

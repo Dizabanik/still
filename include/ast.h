@@ -48,6 +48,7 @@ typedef enum {
 	NODE_PROGRAM,
 	NODE_FUNC_DECL,
 	NODE_STRUCT_DECL,
+	NODE_ENUM_DECL,
 	NODE_IMPL_BLOCK,
 	NODE_BLOCK,
 	NODE_VAR_DECL,
@@ -116,6 +117,10 @@ struct ASTNode {
 			char *name;
 			ASTNode *fields;
 		} struct_decl;
+		struct {
+			char *name;
+			ASTNode *fields; // NODE_VAR_DECL chain: one i32 const per member
+		} enum_decl;
 		struct {
 			struct ASTNode *val;
 		} cast;

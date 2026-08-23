@@ -349,6 +349,7 @@ static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr, int need_semi);
 
 static ASTNode *parse_struct_literal(Parser *p);
 static int peek_is_struct_literal(Parser *p);
+static void parse_enum(Parser *p, ASTNode ***tail);
 
 // Returns 1 if the upcoming '{ ... }' looks like a struct literal.
 // Returns 0 if it looks like a block code.
@@ -1279,6 +1280,104 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	**tail = fn_node;
 	*tail = &fn_node->next;
 }
+// `enum Name { A, B = 5, C }` -- a scoped set of i32 constants. Members
+// desugar to plain `const i32 Name_member = v;` declarations, so codegen
+// needs no new machinery: they fold like any other const, work as array
+// lengths, and cost nothing at runtime. Auto-increment continues from the
+// last explicit value (C rules).
+static void parse_enum(Parser *p, ASTNode ***tail) {
+	advance(p); // eat `enum`
+	char *name = p->cur.text;
+	consume(p, TOK_IDENTIFIER, "Expected enum name");
+	consume(p, TOK_LBRACE, "Expected '{' after enum name");
+
+	long next_value = 0;
+	ASTNode *fields_head = NULL;
+	ASTNode **fields_tail = &fields_head;
+	ASTNode ***outer_tail = tail; // keep the program-chain handle handy
+
+	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		char *member = p->cur.text;
+		consume(p, TOK_IDENTIFIER, "Expected enum member name");
+
+		long value = next_value;
+		if (p->cur.type == TOK_ASSIGN) {
+			advance(p);
+			int negative = 0;
+			if (p->cur.type == TOK_MINUS) {
+				negative = 1;
+				advance(p);
+			}
+			if (p->cur.type != TOK_INT_LIT) {
+				report_error(p, "Enum member value must be an integer literal");
+				if (p->cur.type != TOK_COMMA && p->cur.type != TOK_RBRACE)
+					advance(p);
+				value = next_value;
+			} else {
+				value = atol(p->cur.text);
+				if (negative)
+					value = -value;
+				advance(p);
+			}
+		}
+		next_value = value + 1;
+
+		// Synthesize `const i32 Name_member = value;` -- the qualified name
+		// keeps members of different enums from colliding.
+		char full_name[256];
+		snprintf(full_name, sizeof(full_name), "%s_%s", name, member);
+
+		Type *i32_t = arena_alloc(p->arena, sizeof(Type));
+		i32_t->kind = TYPE_I32;
+
+		ASTNode *lit = arena_alloc(p->arena, sizeof(ASTNode));
+		lit->type = NODE_LITERAL;
+		lit->data_type = i32_t;
+		lit->data.literal.i_val = (int)value;
+
+		ASTNode *member_decl = arena_alloc(p->arena, sizeof(ASTNode));
+		member_decl->type = NODE_VAR_DECL;
+		member_decl->data.var_decl.name =
+			arena_alloc(p->arena, strlen(full_name) + 1);
+		strcpy(member_decl->data.var_decl.name, full_name);
+		member_decl->data.var_decl.init = lit;
+		member_decl->data.var_decl.is_const = 1;
+		member_decl->data_type = i32_t;
+
+		// Register in the decl table so `[Color_RED]i8 buf;` and other
+		// const-identifier lookups resolve.
+		if (p->decl_count < 256) {
+			p->decls[p->decl_count].name = member_decl->data.var_decl.name;
+			p->decls[p->decl_count].node = member_decl;
+			p->decl_count++;
+		}
+
+		*fields_tail = member_decl;
+		fields_tail = &member_decl->next;
+
+		// Members live on the program chain too, so kawa_compile's ordinary
+		// NODE_VAR_DECL pass emits them (as folded i32 consts). The
+		// NODE_ENUM_DECL marker follows them for tooling/lookup.
+		**outer_tail = member_decl;
+		*outer_tail = &member_decl->next;
+
+		if (p->cur.type == TOK_COMMA)
+			advance(p);
+		else
+			break;
+	}
+	consume(p, TOK_RBRACE, "Expected '}' after enum members");
+	consume(p, TOK_SEMICOLON, "Expected ';' after enum");
+
+	ASTNode *en = arena_alloc(p->arena, sizeof(ASTNode));
+	en->type = NODE_ENUM_DECL;
+	en->data.enum_decl.name = name;
+	en->data.enum_decl.fields = fields_head;
+
+	**outer_tail = en;
+	*outer_tail = &en->next;
+}
+
 ASTNode *parse_program(Parser *p) {
 	ASTNode *prog = arena_alloc(p->arena, sizeof(ASTNode));
 	prog->type = NODE_PROGRAM;
@@ -1321,6 +1420,8 @@ ASTNode *parse_program(Parser *p) {
 
 			*tail = st;
 			tail = &st->next;
+		} else if (p->cur.type == TOK_ENUM) {
+			parse_enum(p, &tail);
 		} else if (p->cur.type == TOK_IMPORT) {
 			advance(p);
 			ASTNode *imp = arena_alloc(p->arena, sizeof(ASTNode));

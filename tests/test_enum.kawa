@@ -1,0 +1,20 @@
+// Enum members desugar to qualified i32 consts: zero runtime cost,
+// usable wherever consts are (values, comparisons, array lengths).
+enum Roast { LIGHT, MEDIUM = 5, DARK };
+enum Brew { ESPRESSO = -2, FILTER, COLD };
+enum Size { SMALL = 4, BIG = 64 };
+
+fn int main() {
+    let x = Roast_MEDIUM;
+    const i32 n = Roast_DARK;
+    let arr: [Size_BIG]i32;
+    arr[0] = Brew_FILTER;
+
+    stdc.printf("%d %d %d %d\n", x, n, arr[0], Roast_LIGHT);
+    stdc.printf("%d %d\n", Brew_COLD, Size_SMALL);
+
+    if (x == 5) {
+        stdc.printf("compare ok\n");
+    }
+    return 0;
+}

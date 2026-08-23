@@ -322,6 +322,8 @@ Token lexer_next(Lexer *l) {
 				type = TOK_CONST;
 			else if (strcmp(text, "mut") == 0)
 				type = TOK_MUT;
+			else if (strcmp(text, "enum") == 0)
+				type = TOK_ENUM;
 			else if (strcmp(text, "pure") == 0)
 				type = TOK_PURE;
 			else if (strcmp(text, "struct") == 0)
