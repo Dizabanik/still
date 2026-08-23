@@ -1,0 +1,8 @@
+a % 5 = 2
+-a as i32: -17
+!t = 0
+b in range
+b is 10
+a != b
+is_even(4): 1, is_even(7): 0
+safe = 0

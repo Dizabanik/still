@@ -1,5 +1,7 @@
 #include "codegen_internal.h"
 
+static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n);
+
 void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node) {
 	if (!origin_node || !origin_node->dependents)
 		return;
@@ -44,6 +46,11 @@ static LLVMValueRef build_int_binop(KawaCompiler *c, int op, LLVMValueRef l,
 		if (both_unsigned || !rhs_signed)
 			return LLVMBuildUDiv(c->builder, l, r, "udiv");
 		return LLVMBuildSDiv(c->builder, l, r, "sdiv");
+	case TOK_PERCENT:
+		// Remainder follows the same signedness rule as division.
+		if (both_unsigned || !rhs_signed)
+			return LLVMBuildURem(c->builder, l, r, "urem");
+		return LLVMBuildSRem(c->builder, l, r, "srem");
 	default:
 		return NULL;
 	}
@@ -107,7 +114,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef measured = NULL;
 		if (n->data.size_of.type_val)
 			measured = get_llvm_type(c, n->data.size_of.type_val);
-		else if (n->data.size_of.value)
+		else if (n->data.size_of.value && n->data.size_of.value->data_type)
 			measured = get_llvm_type(c, n->data.size_of.value->data_type);
 
 		if (measured) {
@@ -126,6 +133,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_VAR_REF:
 	case NODE_MEMBER_ACCESS:
+	case NODE_INDEX:
 	case NODE_DEREF:
 	case NODE_AMP:
 		return value_of_lvalue(c, n);
@@ -205,13 +213,44 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			llvm_args[i] = val;
 			arg_node = arg_node->next;
 		}
-		return LLVMBuildCall2(c->builder, func_type, fn, llvm_args, arg_count,
-							  "");
+		LLVMValueRef call = LLVMBuildCall2(c->builder, func_type, fn,
+										   llvm_args, arg_count, "");
+		// Self-recursion in tail position: mark it so the backend emits a
+		// jmp instead of call+ret (no stack growth on tail-recursive loops).
+		// Only safe when this call is the whole result of the function --
+		// approximated by: callee == current function and the call is not
+		// inside a coroutine body.
+		if (fn == c->current_func && !c->in_coroutine)
+			LLVMSetTailCall(call, true);
+		return call;
 	}
 
 	case NODE_STRUCT_LITERAL: {
 		LLVMTypeRef s_type = get_llvm_type(c, n->data_type);
-		if (!s_type || LLVMGetTypeKind(s_type) != LLVMStructTypeKind) {
+		if (!s_type) {
+			timbr_err("Internal error: literal missing type\n");
+			exit(1);
+		}
+
+		// Array literal: { e0, e1, ... } with TYPE_ARRAY context.
+		if (LLVMGetTypeKind(s_type) == LLVMArrayTypeKind) {
+			LLVMTypeRef elem_t = LLVMGetElementType(s_type);
+			LLVMValueRef alloca =
+				create_entry_block_alloca(c, s_type, "arr_lit");
+			int idx = 0;
+			for (StructInitItem *item = n->data.struct_lit.items; item;
+				 idx++, item = item->next) {
+				LLVMValueRef val = codegen_expr(c, item->value);
+				val =
+					coerce_value(c, val, item->value->data_type, elem_t, NULL);
+				LLVMValueRef gep = LLVMBuildStructGEP2(c->builder, s_type,
+													   alloca, idx, "elem");
+				LLVMBuildStore(c->builder, val, gep);
+			}
+			return LLVMBuildLoad2(c->builder, s_type, alloca, "arr_val");
+		}
+
+		if (LLVMGetTypeKind(s_type) != LLVMStructTypeKind) {
 			timbr_err("Internal error: struct literal missing type\n");
 			exit(1);
 		}
@@ -239,6 +278,10 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_BINARY_OP:
+		// Short-circuit logical ops need custom control flow -- the RHS
+		// must not be evaluated unless the LHS demands it.
+		if (n->data.bin_op.op == TOK_ANDAND || n->data.bin_op.op == TOK_OROR)
+			return codegen_short_circuit(c, n);
 		return build_binop(c, n, codegen_expr(c, n->data.bin_op.left),
 						   codegen_expr(c, n->data.bin_op.right));
 
@@ -419,6 +462,35 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	exit(1);
 }
 
+// Short-circuit evaluation for && and ||. Emits a branch so the RHS is
+// only evaluated when the LHS doesn't decide the result -- the same shape
+// clang produces, which lets the optimizer flatten it later.
+static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n) {
+	int is_and = (n->data.bin_op.op == TOK_ANDAND);
+	LLVMValueRef func = c->current_func;
+
+	LLVMValueRef lhs = cond_to_bool(c, codegen_expr(c, n->data.bin_op.left));
+
+	LLVMBasicBlockRef lhs_end = LLVMGetInsertBlock(c->builder);
+	LLVMBasicBlockRef rhs_bb =
+		LLVMAppendBasicBlock(func, is_and ? "and_rhs" : "or_rhs");
+	LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "bool_merge");
+	LLVMBuildCondBr(c->builder, lhs, is_and ? rhs_bb : merge_bb,
+					is_and ? merge_bb : rhs_bb);
+
+	LLVMPositionBuilderAtEnd(c->builder, rhs_bb);
+	LLVMValueRef rhs = cond_to_bool(c, codegen_expr(c, n->data.bin_op.right));
+	LLVMBasicBlockRef rhs_end = LLVMGetInsertBlock(c->builder);
+	LLVMBuildBr(c->builder, merge_bb);
+
+	LLVMPositionBuilderAtEnd(c->builder, merge_bb);
+	LLVMValueRef phi =
+		LLVMBuildPhi(c->builder, LLVMInt1TypeInContext(c->context), "sc_val");
+	LLVMAddIncoming(phi, (LLVMValueRef[]){lhs, rhs},
+					(LLVMBasicBlockRef[]){lhs_end, rhs_end}, 2);
+	return phi;
+}
+
 LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 						 LLVMValueRef r) {
 	int op = n->data.bin_op.op;
@@ -494,6 +566,8 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 			return LLVMBuildFCmp(c->builder, LLVMRealOGE, l, r, "fge");
 		case TOK_ISEQ:
 			return LLVMBuildFCmp(c->builder, LLVMRealOEQ, l, r, "feq");
+		case TOK_NOTEQ:
+			return LLVMBuildFCmp(c->builder, LLVMRealUNE, l, r, "fne");
 		default:
 			return l;
 		}
@@ -545,10 +619,13 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 				   : LLVMBuildICmp(c->builder, LLVMIntUGE, l, r, "uge");
 	case TOK_ISEQ:
 		return LLVMBuildICmp(c->builder, LLVMIntEQ, l, r, "eq");
+	case TOK_NOTEQ:
+		return LLVMBuildICmp(c->builder, LLVMIntNE, l, r, "ne");
 	case TOK_PLUS:
 	case TOK_MINUS:
 	case TOK_STAR:
-	case TOK_SLASH: {
+	case TOK_SLASH:
+	case TOK_PERCENT: {
 		LLVMValueRef res = build_int_binop(c, op, l, r, l_signed, r_signed);
 		if (res)
 			return res;

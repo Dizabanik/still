@@ -1,0 +1,36 @@
+import stdc;
+
+pure fn bool is_even(u32 x) {
+    return x % 2 == 0;
+}
+
+fn i32 main() {
+    // Modulo, unary minus, logical not
+    u32 a = 17;
+    stdc.printf("a %% 5 = %d\n", a % 5);
+    stdc.printf("-a as i32: %d\n", (i32)(0 - a));
+    bool t = true;
+    stdc.printf("!t = %d\n", !t);
+
+    // Short-circuit && and ||
+    u32 b = 10;
+    if (b > 5 && b < 20) {
+        stdc.printf("b in range\n");
+    }
+    if (b < 5 || b == 10) {
+        stdc.printf("b is 10\n");
+    }
+
+    // != operator
+    if (a != b) {
+        stdc.printf("a != b\n");
+    }
+
+    // pure function call
+    stdc.printf("is_even(4): %d, is_even(7): %d\n", is_even(4), is_even(7));
+
+    // short-circuit prevents division by zero
+    u32 z = 0;
+    bool safe = (z != 0) && (100 / z > 1);
+    stdc.printf("safe = %d\n", safe);
+}

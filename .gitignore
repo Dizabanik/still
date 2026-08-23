@@ -3,3 +3,7 @@ build/
 kawac
 .DS_Store
 output.bc
+output.ll
+bench/*_c
+*.bc
+*.ll

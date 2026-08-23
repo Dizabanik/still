@@ -83,6 +83,15 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n);
 LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 						  LLVMTypeRef dst, Type *dst_ast);
 
+// Normalize a condition value to i1 (int != 0, ptr != null).
+LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond);
+
+// Constant global-initializer support (codegen_scope.c). Decides whether a
+// top-level initializer can be folded into an LLVM constant, and does so.
+int global_init_is_constant(KawaCompiler *c, ASTNode *n);
+LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
+									LLVMTypeRef dst, Type *dst_ast);
+
 // --- codegen_expr.c ---
 void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node);
 LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n);

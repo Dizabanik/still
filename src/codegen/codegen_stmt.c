@@ -1,23 +1,5 @@
 #include "codegen_internal.h"
 
-// Normalize a condition value to i1. Integer conditions wider than one bit
-// become `!= 0`; pointers become null checks.
-static LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond) {
-	LLVMTypeRef t = LLVMTypeOf(cond);
-	switch (LLVMGetTypeKind(t)) {
-	case LLVMIntegerTypeKind:
-		if (LLVMGetIntTypeWidth(t) == 1)
-			return cond;
-		return LLVMBuildICmp(c->builder, LLVMIntNE, cond, LLVMConstInt(t, 0, 0),
-							 "to_bool");
-	case LLVMPointerTypeKind:
-		return LLVMBuildIsNotNull(c->builder, cond, "ptr_to_bool");
-	default:
-		timbr_err("Condition must be bool, integer or pointer\n");
-		exit(1);
-	}
-}
-
 void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	if (!n)
 		return;
@@ -152,27 +134,50 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_BATCH: {
-		Scope *s_coll =
-			scope_find(c, n->data.batch.collection->data.var_ref.name);
+		ASTNode *coll = n->data.batch.collection;
+		LLVMContextRef ctx = c->context;
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+
+		// Collection shape: set ({ ptr, len, cap }) or fixed-size array.
+		LLVMValueRef data_ptr, len;
+		LLVMTypeRef elem_t;
+
+		if (coll->type != NODE_VAR_REF) {
+			timbr_err("Batch requires a variable collection\n");
+			exit(1);
+		}
+		Scope *s_coll = scope_find(c, coll->data.var_ref.name);
 		if (!s_coll) {
 			timbr_err("Batch on unknown var\n");
 			exit(1);
 		}
-		LLVMContextRef ctx = c->context;
-		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
-		LLVMTypeRef i32_t = LLVMInt32TypeInContext(ctx);
-		LLVMTypeRef i32_ptr_t = LLVMPointerType(i32_t, 0);
 
-		LLVMValueRef set_ptr = s_coll->val;
-		LLVMValueRef len_ptr = LLVMBuildStructGEP2(c->builder, s_coll->type,
-												   set_ptr, 1, "len_ptr");
-		LLVMValueRef len = LLVMBuildLoad2(c->builder, i64_t, len_ptr, "len");
-		attach_tbaa(c, len, i64_t);
-		LLVMValueRef data_ptr_ptr = LLVMBuildStructGEP2(
-			c->builder, s_coll->type, set_ptr, 0, "buf_ptr");
-		LLVMValueRef data_ptr =
-			LLVMBuildLoad2(c->builder, i32_ptr_t, data_ptr_ptr, "buf");
-		attach_tbaa(c, data_ptr, i32_ptr_t);
+		int is_array = (s_coll->node && s_coll->node->data_type &&
+						s_coll->node->data_type->kind == TYPE_ARRAY);
+		if (is_array) {
+			// Zero-copy: GEP straight into the array alloca; the trip
+			// count is a constant so the backend can fully unroll small
+			// arrays and vectorize large ones.
+			LLVMTypeRef arr_t = s_coll->type;
+			unsigned alen = LLVMGetArrayLength(arr_t);
+			elem_t = LLVMGetElementType(arr_t);
+			data_ptr = s_coll->val;
+			len = LLVMConstInt(i64_t, alen, 0);
+		} else {
+			LLVMTypeRef i32_ptr_t =
+				LLVMPointerType(LLVMInt32TypeInContext(ctx), 0);
+			LLVMValueRef set_ptr = s_coll->val;
+			LLVMValueRef len_ptr = LLVMBuildStructGEP2(c->builder, s_coll->type,
+													   set_ptr, 1, "len_ptr");
+			len = LLVMBuildLoad2(c->builder, i64_t, len_ptr, "len");
+			attach_tbaa(c, len, i64_t);
+			LLVMValueRef data_ptr_ptr = LLVMBuildStructGEP2(
+				c->builder, s_coll->type, set_ptr, 0, "buf_ptr");
+			data_ptr =
+				LLVMBuildLoad2(c->builder, i32_ptr_t, data_ptr_ptr, "buf");
+			attach_tbaa(c, data_ptr, i32_ptr_t);
+			elem_t = LLVMInt32TypeInContext(ctx);
+		}
 
 		LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
 		LLVMBasicBlockRef loop_bb =
@@ -193,15 +198,15 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
 
 		LLVMValueRef item_ptr =
-			LLVMBuildGEP2(c->builder, i32_t, data_ptr, &idx, 1, "item_ptr");
+			LLVMBuildGEP2(c->builder, elem_t, data_ptr, &idx, 1, "item_ptr");
 		LLVMValueRef item_val =
-			LLVMBuildLoad2(c->builder, i32_t, item_ptr, "item");
-		attach_tbaa(c, item_val, i32_t);
+			LLVMBuildLoad2(c->builder, elem_t, item_ptr, "item");
+		attach_tbaa(c, item_val, elem_t);
 		LLVMValueRef n_ptr =
-			create_entry_block_alloca(c, i32_t, n->data.batch.iterator_var);
+			create_entry_block_alloca(c, elem_t, n->data.batch.iterator_var);
 		LLVMBuildStore(c->builder, item_val, n_ptr);
 		Scope *old_scope = c->scope_stack;
-		scope_push(c, n->data.batch.iterator_var, n_ptr, i32_t, NULL);
+		scope_push(c, n->data.batch.iterator_var, n_ptr, elem_t, NULL);
 		codegen_stmt(c, n->data.batch.body);
 		c->scope_stack = old_scope;
 
@@ -216,6 +221,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_RETURN: {
+		// Deferred statements run before control leaves the function, in
+		// reverse registration order (LIFO).
+		for (DeferFrame *d = c->defer_stack; d; d = d->next)
+			codegen_stmt(c, d->stmt);
+
 		LLVMValueRef ret_val = codegen_expr(c, n->data.ret_stmt.expr);
 		if (c->in_coroutine) {
 			if (c->current_promise_ptr) {
@@ -240,8 +250,80 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		return;
 	}
 
+	case NODE_FILTER: {
+		// filter { ... } dregs (err) { ... }: try body with an explicit
+		// error slot. `press` stores into the slot and jumps to catch_bb.
+		// No unwinding -- press is a plain branch, so nounwind survives.
+		LLVMContextRef ctx = c->context;
+		FilterFrame frame;
+		frame.err_slot = create_entry_block_alloca(
+			c, LLVMInt32TypeInContext(ctx), "filter.err");
+		frame.catch_bb = LLVMAppendBasicBlock(c->current_func, "dregs");
+
+		FilterFrame *saved_filters = c->filter_stack;
+		frame.next = saved_filters;
+		frame.defers_at_entry = c->defer_stack;
+		c->filter_stack = &frame;
+
+		// Defers registered inside the try block belong to this filter:
+		// press runs them, and they come off the stack when the filter ends.
+		DeferFrame *saved_defers = c->defer_stack;
+
+		codegen_stmt(c, n->data.filter.try_block);
+
+		// Normal exit through the try body: run defers registered inside,
+		// then pop them so the enclosing scope won't repeat them.
+		for (DeferFrame *d = c->defer_stack; d && d != saved_defers; d = d->next)
+			codegen_stmt(c, d->stmt);
+		c->defer_stack = saved_defers;
+
+		c->filter_stack = saved_filters;
+		LLVMBasicBlockRef merge_bb =
+			LLVMAppendBasicBlock(c->current_func, "filter_merge");
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+			LLVMBuildBr(c->builder, merge_bb);
+		LLVMPositionBuilderAtEnd(c->builder, frame.catch_bb);
+		// Bind err_var to the SLOT (scope entries hold addresses; loads
+		// happen at use sites).
+		scope_push(c, n->data.filter.err_var, frame.err_slot,
+				   LLVMInt32TypeInContext(ctx), NULL);
+		codegen_stmt(c, n->data.filter.catch_block);
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+			LLVMBuildBr(c->builder, merge_bb);
+		LLVMPositionBuilderAtEnd(c->builder, merge_bb);
+		return;
+	}
+
+	case NODE_PRESS: {
+		if (!c->filter_stack) {
+			timbr_err("press outside of filter/dregs: nothing to catch\n");
+			exit(1);
+		}
+		FilterFrame *target = c->filter_stack;
+		LLVMValueRef val = codegen_expr(c, n->data.press.target);
+		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
+		val = coerce_value(c, val, n->data.press.target->data_type, i32_t,
+						   NULL);
+		LLVMValueRef store = LLVMBuildStore(c->builder, val, target->err_slot);
+		LLVMSetVolatile(store, 1);
+		// Defers registered between the active filter and this press run
+		// before control transfers to the handler.
+		for (DeferFrame *d = c->defer_stack; d != target->defers_at_entry;
+			 d = d->next)
+			codegen_stmt(c, d->stmt);
+		LLVMBuildBr(c->builder, target->catch_bb);
+		return;
+	}
+
 	case NODE_DEFER:
-		codegen_stmt(c, n->data.defer.stmt);
+		// Real defer: register, don't execute. Emitted in reverse order
+		// before every return (and before press transfers control).
+		{
+			DeferFrame *d = arena_alloc(c->arena, sizeof(DeferFrame));
+			d->stmt = n->data.defer.stmt;
+			d->next = c->defer_stack;
+			c->defer_stack = d;
+		}
 		return;
 
 	case NODE_DROP: {

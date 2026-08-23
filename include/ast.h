@@ -19,6 +19,7 @@ typedef enum {
 	TYPE_F32,
 	TYPE_F64,
 	TYPE_SET,
+	TYPE_ARRAY,
 	TYPE_HANDLE,
 	TYPE_STRUCT,
 	TYPE_ALIAS,
@@ -31,8 +32,9 @@ typedef struct Type {
 	int is_signed; // 1 for signed integer/float (i8/16/32/64, f32/f64),
 				   // 0 for unsigned integer (u8/16/32/64), bool, char, void,
 				   // and any other kind. Conservatively defaults to 0.
-	struct Type *inner; // For set<T> or T*
+	struct Type *inner; // For set<T>, T* or [N]T
 	char *name;			// For struct/alias names
+	long array_len;		// For [N]T fixed-size arrays
 } Type;
 
 typedef struct StructInitItem {
@@ -57,6 +59,7 @@ typedef enum {
 	NODE_STRING_LIT,
 	NODE_VAR_REF,
 	NODE_MEMBER_ACCESS,
+	NODE_INDEX,
 	NODE_CALL,
 	NODE_SET_LITERAL,
 	NODE_SET_POUR,
@@ -152,6 +155,10 @@ struct ASTNode {
 			ASTNode *object;
 			char *member;
 		} member_access;
+		struct {
+			ASTNode *object;
+			ASTNode *index;
+		} index;
 		struct {
 			ASTNode *callee;
 			ASTNode *args;

@@ -63,6 +63,10 @@ typedef enum {
 	TOK_MINUS,
 	TOK_STAR,
 	TOK_SLASH,
+	TOK_PLUS_EQ,  // +=
+	TOK_MINUS_EQ, // -=
+	TOK_STAR_EQ,  // *=
+	TOK_SLASH_EQ, // /=
 	TOK_TILDE_EQ, // ~= (Pour)
 	TOK_ARROW,	  // -> (Arrow)
 	TOK_DOT,	  // . (Member access)
@@ -76,9 +80,14 @@ typedef enum {
 	TOK_SEMICOLON,
 	TOK_COLON,
 	TOK_LANGLE,
-	TOK_RANGLE, // < >
-	TOK_IN,		// 'in' for loops
-	TOK_ISEQ,	// ==
+	TOK_RANGLE,	 // < >
+	TOK_ANDAND,	 // &&
+	TOK_OROR,	 // ||
+	TOK_BANG,	 // ! (logical not)
+	TOK_PERCENT, // % (modulo)
+	TOK_IN,		 // 'in' for loops
+	TOK_ISEQ,	 // ==
+	TOK_NOTEQ,	 // !=
 	TOK_LEQ,
 	TOK_REQ, // <= and >=
 	TOK_AMP

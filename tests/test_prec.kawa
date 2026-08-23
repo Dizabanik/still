@@ -1,0 +1,15 @@
+import stdc;
+
+pure fn u32 compute(u32 a, u32 b, u32 c) {
+    // Precedence: * before + before comparisons
+    return a + b * c - a / b;
+}
+
+fn i32 main() {
+    stdc.printf("compute(10, 2, 3) = %d\n", compute(10, 2, 3)); // 10+6-5=11
+    stdc.printf("2+3*4 = %d\n", 2 + 3 * 4);                     // 14
+    stdc.printf("(2+3)*4 = %d\n", (2 + 3) * 4);                 // 20
+    stdc.printf("10-2-3 = %d\n", 10 - 2 - 3);                   // 5 (left assoc)
+    stdc.printf("100/10/2 = %d\n", 100 / 10 / 2);               // 5
+    stdc.printf("1==1 && 2>1 = %d\n", 1 == 1 && 2 > 1);         // 1
+}

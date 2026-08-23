@@ -51,8 +51,26 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			LLVMCreateEnumAttribute(c->context, presplit_id, 0));
 	}
 
+	// `pure fn`: declared side-effect-free. memory(none) lets the optimizer
+	// hoist calls out of loops, CSE repeated calls and delete dead ones --
+	// the single biggest lever for making Kawa beat naive C output.
+	if (cur->data.func.is_pure) {
+		const char *mem = "memory";
+		unsigned mem_id = LLVMGetEnumAttributeKindForName(mem, strlen(mem));
+		// memory(none) == no reads, no writes. The raw value encodes the
+		// MemoryEffects bitfield; 0 is `none`.
+		LLVMAddAttributeAtIndex(c->current_func, LLVMAttributeFunctionIndex,
+								LLVMCreateEnumAttribute(c->context, mem_id, 0));
+	}
+
 	LLVMBasicBlockRef entry = LLVMAppendBasicBlock(c->current_func, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
+
+	// Defer/filter stacks are per-function; save and clear before the body.
+	DeferFrame *saved_defers = c->defer_stack;
+	FilterFrame *saved_filters = c->filter_stack;
+	c->defer_stack = NULL;
+	c->filter_stack = NULL;
 
 	// Spill each parameter to an entry-block alloca so mem2reg can promote
 	// it; parameters used exactly once never touch memory after O3.
@@ -64,6 +82,24 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	for (ASTNode *a = cur->data.func.args; a; a = a->next) {
 		LLVMValueRef p_val = LLVMGetParam(c->current_func, arg_idx++);
 		LLVMTypeRef arg_type = get_llvm_type(c, a->data_type);
+
+		// Pointer parameters: `noalias` (Kawa has no address-taken
+		// parameters escaping through globals) and `readonly` when the fn
+		// is pure -- both feed alias analysis and vectorization. Parameter
+		// attribute indices are 1-based; 0 means the return value.
+		if (LLVMGetTypeKind(arg_type) == LLVMPointerTypeKind) {
+			unsigned na_id = LLVMGetEnumAttributeKindForName("noalias", 7);
+			LLVMAddAttributeAtIndex(c->current_func, arg_idx,
+									LLVMCreateEnumAttribute(c->context, na_id, 0));
+			if (cur->data.func.is_pure) {
+				unsigned ro_id =
+					LLVMGetEnumAttributeKindForName("readonly", 8);
+				LLVMAddAttributeAtIndex(
+					c->current_func, arg_idx,
+					LLVMCreateEnumAttribute(c->context, ro_id, 0));
+			}
+		}
+
 		LLVMValueRef p_alloc =
 			create_entry_block_alloca(c, arg_type, a->data.var_decl.name);
 		LLVMBuildStore(c->builder, p_val, p_alloc);
@@ -107,7 +143,14 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 		c->current_promise_ptr = NULL;
 	} else {
 		codegen_stmt(c, cur->data.func.body);
-		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+		// Falling off the end still runs deferred statements first.
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+			for (DeferFrame *d = c->defer_stack; d; d = d->next)
+				codegen_stmt(c, d->stmt);
 			LLVMBuildRet(c->builder, LLVMConstNull(ret_t));
+		}
 	}
+
+	c->defer_stack = saved_defers;
+	c->filter_stack = saved_filters;
 }

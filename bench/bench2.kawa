@@ -1,0 +1,27 @@
+import stdc;
+
+pure fn u32 hash_step(u32 h, u32 v) {
+    return h * 31 + v;
+}
+
+fn i32 main() {
+    [256]u32 data;
+    u32 i = 0;
+    while (i < 256) {
+        data[i] = i * 2654435761;
+        i += 1;
+    }
+
+    u64 total = 0;
+    u64 rounds = 3000000;
+    u64 r = 0;
+    while (r < rounds) {
+        u32 h = 2166136261;
+        batch (v in data) {
+            h = hash_step(h, v);
+        }
+        total += h;
+        r += 1;
+    }
+    stdc.printf("%d\n", total);
+}

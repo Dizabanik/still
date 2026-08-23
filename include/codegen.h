@@ -20,6 +20,23 @@ typedef struct Scope {
 	struct Scope *next;
 } Scope;
 
+// Active `filter`/`dregs` handler. A linked stack: `press` stores into the
+// top frame's err slot and branches to its catch block. No unwinding --
+// press is an explicit control transfer, so nounwind survives everywhere.
+typedef struct FilterFrame {
+	LLVMBasicBlockRef catch_bb;
+	LLVMValueRef err_slot; // alloca'd i32 in the enclosing function
+	struct DeferFrame *defers_at_entry; // press runs only defers newer than this
+	struct FilterFrame *next;
+} FilterFrame;
+
+// Deferred statements (`defer stmt;`): pushed at the defer site, emitted in
+// reverse order when the enclosing function returns.
+typedef struct DeferFrame {
+	struct ASTNode *stmt;
+	struct DeferFrame *next;
+} DeferFrame;
+
 typedef struct {
 	LLVMModuleRef module;
 	LLVMBuilderRef builder;
@@ -39,6 +56,12 @@ typedef struct {
 
 	Scope *scope_stack;
 	int lambda_counter;
+
+	// filter/dregs handler stack (top = innermost active catch).
+	FilterFrame *filter_stack;
+
+	// defer stack (top = most recently deferred; run in reverse on return).
+	DeferFrame *defer_stack;
 
 	int in_coroutine;
 	LLVMBasicBlockRef coro_cleanup_block;

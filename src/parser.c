@@ -138,6 +138,23 @@ static Type *parse_type(Parser *p) {
 	Type *t = arena_alloc(p->arena, sizeof(Type));
 	TokenType tok = p->cur.type;
 
+	// Prefix array syntax: [N]T
+	if (tok == TOK_LBRACKET) {
+		advance(p);
+		if (p->cur.type != TOK_INT_LIT) {
+			report_error(p, "Expected array length");
+			return t;
+		}
+		long len = atol(p->cur.text);
+		advance(p);
+		consume(p, TOK_RBRACKET, "Expected ']' after array length");
+		Type *elem = parse_type(p);
+		t->kind = TYPE_ARRAY;
+		t->inner = elem;
+		t->array_len = len;
+		return t;
+	}
+
 	if (tok == TOK_U32)
 		t->kind = TYPE_U32;
 	else if (tok == TOK_I32)
@@ -172,6 +189,22 @@ static Type *parse_type(Parser *p) {
 		return t;
 	}
 	advance(p);
+	// Postfix [N]: fixed-size array type, e.g. [4]i32 or [16]User*
+	if (p->cur.type == TOK_LBRACKET) {
+		advance(p);
+		if (p->cur.type != TOK_INT_LIT) {
+			report_error(p, "Expected array length");
+			return t;
+		}
+		long len = atol(p->cur.text);
+		advance(p);
+		consume(p, TOK_RBRACKET, "Expected ']' after array length");
+		Type *arr = arena_alloc(p->arena, sizeof(Type));
+		arr->kind = TYPE_ARRAY;
+		arr->inner = t;
+		arr->array_len = len;
+		t = arr;
+	}
 	TokenType cur_t = p->cur.type;
 	while (cur_t == TOK_STAR || cur_t == TOK_AMP) {
 		advance(p);
@@ -217,6 +250,24 @@ static ASTNode *parse_unary(Parser *p) {
 			n->data.deref.expr->data_type->kind == TYPE_AMP) {
 			n->data_type = n->data.deref.expr->data_type->inner;
 		}
+		return n;
+	} else if (p->cur.type == TOK_MINUS || p->cur.type == TOK_BANG) {
+		// Unary minus / logical not. Desugared to binary ops so codegen
+		// needs no new node kinds: -x => 0 - x, !x => x == 0.
+		int op = p->cur.type;
+		advance(p);
+		ASTNode *operand = parse_unary(p);
+		ASTNode *zero = arena_alloc(p->arena, sizeof(ASTNode));
+		zero->type = NODE_LITERAL;
+		zero->data.literal.i_val = 0;
+		zero->data_type = operand->data_type;
+
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_BINARY_OP;
+		n->data.bin_op.op = (op == TOK_MINUS) ? TOK_MINUS : TOK_ISEQ;
+		n->data.bin_op.left = zero;
+		n->data.bin_op.right = operand;
+		n->data_type = (op == TOK_MINUS) ? operand->data_type : NULL;
 		return n;
 	}
 	return parse_postfix(p); // Fall through to postfix/primary
@@ -353,32 +404,20 @@ static ASTNode *parse_primary(Parser *p) {
 		Type *t_val = NULL;
 		ASTNode *ctx = NULL;
 
-		// Check if it's a type or an expression
-		if (is_type_token(p->cur.type)) {
-			// It is a type!
-			// Special check for identifiers: Is it a type name or variable?
-			// Parser doesn't track type names perfectly, but let's try
-			// parse_type If it fails, we fallback? No, let's treat as type if
-			// it looks like one.
-
-			// Wait, identifiers are ambiguous.
-			// If we can resolve it as a known type/struct, cool.
-			// Currently `is_type_token` includes IDENTIFIER.
-			// But variables are identifiers too.
-
-			// Lookahead: If it's a primitive type token, it's a type.
-			// If identifier... assume Type if followed by `*` or `)`?
-			// parse_type eats `*`.
-
-			// [FIX] Simple heuristic: Try parse_type.
-			// Any identifier can be a struct name.
-			// Parsing a type that is just "ident" is same as parsing expr
-			// "ident" except for the AST Node.
-
-			// Let's rely on standard parse_type if starts with primitive or we
-			// want to support user types. Actually, let's try to parse as Type
-			// first.
+		// Check if it's a type or an expression.
+		// An identifier is only treated as a type when it can't be an
+		// expression -- i.e. a primitive type token, or an identifier
+		// directly followed by ')' (e.g. sizeof(Car)) or '*' (pointer).
+		if (is_type_token(p->cur.type) && p->cur.type != TOK_IDENTIFIER) {
 			t_val = parse_type(p);
+		} else if (p->cur.type == TOK_IDENTIFIER) {
+			Lexer temp = *p->lexer;
+			Token nxt = lexer_next(&temp);
+			if (nxt.type == TOK_RPAREN || nxt.type == TOK_STAR) {
+				t_val = parse_type(p);
+			} else {
+				ctx = parse_expr(p);
+			}
 		} else {
 			// Expression
 			ctx = parse_expr(p);
@@ -523,6 +562,29 @@ static ASTNode *parse_postfix(Parser *p) {
 			member->data.member_access.member = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected member name after ->");
 			expr = member;
+		} else if (p->cur.type == TOK_LBRACKET) {
+			advance(p);
+			ASTNode *idx = parse_expr(p);
+			consume(p, TOK_RBRACKET, "Expected ']' after index");
+			ASTNode *index = arena_alloc(p->arena, sizeof(ASTNode));
+			index->type = NODE_INDEX;
+			index->data.index.object = expr;
+			index->data.index.index = idx;
+			// Element type: peel one array/pointer layer.
+			if (!index->data_type && expr->type == NODE_VAR_REF) {
+				ASTNode *decl = find_decl(p, expr->data.var_ref.name);
+				if (decl && decl->data_type &&
+					(decl->data_type->kind == TYPE_ARRAY ||
+					 decl->data_type->kind == TYPE_PTR ||
+					 decl->data_type->kind == TYPE_AMP))
+					index->data_type = decl->data_type->inner;
+			}
+			if (expr->data_type && (expr->data_type->kind == TYPE_ARRAY ||
+									expr->data_type->kind == TYPE_PTR ||
+									expr->data_type->kind == TYPE_AMP)) {
+				index->data_type = expr->data_type->inner;
+			}
+			expr = index;
 		} else if (p->cur.type == TOK_LPAREN) {
 			advance(p);
 
@@ -617,13 +679,18 @@ static ASTNode *parse_postfix(Parser *p) {
 static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 	while (1) {
 		int tok_prec = -1;
+		if (p->cur.type == TOK_ANDAND)
+			tok_prec = 3;
+		if (p->cur.type == TOK_OROR)
+			tok_prec = 2;
 		if (p->cur.type == TOK_PLUS || p->cur.type == TOK_MINUS)
 			tok_prec = 10;
-		if (p->cur.type == TOK_STAR || p->cur.type == TOK_SLASH)
+		if (p->cur.type == TOK_STAR || p->cur.type == TOK_SLASH ||
+			p->cur.type == TOK_PERCENT)
 			tok_prec = 20;
 		if (p->cur.type == TOK_LANGLE || p->cur.type == TOK_RANGLE ||
-			p->cur.type == TOK_ISEQ || p->cur.type == TOK_LEQ ||
-			p->cur.type == TOK_REQ)
+			p->cur.type == TOK_ISEQ || p->cur.type == TOK_NOTEQ ||
+			p->cur.type == TOK_LEQ || p->cur.type == TOK_REQ)
 			tok_prec = 5;
 		if (p->cur.type == TOK_TILDE_EQ)
 			tok_prec = 2;
@@ -631,7 +698,10 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			return lhs;
 		int op = p->cur.type;
 		advance(p);
-		ASTNode *rhs = parse_postfix(p);
+		// Precedence climbing: parse the RHS with strictly higher
+		// precedence so `a - b - c` groups left and `a || b == c` binds
+		// the comparison into the RHS of ||.
+		ASTNode *rhs = parse_binop_rhs(p, tok_prec + 1, parse_unary(p));
 		if (op == TOK_TILDE_EQ) {
 			ASTNode *pour = arena_alloc(p->arena, sizeof(ASTNode));
 			pour->type = NODE_SET_POUR;
@@ -724,7 +794,16 @@ static ASTNode *parse_statement(Parser *p) {
 	}
 
 	int is_c_style_decl = 0;
-	if (is_type_token(p->cur.type)) {
+	if (p->cur.type == TOK_LBRACKET) {
+		// Array type declaration: [N]T name = ...
+		Lexer temp = *p->lexer;		  // Clone lexer state
+		Token t1 = lexer_next(&temp); // length literal
+		Token t2 = lexer_next(&temp); // ']'
+		Token t3 = lexer_next(&temp); // element type
+		if (t1.type == TOK_INT_LIT && t2.type == TOK_RBRACKET &&
+			is_type_token(t3.type))
+			is_c_style_decl = 1;
+	} else if (is_type_token(p->cur.type)) {
 		Token next = lexer_peek(p->lexer);
 		if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR)
 			is_c_style_decl = 1;
@@ -739,7 +818,16 @@ static ASTNode *parse_statement(Parser *p) {
 		if (is_c_style_decl) {
 			type = parse_type(p);
 		} else {
-			advance(p);
+			advance(p); // step over let/const/orbit itself
+			// Optional explicit type: `const u32 X = ...`. A type token here
+			// must be followed by the variable's identifier (or a pointer
+			// star), otherwise it IS the variable name (`const x = ...`).
+			if (is_type_token(p->cur.type)) {
+				Token after = lexer_peek(p->lexer);
+				if (p->cur.type != TOK_IDENTIFIER ||
+					after.type == TOK_IDENTIFIER || after.type == TOK_STAR)
+					type = parse_type(p);
+			}
 		}
 
 		char *name = p->cur.text;
@@ -909,29 +997,53 @@ static ASTNode *parse_statement(Parser *p) {
 	if (p->cur.type == TOK_LBRACE)
 		return parse_block(p);
 	ASTNode *expr = parse_expr(p);
-	if (p->cur.type == TOK_ASSIGN) {
-		advance(p); // Eat '='
+	if (p->cur.type == TOK_ASSIGN || p->cur.type == TOK_PLUS_EQ ||
+		p->cur.type == TOK_MINUS_EQ || p->cur.type == TOK_STAR_EQ ||
+		p->cur.type == TOK_SLASH_EQ) {
+		int op = p->cur.type;
+		advance(p); // Eat '=' / '+=' / '-=' / '*=' / '/='
+
+		// Validate LHS is an L-Value
+		if (expr->type != NODE_VAR_REF && expr->type != NODE_MEMBER_ACCESS &&
+			expr->type != NODE_INDEX && expr->type != NODE_DEREF) {
+			report_error(p,
+						 "Invalid assignment target. Must be variable, field, "
+						 "element or dereference.");
+		}
 
 		ASTNode *assign = arena_alloc(p->arena, sizeof(ASTNode));
 		assign->type = NODE_ASSIGN;
+		assign->data.assign.target = expr;
 
-		// Validate LHS is an L-Value
-		if (expr->type == NODE_VAR_REF || expr->type == NODE_MEMBER_ACCESS) {
-			assign->data.assign.target = expr;
+		ASTNode *value = parse_expr(p);
+		if (op == TOK_ASSIGN) {
+			assign->data.assign.value = value;
 		} else {
-			report_error(
-				p, "Invalid assignment target. Must be variable or field.");
+			// Desugar `x += v` into `x = x + v`. The codegen re-evaluates the
+			// target address once, so this stays a single store.
+			int bin_op;
+			switch (op) {
+			case TOK_PLUS_EQ:
+				bin_op = TOK_PLUS;
+				break;
+			case TOK_MINUS_EQ:
+				bin_op = TOK_MINUS;
+				break;
+			case TOK_STAR_EQ:
+				bin_op = TOK_STAR;
+				break;
+			default:
+				bin_op = TOK_SLASH;
+				break;
+			}
+			ASTNode *bin = arena_alloc(p->arena, sizeof(ASTNode));
+			bin->type = NODE_BINARY_OP;
+			bin->data.bin_op.op = bin_op;
+			bin->data.bin_op.left = expr;
+			bin->data.bin_op.right = value;
+			bin->data_type = expr->data_type;
+			assign->data.assign.value = bin;
 		}
-
-		// Special Case: Variable Decl with implicit struct literal
-		// User a = { ... };
-		// (Note: This specific path is for re-assignment.
-		// Decl parsing happens in the LET block above, which you should also
-		// update to use parse_expr() for the init value, which calls
-		// parse_primary, which now handles struct literals automatically thanks
-		// to peek_is_struct_literal).
-
-		assign->data.assign.value = parse_expr(p);
 		consume(p, TOK_SEMICOLON, "Expected ';'");
 		return assign;
 	}
@@ -1004,8 +1116,6 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	fn_node->data.func.body = parse_block(p);
 	**tail = fn_node;
 	*tail = &fn_node->next;
-	if (prefix && func_name)
-		free(func_name);
 }
 ASTNode *parse_program(Parser *p) {
 	ASTNode *prog = arena_alloc(p->arena, sizeof(ASTNode));
@@ -1083,9 +1193,23 @@ ASTNode *parse_program(Parser *p) {
 			tail = &st->next;
 		} else {
 			int is_global_decl = 0;
-			if (is_type_token(p->cur.type)) {
+			if (p->cur.type == TOK_CONST || p->cur.type == TOK_ORBIT ||
+				p->cur.type == TOK_LET) {
+				// let/const/orbit are always declarations at file scope.
+				is_global_decl = 1;
+			} else if (p->cur.type == TOK_LBRACKET) {
+				// Mirror parse_statement's lookahead: [ N ] T name
+				Lexer temp = *p->lexer;
+				Token t1 = lexer_next(&temp);
+				Token t2 = lexer_next(&temp);
+				Token t3 = lexer_next(&temp);
+				if (t1.type == TOK_INT_LIT && t2.type == TOK_RBRACKET &&
+					is_type_token(t3.type))
+					is_global_decl = 1;
+			} else if (is_type_token(p->cur.type)) {
 				Token next = lexer_peek(p->lexer);
-				if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR)
+				if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR ||
+					next.type == TOK_LBRACKET)
 					is_global_decl = 1;
 			}
 

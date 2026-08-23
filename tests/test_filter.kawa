@@ -1,0 +1,49 @@
+import stdc;
+
+// filter/dregs/press: explicit error slot + handler stack. `press` stores
+// into the innermost active filter's err slot and branches to its dregs
+// block. No unwinding, so nounwind survives on every function.
+
+fn i32 main() {
+    // 1. No press: try body runs, catch is skipped.
+    filter {
+        stdc.printf("f1: trying\n");
+    } dregs (e) {
+        stdc.printf("f1: caught %d\n", e);
+    }
+    stdc.printf("f1: done\n");
+
+    // 2. Press with a value: catch runs with the error.
+    filter {
+        stdc.printf("f2: trying\n");
+        press e = 42;
+        stdc.printf("f2: unreachable\n");
+    } dregs (e) {
+        stdc.printf("f2: caught %d\n", e);
+    }
+    stdc.printf("f2: done\n");
+
+    // 3. Nested filters: press targets the innermost.
+    filter {
+        filter {
+            press inner = 7;
+            stdc.printf("f3: unreachable inner\n");
+        } dregs (inner) {
+            stdc.printf("f3: inner caught %d\n", inner);
+        }
+        stdc.printf("f3: back in outer try\n");
+    } dregs (outer) {
+        stdc.printf("f3: outer caught %d\n", outer);
+    }
+
+    // 4. press from a helper function is not supported (no unwinding);
+    //    press must appear lexically inside the filter's try block.
+
+    // 5. defer runs when press transfers control.
+    filter {
+        defer stdc.printf("f5: deferred cleanup\n");
+        press err = 9;
+    } dregs (err) {
+        stdc.printf("f5: caught %d\n", err);
+    }
+}

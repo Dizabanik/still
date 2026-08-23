@@ -1,0 +1,40 @@
+import stdc;
+
+// Pure function: optimizer can hoist/CSE/delete calls
+pure fn u64 square(u64 x) {
+    return x * x;
+}
+
+fn i32 main() {
+    // Fixed-size arrays
+    [5]i32 arr = {0, 0, 0, 0, 0};
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = arr[0] + arr[1];
+    stdc.printf("arr: %d %d %d\n", arr[0], arr[1], arr[2]);
+
+    // Compound assignment
+    let x = 100;
+    x += 50;
+    x -= 20;
+    x *= 2;
+    stdc.printf("x: %d\n", x);
+
+    // sizeof
+    stdc.printf("sizeof(i64): %d, sizeof(arr elem): %d\n", sizeof(i64), sizeof(arr[0]));
+
+    // batch over array (zero-copy iteration)
+    i32 total = 0;
+    batch (v in arr) {
+        total += v;
+    }
+    stdc.printf("total: %d\n", total);
+
+    // pure call in loop -- should be constant-folded
+    u64 s = 0;
+    u64 n = 1000000000;
+    while (s < n) {
+        s += 7;
+    }
+    stdc.printf("s: %d\n", s);
+}

@@ -1,0 +1,5 @@
+arr: 10 20 30
+x: 260
+sizeof(i64): 8, sizeof(arr elem): 4
+total: 60
+s: 1000000001

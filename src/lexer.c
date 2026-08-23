@@ -106,21 +106,52 @@ Token lexer_next(Lexer *l) {
 			}
 			return make_token(l, TOK_COLON, ":");
 		}
-		if (c == '+')
+		if (c == '+') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_PLUS_EQ, "+=");
+			}
 			return make_token(l, TOK_PLUS, "+");
+		}
 		if (c == '-') {
 			if (peek(l) == '>') {
 				advance(l);
 				return make_token(l, TOK_ARROW, "->");
 			}
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_MINUS_EQ, "-=");
+			}
 			return make_token(l, TOK_MINUS, "-");
 		}
-		if (c == '*')
+		if (c == '*') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_STAR_EQ, "*=");
+			}
 			return make_token(l, TOK_STAR, "*");
-		if (c == '&')
+		}
+		if (c == '&') {
+			if (peek(l) == '&') {
+				advance(l);
+				return make_token(l, TOK_ANDAND, "&&");
+			}
 			return make_token(l, TOK_AMP, "&");
-		if (c == '/')
+		}
+		if (c == '|') {
+			if (peek(l) == '|') {
+				advance(l);
+				return make_token(l, TOK_OROR, "||");
+			}
+			return error_token(l, "Unexpected character '|'");
+		}
+		if (c == '/') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_SLASH_EQ, "/=");
+			}
 			return make_token(l, TOK_SLASH, "/");
+		}
 
 		if (c == '~') {
 			if (peek(l) == '=') {
@@ -149,7 +180,17 @@ Token lexer_next(Lexer *l) {
 				advance(l);
 				return make_token(l, TOK_REQ, ">=");
 			}
-			return make_token(l, TOK_LANGLE, ">");
+			return make_token(l, TOK_RANGLE, ">");
+		}
+		if (c == '%')
+			return make_token(l, TOK_PERCENT, "%");
+
+		if (c == '!') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_NOTEQ, "!=");
+			}
+			return make_token(l, TOK_BANG, "!");
 		}
 
 		// Strings with Escape Sequences

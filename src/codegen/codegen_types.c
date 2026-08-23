@@ -172,6 +172,12 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		t->is_signed = 0;
 		return LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
 
+	case TYPE_ARRAY: {
+		LLVMTypeRef elem = get_llvm_type(c, t->inner);
+		t->is_signed = 0;
+		return LLVMArrayType(elem, (unsigned)t->array_len);
+	}
+
 	case TYPE_SET: {
 		// Fixed representation: { i32* buf, i64 len, i64 cap }.
 		// Note: only i32 elements are supported (matching the rest of the

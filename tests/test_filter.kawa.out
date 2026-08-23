@@ -1,0 +1,9 @@
+f1: trying
+f1: done
+f2: trying
+f2: caught 42
+f2: done
+f3: inner caught 7
+f3: back in outer try
+f5: deferred cleanup
+f5: caught 9
