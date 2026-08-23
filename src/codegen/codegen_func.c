@@ -6,6 +6,9 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
 
 	LLVMTypeRef ret_t = LLVMInt32TypeInContext(ctx);
+	if (cur->data.func.ret_type &&
+		cur->data.func.ret_type->kind == TYPE_VOID)
+		ret_t = LLVMVoidTypeInContext(ctx);
 	if (cur->data.func.is_drip)
 		ret_t = i8ptr;
 
@@ -147,7 +150,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
 			for (DeferFrame *d = c->defer_stack; d; d = d->next)
 				codegen_stmt(c, d->stmt);
-			LLVMBuildRet(c->builder, LLVMConstNull(ret_t));
+			if (LLVMGetTypeKind(ret_t) == LLVMVoidTypeKind)
+				LLVMBuildRetVoid(c->builder);
+			else
+				LLVMBuildRet(c->builder, LLVMConstNull(ret_t));
 		}
 	}
 

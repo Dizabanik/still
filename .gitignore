@@ -7,3 +7,5 @@ output.ll
 bench/*_c
 *.bc
 *.ll
+tmp/
+.claude/

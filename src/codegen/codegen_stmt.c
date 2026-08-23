@@ -289,6 +289,21 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		for (DeferFrame *d = c->defer_stack; d; d = d->next)
 			codegen_stmt(c, d->stmt);
 
+		if (n->data.ret_stmt.expr == NULL) {
+			// bare `return;` -- runs defers, then leaves. Valid in void
+			// functions; in drips it finishes without a final value.
+			if (c->in_coroutine) {
+				LLVMBuildBr(c->builder, c->coro_cleanup_block);
+			} else if (LLVMGetTypeKind(c->current_ret_type) ==
+					   LLVMVoidTypeKind) {
+				LLVMBuildRetVoid(c->builder);
+			} else {
+				timbr_err("'return;' in a non-void function\n");
+				return;
+			}
+			return;
+		}
+
 		LLVMValueRef ret_val = codegen_expr(c, n->data.ret_stmt.expr);
 		if (c->in_coroutine) {
 			if (c->current_promise_ptr) {

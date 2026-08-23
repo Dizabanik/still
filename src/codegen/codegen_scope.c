@@ -409,11 +409,30 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			}
 			base = s->val;
 			if (!elem) {
+				// Element type must come from the AST declaration:
+				// LLVM 21 pointers are opaque, so LLVMGetElementType on
+				// a pointer value is invalid and yields garbage.
 				LLVMTypeRef st = s->type;
+				Type *st_ast = (s->node && s->node->data_type)
+								   ? s->node->data_type
+								   : NULL;
 				if (LLVMGetTypeKind(st) == LLVMArrayTypeKind)
 					elem = LLVMGetElementType(st);
-				else if (LLVMGetTypeKind(st) == LLVMPointerTypeKind)
-					elem = LLVMGetElementType(st);
+				else if (st_ast &&
+						 (st_ast->kind == TYPE_PTR || st_ast->kind == TYPE_AMP))
+					elem = st_ast->inner ? get_llvm_type(c, st_ast->inner)
+										 : LLVMInt8TypeInContext(c->context);
+				else if (st_ast && st_ast->kind == TYPE_ARRAY)
+					elem = st_ast->inner ? get_llvm_type(c, st_ast->inner)
+										 : LLVMInt32TypeInContext(c->context);
+			}
+			// A pointer variable's storage holds the T*; the indexed
+			// object lives behind that pointer, so load it first. Array
+			// allocas index directly (base stays the alloca).
+			if (LLVMGetTypeKind(s->type) != LLVMArrayTypeKind) {
+				LLVMTypeRef ptr_t = LLVMPointerType(elem, 0);
+				base =
+					LLVMBuildLoad2(c->builder, ptr_t, base, "idx_base");
 			}
 		} else {
 			// Complex base: resolve its address, then load if it's a
@@ -443,20 +462,13 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMValueRef inner_addr =
 			get_address(c, n->data.deref.expr, &inner_storage_type);
 
-		// The pointee type: prefer AST info, fall back to peeling the LLVM
-		// pointer type of the loaded value.
+		// The pointee type must come from AST info. LLVM 21 pointers are
+		// opaque, so there is no LLVM-level pointee type to peel -- the
+		// old shape-recovery path read garbage off opaque pointers.
 		Type *val_ast = deref_value_type(c, n);
 		LLVMTypeRef pointee = val_ast ? get_llvm_type(c, val_ast) : NULL;
-		if (!pointee) {
-			// Shape recovery: peel one pointer layer from the storage type
-			// (storage is T**, loaded value is T*, pointee is T).
-			LLVMTypeRef probe = inner_storage_type;
-			if (probe && LLVMGetTypeKind(probe) == LLVMPointerTypeKind) {
-				LLVMTypeRef loaded = LLVMGetElementType(probe);
-				if (LLVMGetTypeKind(loaded) == LLVMPointerTypeKind)
-					pointee = LLVMGetElementType(loaded);
-			}
-		}
+		if (!pointee)
+			pointee = LLVMInt8TypeInContext(c->context);
 		if (!pointee)
 			pointee = LLVMInt32TypeInContext(c->context);
 

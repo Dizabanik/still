@@ -182,6 +182,17 @@ static Type *parse_type(Parser *p) {
 	else if (tok == TOK_F64)
 		t->kind = TYPE_F64;
 	else if (tok == TOK_IDENTIFIER) {
+		if (strcmp(p->cur.text, "str") == 0) {
+			// `str` is a builtin: pointer to char (NUL-terminated, like
+			// string literals). Treated as TYPE_PTR(CHAR) everywhere.
+			Type *ch = arena_alloc(p->arena, sizeof(Type));
+			ch->kind = TYPE_CHAR;
+			ch->inner = NULL;
+			t->kind = TYPE_PTR;
+			t->inner = ch;
+			advance(p);
+			return t;
+		}
 		t->kind = TYPE_STRUCT;
 		t->name = p->cur.text;
 	} else {
@@ -924,7 +935,8 @@ static ASTNode *parse_statement(Parser *p) {
 		advance(p);
 		ASTNode *ret = arena_alloc(p->arena, sizeof(ASTNode));
 		ret->type = NODE_RETURN;
-		ret->data.ret_stmt.expr = parse_expr(p);
+		ret->data.ret_stmt.expr =
+			(p->cur.type == TOK_SEMICOLON) ? NULL : parse_expr(p);
 		consume(p, TOK_SEMICOLON, "Expected ';'");
 		return ret;
 	}
