@@ -98,11 +98,19 @@ static void consume(Parser *p, TokenType t, const char *err) {
 }
 
 static ASTNode *find_decl(Parser *p, const char *name) {
-	for (int i = 0; i < p->decl_count; i++) {
+	for (int i = p->decl_count - 1; i >= 0; i--) {
 		if (strcmp(p->decls[i].name, name) == 0)
 			return p->decls[i].node;
 	}
 	return NULL;
+}
+
+// True when `name` is a previously declared const -- used by the [N]
+// lookahead so `const N = 8;` can be used as `[N]i32 buf;`.
+static int find_decl_is_const(Parser *p, const char *name) {
+	ASTNode *decl = find_decl(p, name);
+	return decl && decl->type == NODE_VAR_DECL &&
+		   decl->data.var_decl.is_const;
 }
 
 static int is_type_token(TokenType t) {
@@ -134,6 +142,34 @@ static int is_likely_cast(Parser *p) {
 	return 0;
 }
 
+static Type *parse_type(Parser *p);
+
+// Array length in `[N]T`: a literal or a const identifier. Const lookup
+// goes through p->decls (registered at declaration time), so a const
+// must be declared before the array that uses it -- like C.
+static long parse_array_len(Parser *p) {
+	if (p->cur.type == TOK_INT_LIT) {
+		long len = atol(p->cur.text);
+		advance(p);
+		return len;
+	}
+	if (p->cur.type == TOK_IDENTIFIER) {
+		ASTNode *decl = find_decl(p, p->cur.text);
+		if (decl && decl->type == NODE_VAR_DECL &&
+			decl->data.var_decl.is_const && decl->data.var_decl.init &&
+			decl->data.var_decl.init->type == NODE_LITERAL) {
+			long len = (long)decl->data.var_decl.init->data.literal.i_val;
+			advance(p);
+			return len;
+		}
+		report_error(p, "Array length must be a literal or const");
+		advance(p);
+		return 0;
+	}
+	report_error(p, "Expected array length");
+	return 0;
+}
+
 static Type *parse_type(Parser *p) {
 	Type *t = arena_alloc(p->arena, sizeof(Type));
 	TokenType tok = p->cur.type;
@@ -141,12 +177,7 @@ static Type *parse_type(Parser *p) {
 	// Prefix array syntax: [N]T
 	if (tok == TOK_LBRACKET) {
 		advance(p);
-		if (p->cur.type != TOK_INT_LIT) {
-			report_error(p, "Expected array length");
-			return t;
-		}
-		long len = atol(p->cur.text);
-		advance(p);
+		long len = parse_array_len(p);
 		consume(p, TOK_RBRACKET, "Expected ']' after array length");
 		Type *elem = parse_type(p);
 		t->kind = TYPE_ARRAY;
@@ -181,18 +212,17 @@ static Type *parse_type(Parser *p) {
 		t->kind = TYPE_U64;
 	else if (tok == TOK_F64)
 		t->kind = TYPE_F64;
-	else if (tok == TOK_IDENTIFIER) {
-		if (strcmp(p->cur.text, "str") == 0) {
-			// `str` is a builtin: pointer to char (NUL-terminated, like
-			// string literals). Treated as TYPE_PTR(CHAR) everywhere.
-			Type *ch = arena_alloc(p->arena, sizeof(Type));
-			ch->kind = TYPE_CHAR;
-			ch->inner = NULL;
-			t->kind = TYPE_PTR;
-			t->inner = ch;
-			advance(p);
-			return t;
-		}
+	else if (tok == TOK_STR) {
+		// `str` is a builtin: pointer to char (NUL-terminated, matching
+		// string literals).
+		Type *ch = arena_alloc(p->arena, sizeof(Type));
+		ch->kind = TYPE_CHAR;
+		ch->inner = NULL;
+		t->kind = TYPE_PTR;
+		t->inner = ch;
+		advance(p);
+		return t;
+	} else if (tok == TOK_IDENTIFIER) {
 		t->kind = TYPE_STRUCT;
 		t->name = p->cur.text;
 	} else {
@@ -203,12 +233,7 @@ static Type *parse_type(Parser *p) {
 	// Postfix [N]: fixed-size array type, e.g. [4]i32 or [16]User*
 	if (p->cur.type == TOK_LBRACKET) {
 		advance(p);
-		if (p->cur.type != TOK_INT_LIT) {
-			report_error(p, "Expected array length");
-			return t;
-		}
-		long len = atol(p->cur.text);
-		advance(p);
+		long len = parse_array_len(p);
 		consume(p, TOK_RBRACKET, "Expected ']' after array length");
 		Type *arr = arena_alloc(p->arena, sizeof(Type));
 		arr->kind = TYPE_ARRAY;
@@ -848,13 +873,16 @@ static ASTNode *parse_statement(Parser *p) {
 
 	int is_c_style_decl = 0;
 	if (p->cur.type == TOK_LBRACKET) {
-		// Array type declaration: [N]T name = ...
+		// Array type declaration: [N]T name = ... where N is a literal
+		// or a const identifier.
 		Lexer temp = *p->lexer;		  // Clone lexer state
-		Token t1 = lexer_next(&temp); // length literal
+		Token t1 = lexer_next(&temp); // length literal or const name
 		Token t2 = lexer_next(&temp); // ']'
 		Token t3 = lexer_next(&temp); // element type
-		if (t1.type == TOK_INT_LIT && t2.type == TOK_RBRACKET &&
-			is_type_token(t3.type))
+		int len_ok = (t1.type == TOK_INT_LIT) ||
+					 (t1.type == TOK_IDENTIFIER &&
+					  find_decl_is_const(p, t1.text));
+		if (len_ok && t2.type == TOK_RBRACKET && is_type_token(t3.type))
 			is_c_style_decl = 1;
 	} else if (is_type_token(p->cur.type)) {
 		Token next = lexer_peek(p->lexer);
@@ -1337,7 +1365,10 @@ ASTNode *parse_program(Parser *p) {
 				Token t1 = lexer_next(&temp);
 				Token t2 = lexer_next(&temp);
 				Token t3 = lexer_next(&temp);
-				if (t1.type == TOK_INT_LIT && t2.type == TOK_RBRACKET &&
+				int len_ok = (t1.type == TOK_INT_LIT) ||
+							 (t1.type == TOK_IDENTIFIER &&
+							  find_decl_is_const(p, t1.text));
+				if (len_ok && t2.type == TOK_RBRACKET &&
 					is_type_token(t3.type))
 					is_global_decl = 1;
 			} else if (is_type_token(p->cur.type)) {

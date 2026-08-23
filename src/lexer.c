@@ -410,6 +410,10 @@ Token lexer_next(Lexer *l) {
 				type = TOK_F32;
 			else if (strcmp(text, "double") == 0)
 				type = TOK_F64;
+			else if (strcmp(text, "int") == 0)
+				type = TOK_I32;
+			else if (strcmp(text, "str") == 0)
+				type = TOK_STR;
 
 			return make_token(l, type, text);
 		}

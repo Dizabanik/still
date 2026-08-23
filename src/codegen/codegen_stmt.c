@@ -125,7 +125,6 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef br =
 			LLVMBuildCondBr(c->builder, cond_val, body_bb, exit_bb);
 		set_branch_weights(c, br, 64, 1); // loops iterate more often than not
-		add_loop_metadata(c, br);
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
 
 		struct LoopTargets targets = {exit_bb, cond_bb, c->loop_stack};
@@ -162,7 +161,6 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			LLVMValueRef br =
 				LLVMBuildCondBr(c->builder, cond_val, body_bb, exit_bb);
 			set_branch_weights(c, br, 64, 1);
-			add_loop_metadata(c, br);
 		} else {
 			LLVMBuildBr(c->builder, body_bb); // `for (;;)` = infinite
 		}
@@ -256,8 +254,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef idx = LLVMBuildPhi(c->builder, i64_t, "idx");
 		LLVMValueRef cmp =
 			LLVMBuildICmp(c->builder, LLVMIntULT, idx, len, "loop_cond");
-		LLVMValueRef br = LLVMBuildCondBr(c->builder, cmp, body_bb, exit_bb);
-		add_loop_metadata(c, br);
+		LLVMBuildCondBr(c->builder, cmp, body_bb, exit_bb);
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
 
 		LLVMValueRef item_ptr =

@@ -5,10 +5,14 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	LLVMContextRef ctx = c->context;
 	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
 
+	// Explicit return type wins (`fn f64 accel(...)`, `fn void log(...)`).
+	// No declared type keeps the legacy default: i32, or i8* for drips.
 	LLVMTypeRef ret_t = LLVMInt32TypeInContext(ctx);
-	if (cur->data.func.ret_type &&
-		cur->data.func.ret_type->kind == TYPE_VOID)
-		ret_t = LLVMVoidTypeInContext(ctx);
+	if (cur->data.func.ret_type) {
+		ret_t = get_llvm_type(c, cur->data.func.ret_type);
+		if (LLVMGetTypeKind(ret_t) == LLVMVoidTypeKind && cur->data.func.is_drip)
+			ret_t = LLVMInt32TypeInContext(ctx); // drip promise needs a slot
+	}
 	if (cur->data.func.is_drip)
 		ret_t = i8ptr;
 

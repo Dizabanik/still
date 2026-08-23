@@ -1,0 +1,15 @@
+import stdc;
+
+// 256MB working set: fill, then one streaming reduction.
+[67108864]u32 data;
+
+fn i32 main() {
+    for (i32 i = 0; i < 67108864; i += 1) {
+        data[i] = (u32)i * 2654435761;
+    }
+    u64 sum = 0;
+    for (i32 i = 0; i < 67108864; i += 1) {
+        sum += data[i];
+    }
+    stdc.printf("sum=%llu\n", sum);
+}

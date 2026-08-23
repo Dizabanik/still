@@ -9,3 +9,6 @@ bench/*_c
 *.ll
 tmp/
 .claude/
+bench/b1_rs
+bench/b2_rs
+bench/b3_rs

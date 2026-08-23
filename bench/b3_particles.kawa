@@ -1,0 +1,39 @@
+import stdc;
+
+const i32 N = 1000000;
+const f64 DT = 0.000001;
+
+struct P {
+    f64 x;
+    f64 y;
+    f64 vx;
+    f64 vy;
+}
+
+[N]P parts;
+
+pure fn f64 accel(f64 d) {
+    return d * 9.8 - 0.01 * d * d;
+}
+
+fn i32 main() {
+    for (i32 i = 0; i < N; i += 1) {
+        parts[i].x = (f64)i * 0.001;
+        parts[i].y = (f64)(i & 1023) * 0.5;
+        parts[i].vx = 1.0;
+        parts[i].vy = 0.5;
+    }
+    for (i32 s = 0; s < 100; s += 1) {
+        for (i32 i = 0; i < N; i += 1) {
+            parts[i].vx = parts[i].vx + accel(parts[i].x) * DT;
+            parts[i].vy = parts[i].vy + accel(parts[i].y) * DT;
+            parts[i].x = parts[i].x + parts[i].vx * DT;
+            parts[i].y = parts[i].y + parts[i].vy * DT;
+        }
+    }
+    f64 acc = 0;
+    for (i32 i = 0; i < N; i += 1) {
+        acc = acc + parts[i].x;
+    }
+    stdc.printf("acc=%.6f\n", acc);
+}

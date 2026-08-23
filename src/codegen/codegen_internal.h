@@ -57,7 +57,6 @@ void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type);
 void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 						unsigned true_weight, unsigned false_weight);
 void set_fast_math(LLVMValueRef instr);
-void add_loop_metadata(KawaCompiler *c, LLVMValueRef branch_instr);
 
 // --- codegen_scope.c ---
 char *get_var_path(KawaCompiler *c, const char *s);

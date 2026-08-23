@@ -39,6 +39,7 @@ typedef enum {
 	TOK_MUT,
 	// Primitive Types
 	TOK_VOID,
+	TOK_STR,
 	TOK_BOOL,
 	TOK_CHAR,
 	TOK_I8,

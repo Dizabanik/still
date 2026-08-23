@@ -44,6 +44,12 @@ static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
 		LLVMAddGlobal(c->module, g_type, n->data.var_decl.name);
 	LLVMSetInitializer(global,
 					   init_const ? init_const : LLVMConstNull(g_type));
+	// Whole-program model: every global lives and dies inside this module.
+	// Internal linkage lets LLVM see that -- and on Mach-O it decides where
+	// zero storage goes: external globals land in __DATA,__common, which
+	// costs real time at first touch for huge arrays; internal ones get
+	// proper .zerofill __DATA,__bss, same as static C.
+	LLVMSetLinkage(global, LLVMInternalLinkage);
 	LLVMSetAlignment(global, 16);
 
 	// `const x = ...` at file scope: the value never changes, so say so.

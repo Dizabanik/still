@@ -95,40 +95,14 @@ void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 					LLVMMetadataAsValue(c->context, md_node));
 }
 
-// Attach loop metadata enabling vectorize + unroll, and a self-referential
-// loop ID. LLVM requires the first operand of a !llvm.loop MDNode to be
-// itself; the previous implementation built an empty tuple placeholder and
-// tried to retro-fit a self-reference -- which left an invalid node.
-void add_loop_metadata(KawaCompiler *c, LLVMValueRef branch_instr) {
-	LLVMContextRef ctx = c->context;
-	LLVMMetadataRef one_md =
-		LLVMValueAsMetadata(LLVMConstInt(LLVMInt1TypeInContext(ctx), 1, 0));
-
-	LLVMMetadataRef vec_str =
-		LLVMMDStringInContext2(ctx, "llvm.loop.vectorize.enable", 26);
-	LLVMMetadataRef vec_args[] = {vec_str, one_md};
-	LLVMMetadataRef vec_node = LLVMMDNodeInContext2(ctx, vec_args, 2);
-
-	LLVMMetadataRef unroll_str =
-		LLVMMDStringInContext2(ctx, "llvm.loop.unroll.enable", 23);
-	LLVMMetadataRef unroll_args[] = {unroll_str, one_md};
-	LLVMMetadataRef unroll_node = LLVMMDNodeInContext2(ctx, unroll_args, 2);
-
-	// Build the loop node with a dummy first operand, then replace it with
-	// the node itself to create the required self-reference.
-	LLVMMetadataRef dummy_args[] = {one_md};
-	LLVMMetadataRef dummy = LLVMMDNodeInContext2(ctx, dummy_args, 1);
-
-	LLVMMetadataRef loop_args[] = {dummy, vec_node, unroll_node};
-	LLVMMetadataRef loop_md = LLVMMDNodeInContext2(ctx, loop_args, 3);
-	// Self-reference: replace the first operand with the node itself.
-	LLVMReplaceMDNodeOperandWith(LLVMMetadataAsValue(ctx, loop_md), 0,
-								 loop_md);
-
-	unsigned kind_id = LLVMGetMDKindID("llvm.loop", 9);
-	LLVMSetMetadata(branch_instr, kind_id,
-					LLVMMetadataAsValue(ctx, loop_md));
-}
+// NOTE: we deliberately attach NO llvm.loop metadata. Earlier versions
+// forced `unroll.enable`, which made the full unroller expand large loops
+// into >1M-line modules (observed 60x+ slowdowns from i-cache thrash), and
+// `unroll.disable`, which blocked profitable store interleaving in fill
+// loops. default<O3> makes better decisions than either hint -- the C
+// front-end runs these same loops with no metadata and wins because of it.
+// Branch-probability weights (set_branch_weights) stay: those are facts
+// about our code shape, not guesses about the optimizer's tuning.
 
 // Mark an FP op with all-fast-math flags so the backend may reorder/assoc.
 void set_fast_math(LLVMValueRef instr) {

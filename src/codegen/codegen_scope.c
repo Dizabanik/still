@@ -446,8 +446,22 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			elem = LLVMInt32TypeInContext(c->context);
 
 		LLVMValueRef idx = codegen_expr(c, n->data.index.index);
+		// Bare VAR_REF indices carry no parser-side type; stamp it from
+		// the declaration so sext/zext matches its signedness (a zext'd
+		// `i32 i` blocks induction-variable analysis and kills
+		// vectorization of the surrounding loop). The i64 destination is
+		// marked signed so a signed index widens with sext.
+		if (!n->data.index.index->data_type &&
+			n->data.index.index->type == NODE_VAR_REF) {
+			Scope *sv =
+				scope_find(c, n->data.index.index->data.var_ref.name);
+			if (sv && sv->node && sv->node->data_type)
+				n->data.index.index->data_type = sv->node->data_type;
+		}
+		Type idx64 = {0};
+		idx64.kind = TYPE_I64;
 		idx = coerce_value(c, idx, n->data.index.index->data_type,
-						   LLVMInt64TypeInContext(c->context), NULL);
+						   LLVMInt64TypeInContext(c->context), &idx64);
 		LLVMValueRef addr =
 			LLVMBuildGEP2(c->builder, elem, base, &idx, 1, "elem_addr");
 		if (out_type)

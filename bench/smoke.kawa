@@ -1,0 +1,46 @@
+import stdc;
+
+const i32 W = 8;
+[4]u32 data;
+
+struct P {
+    f64 x;
+    f64 vx;
+}
+
+[4]P parts;
+
+pure fn u32 mix(u32 h, u32 v) {
+    return (h ^ v) * 16777619;
+}
+
+fn i32 main() {
+    // mixed int/float mul + f64 accumulator
+    f64 acc = 0;
+    for (i32 i = 0; i < W; i += 1) {
+        f64 term = i * 0.25;
+        acc = acc + term;
+    }
+    stdc.printf("acc=%.6f\n", acc);
+
+    // cast form
+    i32 n = 7;
+    f64 fnv = (f64)n * 1.5;
+    stdc.printf("fnv=%.3f\n", fnv);
+
+    // u64 accumulate + %llu
+    u64 big = 0;
+    u32 h = 2166136261;
+    data[0] = 1; data[1] = 2; data[2] = 3; data[3] = 4;
+    for (i32 i = 0; i < 4; i += 1) {
+        h = mix(h, data[i]);
+    }
+    big = big + h;
+    stdc.printf("h=%llu\n", big);
+
+    // global struct array member RMW
+    parts[1].x = 1.5;
+    parts[1].vx = 2.0;
+    parts[1].x = parts[1].x + parts[1].vx * 0.01;
+    stdc.printf("px=%.6f\n", parts[1].x);
+}

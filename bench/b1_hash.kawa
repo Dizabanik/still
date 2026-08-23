@@ -1,0 +1,14 @@
+import stdc;
+
+pure fn u32 fnv1a(u32 h, u32 v) {
+    return (h ^ v) * 16777619;
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 200000000;
+    u32 h = 2166136261;
+    for (i64 r = 0; r < ROUNDS; r += 1) {
+        h = fnv1a(h, (u32)r);
+    }
+    stdc.printf("h=%u\n", h);
+}
