@@ -12,3 +12,7 @@ tmp/
 bench/b1_rs
 bench/b2_rs
 bench/b3_rs
+bench/b1_c
+bench/b2_c
+bench/b3_c
+bench/bench2_c

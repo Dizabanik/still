@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 
 char *get_line_text_parser(Parser *p) {
 	const char *src = p->lexer->src;
@@ -448,7 +450,22 @@ static ASTNode *parse_primary(Parser *p) {
 		n->type = NODE_LITERAL;
 		n->data_type = arena_alloc(p->arena, sizeof(Type));
 		n->data_type->kind = TYPE_U32;
-		n->data.literal.i_val = atoi(p->cur.text);
+		// strtoll + range check, not atoi: atoi silently truncates
+		// `4000000000` to garbage and even wraps negatives.
+		errno = 0;
+		char *end = NULL;
+		long long v = strtoll(p->cur.text, &end, 10);
+		if (errno == ERANGE || v < INT32_MIN || v > UINT32_MAX) {
+			report_error(p, "Integer literal out of range for i32/u32");
+			n->data.literal.i_val = 0;
+		} else if (v > INT32_MAX) {
+			// Fits u32 only: widen the literal's type so it round-trips.
+			n->data_type->kind = TYPE_U32;
+			n->data.literal.i_val = (int)(uint32_t)v;
+		} else {
+			n->data_type->kind = TYPE_I32;
+			n->data.literal.i_val = (int)v;
+		}
 		advance(p);
 	} else if (p->cur.type == TOK_FLOAT_LIT) {
 		n->type = NODE_LITERAL;
@@ -714,10 +731,10 @@ static ASTNode *parse_postfix(Parser *p) {
 			// --- NEW: Rewrite AST for Method Calls ---
 			if (is_method_call && struct_name) {
 				// 1. Mangle the name: "User" + "_" + "add" -> "User_add"
-				// Note: In a real compiler, allocate this string in the arena
-				int len = strlen(struct_name) + strlen(method_name) + 2;
-				char *mangled = malloc(len);
-				sprintf(mangled, "%s__%s", struct_name, method_name);
+				// (arena-owned: mangled names live as long as the AST)
+				size_t len = strlen(struct_name) + strlen(method_name) + 4;
+				char *mangled = arena_alloc(p->arena, len);
+				snprintf(mangled, len, "%s__%s", struct_name, method_name);
 
 				// 2. Change Callee to a simple VAR_REF (Function Name)
 				ASTNode *new_callee = arena_alloc(p->arena, sizeof(ASTNode));
@@ -1232,9 +1249,9 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	}
 	char *func_name = p->cur.text;
 	if (prefix) {
-		int len = strlen(prefix) + strlen(func_name) + 3;
-		char *mangled = malloc(len);
-		sprintf(mangled, "%s__%s", prefix, func_name);
+		size_t len = strlen(prefix) + strlen(func_name) + 4;
+		char *mangled = arena_alloc(p->arena, len);
+		snprintf(mangled, len, "%s__%s", prefix, func_name);
 		func_name = mangled;
 	}
 	consume(p, TOK_IDENTIFIER, "Expected func name");
