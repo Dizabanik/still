@@ -235,6 +235,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 }
 
 void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
+
 	// Verify the module *before* any optimization runs. This catches
 	// malformed metadata, type mismatches, and structural IR errors with
 	// the most precise diagnostics (post-optimization errors are harder to

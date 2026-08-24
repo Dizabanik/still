@@ -341,6 +341,21 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 		ASTNode *arg_node = n->data.call.args;
 		for (int i = 0; i < arg_count; i++) {
+			// Array params decay like C: passing an `[N]T` lvalue to a
+			// pointer param passes the address of element 0 -- no copy,
+			// no load of the whole array.
+			if (i < param_count &&
+				LLVMGetTypeKind(param_types[i]) == LLVMPointerTypeKind &&
+				arg_node->type == NODE_VAR_REF) {
+				Scope *sv = scope_find(c, arg_node->data.var_ref.name);
+				if (sv && sv->node && sv->node->data_type &&
+					sv->node->data_type->kind == TYPE_ARRAY) {
+					LLVMTypeRef ignored;
+					llvm_args[i] = get_address(c, arg_node, &ignored);
+					arg_node = arg_node->next;
+					continue;
+				}
+			}
 			LLVMValueRef val = codegen_expr(c, arg_node);
 
 			if (i < param_count) {
@@ -643,6 +658,15 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_CAST: {
 		LLVMValueRef val = codegen_expr(c, n->data.cast.val);
+		// Bare variable refs carry no parser-side type; resolve from their
+		// declaration so sign-aware casts (sitofp vs uitofp) pick right.
+		if (!n->data.cast.val->data_type &&
+			n->data.cast.val->type == NODE_VAR_REF) {
+			Scope *sv =
+				scope_find(c, n->data.cast.val->data.var_ref.name);
+			if (sv && sv->node && sv->node->data_type)
+				n->data.cast.val->data_type = sv->node->data_type;
+		}
 		LLVMTypeRef dest_type = get_llvm_type(c, n->data_type);
 		return coerce_value(c, val, n->data.cast.val->data_type, dest_type,
 							n->data_type);
@@ -980,13 +1004,18 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		LLVMGetTypeKind(r_ty) == LLVMIntegerTypeKind && l_ty != r_ty) {
 		unsigned lw = LLVMGetIntTypeWidth(l_ty);
 		unsigned rw = LLVMGetIntTypeWidth(r_ty);
-		if (lw > rw) {
-			r = type_is_signed(c, n->data.bin_op.left->data_type)
+		// A 1-bit value is a bool result (comparison/logical): its truth
+		// value is 1, so it zero-extends no matter what the other side's
+		// signedness says -- sext would turn `true` into -1.
+		if (rw == 1 || (lw > rw)) {
+			r = (rw != 1 &&
+				 type_is_signed(c, n->data.bin_op.left->data_type))
 					? LLVMBuildSExt(c->builder, r, l_ty, "widen_r")
 					: LLVMBuildZExt(c->builder, r, l_ty, "widen_r");
 			r_ty = l_ty;
 		} else {
-			l = type_is_signed(c, n->data.bin_op.right->data_type)
+			l = (lw != 1 &&
+				 type_is_signed(c, n->data.bin_op.right->data_type))
 					? LLVMBuildSExt(c->builder, l, r_ty, "widen_l")
 					: LLVMBuildZExt(c->builder, l, r_ty, "widen_l");
 			l_ty = r_ty;

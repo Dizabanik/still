@@ -725,6 +725,11 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 	if (sk == LLVMIntegerTypeKind && dk == LLVMIntegerTypeKind) {
 		unsigned sw = LLVMGetIntTypeWidth(src);
 		unsigned dw = LLVMGetIntTypeWidth(dst);
+		if (dw == 1 && sw > 1)
+			// Anything -> bool is a != 0 test. A plain trunc would keep
+			// only the low bit: (bool)42 must be true, not false.
+			return LLVMBuildICmp(c->builder, LLVMIntNE, v,
+								 LLVMConstInt(src, 0, 0), "to_bool");
 		if (dw < sw)
 			return LLVMBuildTrunc(c->builder, v, dst, "trunc");
 		if (sw < dw) {

@@ -264,6 +264,58 @@ static Type *parse_type(Parser *p) {
 }
 
 static ASTNode *parse_postfix(Parser *p);
+static int type_is_signed_k(Type *t) {
+	if (!t)
+		return 0;
+	switch (t->kind) {
+	case TYPE_I8: case TYPE_I16: case TYPE_I32: case TYPE_I64:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+// Shared singleton for expression-level bool results (comparisons, logical
+// ops). Values are i1 in IR, so a `let f = a < b;` declares an i1 local --
+// no zext to u32, no trunc on use.
+static Type *bool_result_type(Parser *p) {
+	static Type *cached;
+	if (!cached) {
+		cached = arena_alloc(p->arena, sizeof(Type));
+		cached->kind = TYPE_BOOL;
+	}
+	return cached;
+}
+
+// Integer promotion at the AST level: pick the type both sides coerce to
+// without loss -- the wider width; signed wins when widths tie. NULL types
+// pass through so untyped operands keep today's i32-default behavior.
+static Type *unify_types(Parser *p, Type *a, Type *b) {
+	if (!a)
+		return b;
+	if (!b)
+		return a;
+	int a_int = (a->kind >= TYPE_I8 && a->kind <= TYPE_U64) ||
+				a->kind == TYPE_CHAR || a->kind == TYPE_BOOL;
+	int b_int = (b->kind >= TYPE_I8 && b->kind <= TYPE_U64) ||
+				b->kind == TYPE_CHAR || b->kind == TYPE_BOOL;
+	if (a_int && b_int) {
+		static const int rank[] = {
+			[TYPE_I8] = 1, [TYPE_U8] = 1, [TYPE_CHAR] = 1,
+			[TYPE_I16] = 2, [TYPE_U16] = 2,
+			[TYPE_I32] = 3, [TYPE_U32] = 3,
+			[TYPE_I64] = 4, [TYPE_U64] = 4,
+			[TYPE_BOOL] = 0,
+		};
+		int ra = rank[a->kind];
+		int rb = rank[b->kind];
+		if (ra != rb)
+			return ra > rb ? a : b;
+		return type_is_signed_k(a) ? a : b;
+	}
+	return a->kind == b->kind ? a : NULL;
+}
+
 // 2. Implement parse_unary
 static ASTNode *parse_unary(Parser *p) {
 	if (p->cur.type == TOK_STAR) {
@@ -338,7 +390,8 @@ static ASTNode *parse_unary(Parser *p) {
 		n->data.bin_op.op = (op == TOK_MINUS) ? TOK_MINUS : TOK_ISEQ;
 		n->data.bin_op.left = zero;
 		n->data.bin_op.right = operand;
-		n->data_type = (op == TOK_MINUS) ? operand->data_type : NULL;
+		n->data_type = (op == TOK_MINUS) ? operand->data_type
+										 : bool_result_type(p);
 		return n;
 	}
 	return parse_postfix(p); // Fall through to postfix/primary
@@ -856,6 +909,22 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			bin->data.bin_op.op = op;
 			bin->data.bin_op.left = lhs;
 			bin->data.bin_op.right = rhs;
+			switch (op) {
+			case TOK_LANGLE: case TOK_RANGLE: case TOK_LEQ:
+			case TOK_REQ: case TOK_ISEQ: case TOK_NOTEQ:
+			case TOK_ANDAND: case TOK_OROR:
+				bin->data_type = bool_result_type(p);
+				break;
+			default:
+				// Arithmetic/bitwise: promote to the wider operand type.
+				// Shifts take their width from the LHS only.
+				if (op == TOK_SHL || op == TOK_SHR)
+					bin->data_type = lhs->data_type;
+				else
+					bin->data_type =
+						unify_types(p, lhs->data_type, rhs->data_type);
+				break;
+			}
 			lhs = bin;
 		}
 	}
