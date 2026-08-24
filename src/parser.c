@@ -1428,6 +1428,16 @@ static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr,
 	return expr;
 }
 void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
+	// Attributes directly above `fn` attach to it: #[test], #[ignore].
+	int attr_is_test = 0;
+	int attr_is_ignored = 0;
+	while (p->cur.type == TOK_ATTRIBUTE) {
+		if (strcmp(p->cur.text, "test") == 0)
+			attr_is_test = 1;
+		else if (strcmp(p->cur.text, "ignore") == 0)
+			attr_is_ignored = 1;
+		advance(p);
+	}
 	int is_pure = (p->cur.type == TOK_PURE);
 	if (is_pure)
 		advance(p);
@@ -1486,6 +1496,8 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	fn_node->line = p->prev.line; // `fn` keyword line, for debug info
 	fn_node->data.func.is_pure = is_pure;
 	fn_node->data.func.is_drip = is_drip;
+	fn_node->data.func.is_test = attr_is_test;
+	fn_node->data.func.is_ignored = attr_is_ignored;
 	fn_node->data.func.name = func_name;
 	fn_node->data.func.ret_type = ret_type;
 	fn_node->data.func.args = args_head;
@@ -1604,7 +1616,8 @@ ASTNode *parse_program(Parser *p) {
 			continue;
 		}
 
-		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE) {
+		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE ||
+			p->cur.type == TOK_ATTRIBUTE) {
 			parse_function(p, &tail, NULL);
 		} else if (p->cur.type == TOK_STRUCT) {
 			advance(p);

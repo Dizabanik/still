@@ -24,6 +24,16 @@ for src in tests/*.kawa; do
     fi
 done
 
+# Test-mode harness: #[test] functions run instead of main; exit code
+# must be 0 when every test passes.
+if ./kawac --test tests/test_attrs.kawa > /dev/null 2>&1 && lli output.bc | grep -q "^PASS check_twice$"; then
+    echo "PASS testmode"
+    pass=$((pass + 1))
+else
+    echo "FAIL testmode"
+    fail=$((fail + 1))
+fi
+
 rm -f output.bc output.ll "$TMPDIR/kawa_actual.txt"
 echo ""
 echo "$pass passed, $fail failed"

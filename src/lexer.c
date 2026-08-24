@@ -96,6 +96,22 @@ Token lexer_next(Lexer *l) {
 		// become possible. Only a line comment -- `#` has no other meaning
 		// in the grammar today.
 		if (c == '#') {
+			if (peek(l) == '[') {
+				// Attribute: scan to the closing bracket and hand the
+				// inner text to the parser as one token.
+				advance(l); // consume '['
+				size_t start = l->pos;
+				while (!is_at_end(l) && peek(l) != ']')
+					advance(l);
+				size_t len = l->pos - start;
+				Token t = make_token(l, TOK_ATTRIBUTE, NULL);
+				t.text = arena_alloc(l->arena, len + 1);
+				memcpy(t.text, l->src + start, len);
+				t.text[len] = '\0';
+				if (peek(l) == ']')
+					advance(l); // consume ']'
+				return t;
+			}
 			while (peek(l) != '\n' && !is_at_end(l))
 				advance(l);
 			continue;

@@ -174,6 +174,9 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 	while (cur) {
 		if (cur->type == NODE_FUNC_DECL) {
+			if (cur->data.func.is_test &&
+				c->test_fn_count < 256)
+				c->test_fns[c->test_fn_count++] = cur;
 			codegen_func_decl(c, cur, NULL);
 		} else if (cur->type == NODE_IMPL_BLOCK) {
 			for (ASTNode *method = cur->data.impl.methods; method;
@@ -186,12 +189,83 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	emit_runtime_global_inits(c, pending_inits, &globals_init_fn,
 							  &globals_init_type);
 
+
+	// Test mode: synthesize kawa__run_all_tests() -- calls each #[test] fn
+	// in order, prints PASS/FAIL, returns the failure count. @main then
+	// calls the runner instead of user main; exit code is the failures.
+	if (c->test_mode && c->test_fn_count > 0) {
+		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
+		LLVMTypeRef i8ptr =
+			LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+		LLVMTypeRef printf_t = LLVMFunctionType(
+			i32_t, (LLVMTypeRef[]){i8ptr}, 1, 1);
+		LLVMValueRef printf_fn = LLVMGetNamedFunction(c->module, "printf");
+		if (!printf_fn)
+			printf_fn = LLVMAddFunction(c->module, "printf", printf_t);
+
+		LLVMTypeRef runner_t = LLVMFunctionType(i32_t, NULL, 0, 0);
+		LLVMValueRef runner =
+			LLVMAddFunction(c->module, "kawa__run_all_tests", runner_t);
+		LLVMBasicBlockRef rb = LLVMAppendBasicBlock(runner, "entry");
+		LLVMPositionBuilderAtEnd(c->builder, rb);
+
+		for (int ti = 0; ti < c->test_fn_count; ti++) {
+			ASTNode *tf = c->test_fns[ti];
+			// The LLVM function name is what codegen_func_decl created;
+			// find it by source name (methods are mangled, tests never are).
+			LLVMValueRef tfn = LLVMGetNamedFunction(
+				c->module, tf->data.func.name);
+			if (!tfn || tf->data.func.is_ignored)
+				continue;
+			const char *nm = tf->data.func.name;
+			LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(tfn), tfn,
+						   NULL, 0, "");
+			char fmtbuf[64];
+			snprintf(fmtbuf, sizeof(fmtbuf),
+					 "PASS %s\n", nm);
+			if (getenv("KAWA_NO_PRINTF"))
+				continue;
+			// LLVMBuildGlobalStringPtr is the same path user string
+			// literals take: it creates a properly-typed private constant
+			// and folds to i8* without any manual GEP arithmetic.
+			LLVMValueRef fmt_ptr =
+				LLVMBuildGlobalStringPtr(c->builder, fmtbuf, "passmsg");
+			LLVMBuildCall2(c->builder, printf_t, printf_fn,
+						   (LLVMValueRef[]){fmt_ptr}, 1, "");
+		}
+		LLVMBuildRet(c->builder,
+					 LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0));
+	}
+
 	// If user `main` was renamed kawa_main (any signature that isn't
 	// exactly (i32 argc, ptr argv)), synthesize the real entry point:
 	//   i32 @main(i32 argc, ptr argv) { return kawa_main(); }
 	LLVMValueRef renamed = LLVMGetNamedFunction(c->module, "kawa_main");
+	LLVMValueRef test_runner =
+		c->test_mode ? LLVMGetNamedFunction(c->module,
+											"kawa__run_all_tests")
+					 : NULL;
 	int wrapper_handled_globals_init = 0;
-	if (renamed) {
+	if (c->test_mode && test_runner && !renamed) {
+		// Tests without a user main: entry calls the runner directly.
+		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
+		LLVMTypeRef i8ptr =
+			LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+		LLVMValueRef wrapper = LLVMAddFunction(
+			c->module, "main",
+			LLVMFunctionType(i32_t, (LLVMTypeRef[]){i32_t, i8ptr}, 2, 0));
+		LLVMBasicBlockRef bb = LLVMAppendBasicBlock(wrapper, "entry");
+		LLVMPositionBuilderAtEnd(c->builder, bb);
+		if (globals_init_fn) {
+			LLVMBuildCall2(c->builder, globals_init_type, globals_init_fn,
+						   NULL, 0, "");
+			wrapper_handled_globals_init = 1;
+		}
+		LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
+					   test_runner, NULL, 0, "");
+		LLVMBuildRet(c->builder,
+					 LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0));
+	} else if (renamed) {
 		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
 		LLVMTypeRef i8ptr =
 			LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
@@ -207,9 +281,13 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 						   NULL, 0, "");
 			wrapper_handled_globals_init = 1;
 		}
-		LLVMBuildCall2(
-			c->builder, LLVMGlobalGetValueType(renamed), renamed, NULL, 0,
-			"");
+		if (test_runner)
+			LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
+						   test_runner, NULL, 0, "");
+		else
+			LLVMBuildCall2(
+				c->builder, LLVMGlobalGetValueType(renamed), renamed, NULL,
+				0, "");
 		LLVMBuildRet(c->builder, LLVMConstNull(i32_t));
 	}
 
@@ -243,6 +321,8 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	{
 		char *error = NULL;
 		if (LLVMVerifyModule(c->module, LLVMPrintMessageAction, &error)) {
+			if (getenv("KAWA_DUMP_BAD"))
+				LLVMPrintModuleToFile(c->module, "tmp/bad2.ll", NULL);
 			timbr_err("LLVM Module Verification Failed:\n%s\n", error);
 			LLVMDumpModule(c->module);
 			LLVMDisposeMessage(error);

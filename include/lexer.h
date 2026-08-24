@@ -91,6 +91,7 @@ typedef enum {
 	TOK_RANGLE,	 // < >
 	TOK_ANDAND,	 // &&
 	TOK_OROR,	 // ||
+	TOK_ATTRIBUTE, // #[...] attribute, text holds the inner content
 	TOK_BANG,	 // ! (logical not)
 	TOK_PERCENT, // % (modulo)
 	TOK_QUESTION, // ? (ternary)

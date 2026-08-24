@@ -122,6 +122,8 @@ struct ASTNode {
 			Type *ret_type;
 			int is_pure;
 			int is_drip;
+			int is_test;   // #[test] attribute
+			int is_ignored; // #[ignore]
 		} func;
 		struct {
 			char *name;

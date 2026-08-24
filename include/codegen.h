@@ -47,6 +47,12 @@ typedef struct {
 	// literally nothing -- no check instructions are generated at all.
 	int debug_build;
 
+	// Test mode (--test): @main runs #[test] functions instead of user
+	// main. Collected during the program walk, runner synthesized after.
+	int test_mode;
+	ASTNode *test_fns[256];
+	int test_fn_count;
+
 	// Lazily-declared noreturn trap: kawa_trap(msg, file, line).
 	LLVMValueRef trap_fn;
 
