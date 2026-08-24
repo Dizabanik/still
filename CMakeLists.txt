@@ -1,0 +1,92 @@
+# kawac -- the Kawa compiler.
+#
+# Build:  cmake -B build -G Ninja && cmake --build build
+# Test:   ctest --test-dir build --output-on-failure
+#
+# The classic Makefile stays for now; both drive the same sources. Ninja via
+# CMake is the production path: true dependency-graph incrementality, no
+# shell re-exec per rule, and CTest for parallel test driving.
+
+cmake_minimum_required(VERSION 3.28)
+project(kawac C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+if(NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Mirror the Makefile's flags. -march=native is intentional: kawac's own
+# hot loops (lexing, parsing, IR construction) are host-local builds.
+set(KAWA_CFLAGS -Wall -Wno-unused-parameter -march=native
+	-funroll-loops -D_POSIX_C_SOURCE=200809L)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+	list(APPEND KAWA_CFLAGS -Wno-unknown-warning-option)
+endif()
+
+execute_process(COMMAND llvm-config --cflags
+	OUTPUT_VARIABLE LLVM_CFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
+	COMMAND_ERROR_IS_FATAL ANY)
+separate_arguments(LLVM_CFLAGS NATIVE_COMMAND "${LLVM_CFLAGS}")
+
+execute_process(COMMAND llvm-config --ldflags --link-shared --libs --system-libs
+	core executionengine analysis native passes coroutines bitwriter
+	OUTPUT_VARIABLE LLVM_LIBS OUTPUT_STRIP_TRAILING_WHITESPACE
+	COMMAND_ERROR_IS_FATAL ANY)
+separate_arguments(LLVM_LIBS NATIVE_COMMAND "${LLVM_LIBS}")
+
+file(GLOB KAWA_SRC src/*.c)
+file(GLOB KAWA_CODEGEN_SRC src/codegen/*.c)
+
+add_executable(kawac
+	${KAWA_SRC}
+	${KAWA_CODEGEN_SRC}
+	timbr/timbr.c)
+target_include_directories(kawac PRIVATE include timbr src/codegen)
+target_compile_options(kawac PRIVATE ${KAWA_CFLAGS} ${LLVM_CFLAGS}
+	$<$<CONFIG:Release>:-O3>)
+target_link_libraries(kawac PRIVATE ${LLVM_LIBS})
+target_link_options(kawac PRIVATE ${LLVM_CFLAGS})
+
+# Debug variant with runtime checks (bounds traps) -- mirrors `make debug`.
+add_executable(kawac_debug EXCLUDE_FROM_ALL
+	${KAWA_SRC}
+	${KAWA_CODEGEN_SRC}
+	timbr/timbr.c)
+target_include_directories(kawac_debug PRIVATE include timbr src/codegen)
+target_compile_options(kawac_debug PRIVATE ${KAWA_CFLAGS} ${LLVM_CFLAGS} -g -O0)
+target_compile_definitions(kawac_debug PRIVATE KAWA_DEBUG=1)
+target_link_libraries(kawac_debug PRIVATE ${LLVM_LIBS})
+
+enable_testing()
+
+# Layer 1: smoke test -- the compiler builds and compiles its own test suite
+# entry point without crashing.
+add_test(NAME smoke
+	COMMAND ${CMAKE_SOURCE_DIR}/scripts/smoke.sh $<TARGET_FILE:kawac>)
+
+# Layers 2+ live in tests/ under lit once installed:
+#   golden-output tests (.kawa + .kawa.out), IR-shape FileCheck tests,
+#   and the #[test] harness check. scripts/run_lit.sh wires them up;
+#   ctest picks them up as one lit invocation per directory.
+# lit runner: vendored in tools/ (scripts/setup_lit.sh installs it), with
+# PATH/LLVM-keg fallbacks handled by scripts/lit.sh. KAWAC env points the
+# suite at the just-built binary instead of whatever is in build-cmake/.
+set(ENV{LIT_CMD} ${CMAKE_SOURCE_DIR}/scripts/lit.sh)
+add_test(NAME unit
+	COMMAND ${CMAKE_SOURCE_DIR}/scripts/lit.sh -sv
+		--xunit-xml-output=${CMAKE_BINARY_DIR}/unit-results.xml
+		${CMAKE_SOURCE_DIR}/tests)
+set_tests_properties(unit PROPERTIES ENVIRONMENT
+	"KAWAC=$<TARGET_FILE:kawac>")
+
+find_package(Python3 COMPONENTS Interpreter)
+
+# Benchmark: best-of-N timing of bench/*.kawa against their C twins.
+add_custom_target(bench
+	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench.py
+		--kawac $<TARGET_FILE:kawac>
+	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+	USES_TERMINAL
+	DEPENDS kawac)

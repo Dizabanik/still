@@ -1,0 +1,17 @@
+// Mixed-width widening must extend by the NARROW side's own signedness.
+// The u16->i32 promotion ZERO-extends: sext turned 0xFFFF into -1, so
+// `u16 65535 + 1` evaluated to 0 instead of 65536. Signed narrows keep
+// sign extension.
+//
+// OPT: 0
+import stdc;
+
+fn i32 main() {
+    u16 u = 65535;
+    let w = u + 1;
+    printf("%d\n", w);
+    return 0;
+}
+
+// CHECK: %widen_l = zext i16
+// CHECK-NOT: %widen_l = sext i16

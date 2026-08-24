@@ -1,0 +1,37 @@
+// Type-system tightening: bool results are i1, casts, array decay.
+import stdc;
+
+fn i32 sum(int* arr, i32 n) {
+    let s = 0;
+    for (let k = 0; k < n; k += 1) {
+        s += arr[k];
+    }
+    return s;
+}
+
+fn i32 main() {
+    let a = 5;
+    let b = 0;
+    let both = (a > 3) && (b > 1);
+    let neg = !(a > 3);
+    let flag = a > b;
+    stdc.printf("%d %d %d\n", both, neg, flag);
+    let mixed = flag + 10;
+    stdc.printf("%d\n", mixed);
+    if (!b) { stdc.printf("bang-int works\n"); }
+
+    let i: i32 = -5;
+    let u = (u32)i;
+    let f = (f64)i;
+    let back = (i32)f;
+    stdc.printf("%u %f %d\n", u, f, back);
+    let t = 1 < 2;
+    let as_i = (i32)t;
+    stdc.printf("bool->int=%d\n", as_i);
+    let b2 = (bool)42;
+    if (b2) { stdc.printf("(bool)42 is true\n"); }
+
+    [4]i32 xs = {1, 2, 3, 4};
+    stdc.printf("%d\n", sum(xs, 4));
+    return 0;
+}

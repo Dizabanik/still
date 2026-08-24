@@ -24,3 +24,8 @@ output.o
 tests/test
 /tests/test_attrs
 tmp/
+tools/
+build-cmake/
+tests/.lit_test_times.txt
+tests/__pycache__/
+*.pyc

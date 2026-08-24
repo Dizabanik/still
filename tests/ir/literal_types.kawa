@@ -1,0 +1,14 @@
+// Integer literals type by value: i32 when it fits, then u32, then u64.
+// A literal above UINT32_MAX stored into an i64 must arrive sign-correct,
+// not truncated through an int field.
+//
+// OPT: 0
+import stdc;
+
+fn i32 main() {
+    i64 big = 10000000000;
+    printf("%lld\n", big);
+    return 0;
+}
+
+// CHECK: store i64 10000000000, ptr

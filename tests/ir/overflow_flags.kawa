@@ -1,0 +1,21 @@
+// Unsigned+unsigned arithmetic wraps (C semantics) and carries NO nuw flag
+// -- `u8 200 + 100` under nuw produced poison. Signed keeps nsw to match
+// C's UB and let the optimizer reason.
+//
+// OPT: 0
+import stdc;
+
+fn i32 main() {
+    u32 x = 4000000000;
+    u32 y = 1;
+    let t = x + y; // unsigned add: plain add, no nuw
+    i32 a = 5;
+    let z = a + 1; // signed add: nsw stays
+    printf("%d %d\n", ((i32)t), z);
+    return 0;
+}
+
+// CHECK: %add = add i32
+// CHECK-NOT: add nuw
+// CHECK-NOT: sub nuw
+// CHECK-NOT: mul nuw

@@ -1,0 +1,16 @@
+// ~x on a u64 var must xor with the full 64-bit all-ones. The desugar's -1
+// literal used to emit as i32, xor-ing 0xFFFFFFFF and flipping only half
+// the bits.
+//
+// OPT: 0
+import stdc;
+
+fn i32 main() {
+    u64 m = 255;
+    let inv = ~m;
+    printf("%llu\n", inv);
+    return 0;
+}
+
+// CHECK: %xor = xor i64 {{%.*}}, -1
+// CHECK-NOT: xor i64 {{%.*}}, 4294967295
