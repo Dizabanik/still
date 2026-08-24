@@ -1,0 +1,21 @@
+// Named arguments: f(a: 1, b: 2) -- labels matched to parameter names at
+// compile time, args reordered into positional slots. Zero runtime cost.
+import stdc;
+
+fn int sub(int a, int b) {
+    return a - b;
+}
+
+fn int wrap(int x, int y, int z) {
+    return x * 100 + y * 10 + z;
+}
+
+fn int main() {
+    stdc.printf("%d\n", sub(a: 10, b: 3));
+    stdc.printf("%d\n", sub(b: 3, a: 10));
+    stdc.printf("%d\n", sub(10, b: 3));
+
+    stdc.printf("%d\n", wrap(z: 7, x: 1, y: 2));
+    stdc.printf("%d\n", wrap(1, 2, z: 7));
+    return 0;
+}

@@ -725,12 +725,28 @@ static ASTNode *parse_postfix(Parser *p) {
 			ASTNode *call = arena_alloc(p->arena, sizeof(ASTNode));
 			call->type = NODE_CALL;
 
-			// Parse arguments normally
+			// Parse arguments: positional `expr` or named `name: expr`.
+			// Named args carry their label on the node (var_decl.name);
+			// codegen matches them to parameters by name and reorders.
 			ASTNode *head = NULL;
 			ASTNode **tail = &head;
 			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
-				*tail = parse_expr(p);
-				if (*tail) {
+				ASTNode *arg = NULL;
+				if (p->cur.type == TOK_IDENTIFIER &&
+					lexer_peek(p->lexer).type == TOK_COLON) {
+					char *label = p->cur.text;
+					advance(p); // name
+					advance(p); // ':'
+					arg = parse_expr(p);
+					if (arg) {
+						arg->has_arg_label = 1;
+						arg->arg_label = arena_strdup(p->arena, label);
+					}
+				} else {
+					arg = parse_expr(p);
+				}
+				*tail = arg;
+				if (arg) {
 					tail = &(*tail)->next;
 					if (p->cur.type == TOK_COMMA)
 						advance(p);

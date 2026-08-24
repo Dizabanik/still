@@ -105,6 +105,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	for (ASTNode *a = cur->data.func.args; a; a = a->next) {
 		LLVMValueRef p_val = LLVMGetParam(c->current_func, arg_idx++);
+		// Name the param so call sites can resolve named arguments
+		// (`f(x: 1)`) by matching against parameter names.
+		LLVMSetValueName2(p_val, a->data.var_decl.name,
+						  strlen(a->data.var_decl.name));
 		LLVMTypeRef arg_type = get_llvm_type(c, a->data_type);
 
 		// Pointer parameters: `noalias` (Kawa has no address-taken

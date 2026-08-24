@@ -191,6 +191,70 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef func_type = LLVMGlobalGetValueType(fn);
 		int param_count = LLVMCountParamTypes(func_type);
 
+		// Named arguments: `f(y: 2, x: 1)` -- match labels to parameter
+		// names and reorder into positional slots. Mixed positional/named
+		// is allowed as long as every named arg finds its slot; anything
+		// unmatched is an error (no defaults in v1). Zero runtime cost:
+		// this is a compile-time permutation of the argument list.
+		if (n->data.call.args &&
+			n->data.call.args->has_arg_label) {
+			// Build the reordered chain by param index.
+			ASTNode **reord =
+				arena_alloc(c->arena, sizeof(ASTNode *) * (arg_count > 0 ? arg_count : 1));
+			for (int s = 0; s < arg_count; s++)
+				reord[s] = NULL;
+			int used[256] = {0};
+			int pos = 0;
+			int ok = 1;
+			for (ASTNode *a = n->data.call.args; a; a = a->next, pos++) {
+				const char *label = a->has_arg_label ? a->arg_label : NULL;
+				if (!label) {
+					// Positional in a mixed call: keep relative order among
+					// positionals is NOT guaranteed with named present --
+					// v1 rule: if any arg is named, all must be named.
+					ok = 0;
+					break;
+				}
+				int matched = -1;
+				for (int p_i = 0; p_i < param_count; p_i++) {
+					LLVMValueRef pv = LLVMGetParam(fn, p_i);
+					if (!pv)
+						continue;
+					size_t sz = 0;
+					const char *pn = LLVMGetValueName2(pv, &sz);
+					if (pn && strlen(pn) == strlen(label) &&
+						strncmp(pn, label, strlen(label)) == 0) {
+						matched = p_i;
+						break;
+					}
+				}
+				if (matched < 0 || matched >= 256 || used[matched]) {
+					timbr_err("No unique parameter '%s' in call\n", label);
+					exit(1);
+				}
+				used[matched] = 1;
+				reord[matched] = a;
+			}
+			if (!ok) {
+				timbr_err("If any argument is named, all must be named\n");
+				exit(1);
+			}
+			// Relink the chain in parameter order.
+			ASTNode *new_head = NULL;
+			ASTNode **new_tail = &new_head;
+			for (int p_i = 0; p_i < param_count; p_i++) {
+				if (!reord[p_i])
+					continue;
+				*new_tail = reord[p_i];
+				new_tail = &(*new_tail)->next;
+			}
+			*new_tail = NULL;
+			n->data.call.args = new_head;
+			arg_count = 0;
+			for (ASTNode *a = new_head; a; a = a->next)
+				arg_count++;
+		}
+
 		size_t args_bytes =
 			sizeof(LLVMValueRef) * (arg_count > 0 ? arg_count : 1);
 		size_t params_bytes =

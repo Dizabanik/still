@@ -104,6 +104,11 @@ struct ASTNode {
 	Dependency *dependents;
 	int line; // source line, stamped by the parser where it matters
 			  // (diagnostics: traps, runtime errors)
+	// Call-site named-argument label (`f(x: 1)`). Lives OUTSIDE the data
+	// union on purpose: var_decl.name aliases literal.i_val/str_lit.s_val,
+	// so reusing it would corrupt the argument expression it labels.
+	char *arg_label;
+	int has_arg_label;
 
 	union {
 		struct {
