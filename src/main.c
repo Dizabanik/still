@@ -247,8 +247,8 @@ int main(int argc, char **argv) {
 	kawa_set_debug(&kc, debug_build);
 	kawa_set_source_file(&kc, src_path);
 	kawa_compile(&kc, root);
+	kc.opt_level = opt_level;
 	kawa_optimize_and_write(&kc, "output.bc");
-	(void)opt_level; // TODO: wire opt level into the pipeline
 
 	if (!link_exe) {
 		printf("[Kawa] Wrote output.bc\n");

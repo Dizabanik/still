@@ -228,9 +228,18 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 			(n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64))
 			return LLVMConstReal(get_llvm_type(c, n->data_type),
 								 (double)n->data.literal.f_val);
-		return LLVMConstInt(LLVMInt32TypeInContext(c->context),
-							n->data.literal.i_val,
-							n->data_type ? type_is_signed(c, n->data_type) : 0);
+		// Match codegen_expr: emit at the literal's own typed width with
+		// i64_val authoritative; const_int_as re-homes to `dst` after.
+		{
+			unsigned lit_w = 32;
+			if (n->data_type && (n->data_type->kind == TYPE_I64 ||
+								 n->data_type->kind == TYPE_U64))
+				lit_w = 64;
+			return LLVMConstInt(
+				LLVMIntTypeInContext(c->context, lit_w),
+				(unsigned long long)n->data.literal.i64_val,
+				n->data_type ? type_is_signed(c, n->data_type) : 0);
+		}
 	case NODE_VAR_REF: {
 		Scope *sv = scope_find(c, n->data.var_ref.name);
 		if (!sv || !sv->node || sv->node->type != NODE_VAR_DECL ||

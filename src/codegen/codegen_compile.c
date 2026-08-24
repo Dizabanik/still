@@ -396,12 +396,32 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	LLVMSetTarget(c->module, triple);
 
 	// Coroutine transforms must run before the main pipeline so coro-split
-	// lowers the frame before inlining decisions are made.
+	// lowers the frame before inlining decisions are made. The pass
+	// pipeline follows the -O level: O0 skips optimization entirely, O1/O2
+	// use LLVM's curated defaults (O2 is kawac's default), and O3 layers
+	// aggressive vectorization + unrolling on top.
 	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
-	if (!getenv("KAWA_NO_OPT"))
-		LLVMRunPasses(c->module,
-					  "coro-early,coro-split,coro-elide,coro-cleanup,default<O3>",
-					  machine, opts);
+	if (!getenv("KAWA_NO_OPT")) {
+		const char *pipeline;
+		switch (c->opt_level) {
+		case 0:
+			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup";
+			break;
+		case 1:
+			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
+					   "default<O1>";
+			break;
+		case 3:
+			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
+					   "default<O3>,lto<O3>";
+			break;
+		default:
+			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
+					   "default<O2>";
+			break;
+		}
+		LLVMRunPasses(c->module, pipeline, machine, opts);
+	}
 	LLVMDisposePassBuilderOptions(opts);
 
 	// Finalize debug info BEFORE optimization runs -- DIBuilder must see

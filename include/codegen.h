@@ -47,6 +47,11 @@ typedef struct {
 	// literally nothing -- no check instructions are generated at all.
 	int debug_build;
 
+	// Optimization level from -O0..-O3 (default 2). Selects the pass
+	// pipeline in kawa_optimize_and_write; -O3 adds aggressive vectorize
+	// + loop unrolling on top of default<O2>.
+	int opt_level;
+
 	// Test mode (--test): @main runs #[test] functions instead of user
 	// main. Collected during the program walk, runner synthesized after.
 	int test_mode;

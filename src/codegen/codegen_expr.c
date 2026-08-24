@@ -22,23 +22,25 @@ void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node) {
 // Sign- and width-correct integer arithmetic. NSW/NUW flags give the
 // optimizer extra freedom (vectorization, reassociation) without changing
 // semantics for well-defined Kawa programs.
+static void rehome_wide_literal(KawaCompiler *c, ASTNode *n);
+
 static LLVMValueRef build_int_binop(KawaCompiler *c, int op, LLVMValueRef l,
 									LLVMValueRef r, int lhs_signed,
 									int rhs_signed) {
 	int both_unsigned = !lhs_signed && !rhs_signed;
 	switch (op) {
 	case TOK_PLUS:
-		if (both_unsigned)
-			return LLVMBuildNUWAdd(c->builder, l, r, "add");
-		return LLVMBuildNSWAdd(c->builder, l, r, "add");
+		// Unsigned arithmetic WRAPS (C semantics): no nuw flag -- marking
+		// `u8 200 + 100` nuw makes the wrap a poison value. Signed keeps
+		// nsw to match C's UB and unlock optimizer reasoning.
+		return both_unsigned ? LLVMBuildAdd(c->builder, l, r, "add")
+							 : LLVMBuildNSWAdd(c->builder, l, r, "add");
 	case TOK_MINUS:
-		if (both_unsigned)
-			return LLVMBuildNUWSub(c->builder, l, r, "sub");
-		return LLVMBuildNSWSub(c->builder, l, r, "sub");
+		return both_unsigned ? LLVMBuildSub(c->builder, l, r, "sub")
+							 : LLVMBuildNSWSub(c->builder, l, r, "sub");
 	case TOK_STAR:
-		if (both_unsigned)
-			return LLVMBuildNUWMul(c->builder, l, r, "mul");
-		return LLVMBuildNSWMul(c->builder, l, r, "mul");
+		return both_unsigned ? LLVMBuildMul(c->builder, l, r, "mul")
+							 : LLVMBuildNSWMul(c->builder, l, r, "mul");
 	case TOK_SLASH:
 		// sdiv on an unsigned operand with the high bit set is wrong. When
 		// types are mixed we follow the RHS's signedness (the usual rule in
@@ -168,11 +170,22 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			(n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64))
 			return LLVMConstReal(get_llvm_type(c, n->data_type),
 								 (double)n->data.literal.f_val);
-		// Integer literals are i32; coerce_value widens/truncates at the
-		// point of use when the context demands another width.
-		return LLVMConstInt(LLVMInt32TypeInContext(c->context),
-							n->data.literal.i_val,
-							n->data_type ? type_is_signed(c, n->data_type) : 0);
+		// Integer literals emit at their parser-assigned width (i32/u32/
+		// i64/u64); coerce_value widens/truncates where context demands
+		// another width. i64_val is authoritative -- it holds values an
+		// int cannot (u64 constants, -2147483648, comptime folds).
+		unsigned lit_w = 32;
+		int lit_s = 1;
+		if (n->data_type) {
+			lit_s = type_is_signed(c, n->data_type);
+			switch (n->data_type->kind) {
+			case TYPE_I64: case TYPE_U64: lit_w = 64; break;
+			default: break;
+			}
+		}
+		return LLVMConstInt(LLVMIntTypeInContext(c->context, lit_w),
+							(unsigned long long)n->data.literal.i64_val,
+							lit_s);
 	}
 
 	case NODE_SIZEOF: {
@@ -409,13 +422,30 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				val = coerce_value(c, val, arg_node->data_type, expected, NULL);
 			} else {
 				// Vararg slot: C varargs require integer promotion to i32
-				// and float promotion to f64.
+				// and float promotion to f64. Signed narrow values must
+				// SIGN-extend (%d of an i16 -600 printed 64936 when zext).
 				LLVMTypeRef vt = LLVMTypeOf(val);
 				LLVMTypeKind k = LLVMGetTypeKind(vt);
-				if (k == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(vt) < 32)
-					val = LLVMBuildZExt(c->builder, val,
-										LLVMInt32TypeInContext(c->context),
-										"vararg_prom");
+				if (k == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(vt) < 32) {
+					int va_s =
+						arg_node->data_type
+							? type_is_signed(c, arg_node->data_type)
+							: 0;
+					if (!va_s && arg_node->type == NODE_VAR_REF) {
+						Scope *sv = scope_find(
+							c, arg_node->data.var_ref.name);
+						if (sv && sv->node && sv->node->data_type)
+							va_s = type_is_signed(c, sv->node->data_type);
+					}
+					val = va_s ? LLVMBuildSExt(c->builder, val,
+											   LLVMInt32TypeInContext(
+												   c->context),
+											   "vararg_prom")
+							   : LLVMBuildZExt(c->builder, val,
+											   LLVMInt32TypeInContext(
+												   c->context),
+											   "vararg_prom");
+				}
 				else if (k == LLVMFloatTypeKind)
 					val = LLVMBuildFPExt(c->builder, val,
 										 LLVMDoubleTypeInContext(c->context),
@@ -530,6 +560,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		// must not be evaluated unless the LHS demands it.
 		if (n->data.bin_op.op == TOK_ANDAND || n->data.bin_op.op == TOK_OROR)
 			return codegen_short_circuit(c, n);
+		rehome_wide_literal(c, n);
 		return build_binop(c, n, codegen_expr(c, n->data.bin_op.left),
 						   codegen_expr(c, n->data.bin_op.right));
 
@@ -957,6 +988,51 @@ static int str_relational(KawaCompiler *c, ASTNode *side) {
 	return t->inner->kind == TYPE_CHAR;
 }
 
+// Re-home a 32-bit-or-untyped literal operand to a wider partner's width and
+// sign before emission (`~u64_var` desugars to x ^ (-1) with the ones literal
+// carrying no parse-time type; emitting it first would truncate to i32).
+// Must run BEFORE the operands are codegen'd.
+static void rehome_wide_literal(KawaCompiler *c, ASTNode *n) {
+	ASTNode *sides[2] = {n->data.bin_op.left, n->data.bin_op.right};
+	for (int si = 0; si < 2; si++) {
+		ASTNode *me = sides[si], *other = sides[si ^ 1];
+		if (me->type != NODE_LITERAL || other->type == NODE_LITERAL)
+			continue;
+		// Stamp bare var refs so `other` always carries its declared type.
+		if (!other->data_type && other->type == NODE_VAR_REF) {
+			Scope *osv = scope_find(c, other->data.var_ref.name);
+			if (osv && osv->node && osv->node->data_type)
+				other->data_type = osv->node->data_type;
+		}
+		if (!other->data_type)
+			continue;
+		if (me->data_type && me->data_type->kind != TYPE_I32 &&
+			me->data_type->kind != TYPE_U32)
+			continue;
+		LLVMTypeRef ot = get_llvm_type(c, other->data_type);
+		if (LLVMGetTypeKind(ot) != LLVMIntegerTypeKind)
+			continue;
+		unsigned ow = LLVMGetIntTypeWidth(ot);
+		if (ow <= 32)
+			continue;
+		int os_ = type_is_signed(c, other->data_type);
+		TypeKind wk;
+		if (ow == 64)
+			wk = os_ ? TYPE_I64 : TYPE_U64;
+		else if (ow == 16)
+			wk = os_ ? TYPE_I16 : TYPE_U16;
+		else
+			wk = TYPE_U8;
+		Type *wt = arena_alloc(c->arena, sizeof(Type));
+		wt->kind = wk;
+		me->data_type = wt;
+		// Untyped binop (~x on a bare var ref): adopt the partner's type so
+		// `let v = ~x;` infers the right width instead of defaulting i32.
+		if (!n->data_type)
+			n->data_type = wt;
+	}
+}
+
 LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 						 LLVMValueRef r) {
 	int op = n->data.bin_op.op;
@@ -1093,24 +1169,22 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 					   ? type_is_signed(c, n->data.bin_op.right->data_type)
 					   : 0;
 
-	// Mixed-width integers: widen the narrower side to the wider type so
-	// both LLVM operands match (e.g. u64 + int-literal).
 	if (LLVMGetTypeKind(l_ty) == LLVMIntegerTypeKind &&
 		LLVMGetTypeKind(r_ty) == LLVMIntegerTypeKind && l_ty != r_ty) {
 		unsigned lw = LLVMGetIntTypeWidth(l_ty);
 		unsigned rw = LLVMGetIntTypeWidth(r_ty);
 		// A 1-bit value is a bool result (comparison/logical): its truth
-		// value is 1, so it zero-extends no matter what the other side's
+		// value is 1, so it zero-extends no matter what either side's
 		// signedness says -- sext would turn `true` into -1.
 		if (rw == 1 || (lw > rw)) {
 			r = (rw != 1 &&
-				 type_is_signed(c, n->data.bin_op.left->data_type))
+				 type_is_signed(c, n->data.bin_op.right->data_type))
 					? LLVMBuildSExt(c->builder, r, l_ty, "widen_r")
 					: LLVMBuildZExt(c->builder, r, l_ty, "widen_r");
 			r_ty = l_ty;
 		} else {
 			l = (lw != 1 &&
-				 type_is_signed(c, n->data.bin_op.right->data_type))
+				 type_is_signed(c, n->data.bin_op.left->data_type))
 					? LLVMBuildSExt(c->builder, l, r_ty, "widen_l")
 					: LLVMBuildZExt(c->builder, l, r_ty, "widen_l");
 			l_ty = r_ty;

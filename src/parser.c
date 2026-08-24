@@ -352,23 +352,40 @@ static ASTNode *parse_unary(Parser *p) {
 		ASTNode *operand = parse_unary(p);
 
 		if (op == TOK_MINUS && operand->type == NODE_LITERAL &&
-			operand->data_type && operand->data_type->kind == TYPE_U32 &&
-			operand->data.literal.i_val > 0) {
+			operand->data_type &&
+			(operand->data_type->kind == TYPE_U32 ||
+			 operand->data_type->kind == TYPE_U64) &&
+			operand->data.literal.i64_val > 0) {
 			// Negative int literal: fold to a signed literal directly
 			// instead of `0 - x` (which would keep u32 typing and turn
-			// shifts/comparisons unsigned).
-			operand->data.literal.i_val = -operand->data.literal.i_val;
+			// shifts/comparisons unsigned). u64-typed literals (2147483648
+			// and up) become i64 so -2147483648 keeps its sign.
+			long long neg = -operand->data.literal.i64_val;
+			operand->data.literal.i64_val = neg;
+			operand->data.literal.i_val = (int)neg;
 			operand->data_type = arena_alloc(p->arena, sizeof(Type));
-			operand->data_type->kind = TYPE_I32;
+			operand->data_type->kind =
+				neg < INT32_MIN ? TYPE_I64 : TYPE_I32;
 			return operand;
 		}
 
 		if (op == TOK_TILDE) {
 			// ~x => x ^ (-1): all-ones of the operand's width. The literal
 			// carries the operand type so the folder handles it at comptime.
+			// -1 stored as i64_val keeps every bit set at any width.
+			// Bare var refs carry no parse-time type: resolve from the decl
+			// table now or `let v = ~x;` infers u32 and truncates.
+			if (!operand->data_type &&
+				operand->type == NODE_VAR_REF) {
+				ASTNode *decl = find_decl(p,
+					operand->data.var_ref.name);
+				if (decl && decl->data_type)
+					operand->data_type = decl->data_type;
+			}
 			ASTNode *ones = arena_alloc(p->arena, sizeof(ASTNode));
 			ones->type = NODE_LITERAL;
 			ones->data.literal.i_val = -1;
+			ones->data.literal.i64_val = -1;
 			ones->data_type = operand->data_type;
 
 			ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
@@ -383,6 +400,7 @@ static ASTNode *parse_unary(Parser *p) {
 		ASTNode *zero = arena_alloc(p->arena, sizeof(ASTNode));
 		zero->type = NODE_LITERAL;
 		zero->data.literal.i_val = 0;
+		zero->data.literal.i64_val = 0;
 		zero->data_type = operand->data_type;
 
 		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
@@ -504,23 +522,51 @@ static ASTNode *parse_primary(Parser *p) {
 	if (p->cur.type == TOK_INT_LIT) {
 		n->type = NODE_LITERAL;
 		n->data_type = arena_alloc(p->arena, sizeof(Type));
-		n->data_type->kind = TYPE_U32;
-		// strtoll + range check, not atoi: atoi silently truncates
-		// `4000000000` to garbage and even wraps negatives.
+		// strtoull + range check, not atoi: atoi silently truncates
+		// `4000000000` to garbage and even wraps negatives. Literals type
+		// by value like C: i32 when it fits, then u32, u64, and finally an
+		// error only past UINT64_MAX -- `i64 x = 10000000000` must work.
+		// Radix prefixes (0x/0b/0o) are stripped first; embedded '_'
+		// separators are ignored.
+		char digits[80];
+		const char *dtxt = p->cur.text;
+		int base = 10;
+		if (dtxt[0] == '0' && (dtxt[1] == 'x' || dtxt[1] == 'X')) {
+			base = 16;
+			dtxt += 2;
+		} else if (dtxt[0] == '0' &&
+				   (dtxt[1] == 'b' || dtxt[1] == 'B')) {
+			base = 2;
+			dtxt += 2;
+		} else if (dtxt[0] == '0' &&
+				   (dtxt[1] == 'o' || dtxt[1] == 'O')) {
+			base = 8;
+			dtxt += 2;
+		}
+		size_t dn = 0;
+		for (const char *q = dtxt; *q && dn < sizeof(digits) - 1; q++)
+			if (*q != '_')
+				digits[dn++] = *q;
+		digits[dn] = '\0';
 		errno = 0;
 		char *end = NULL;
-		long long v = strtoll(p->cur.text, &end, 10);
-		if (errno == ERANGE || v < INT32_MIN || v > UINT32_MAX) {
-			report_error(p, "Integer literal out of range for i32/u32");
-			n->data.literal.i_val = 0;
-		} else if (v > INT32_MAX) {
-			// Fits u32 only: widen the literal's type so it round-trips.
-			n->data_type->kind = TYPE_U32;
-			n->data.literal.i_val = (int)(uint32_t)v;
-		} else {
+		unsigned long long v = strtoull(digits, &end, base);
+		if (errno == ERANGE || *end) {
+			report_error(p, "Integer literal out of range for u64");
+			n->data_type->kind = TYPE_I64;
+			n->data.literal.i64_val = 0;
+		} else if (v <= INT32_MAX) {
 			n->data_type->kind = TYPE_I32;
-			n->data.literal.i_val = (int)v;
+			n->data.literal.i64_val = (long long)v;
+		} else if (v <= UINT32_MAX) {
+			n->data_type->kind = TYPE_U32;
+			n->data.literal.i64_val = (long long)v;
+		} else {
+			// Fits only in 64 bits; the sign bit is fine for u64 values.
+			n->data_type->kind = TYPE_U64;
+			n->data.literal.i64_val = (long long)v;
 		}
+		n->data.literal.i_val = (int)n->data.literal.i64_val;
 		advance(p);
 	} else if (p->cur.type == TOK_FLOAT_LIT) {
 		n->type = NODE_LITERAL;
@@ -544,10 +590,12 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_TRUE) {
 		n->type = NODE_LITERAL;
 		n->data.literal.i_val = 1;
+		n->data.literal.i64_val = 1;
 		advance(p);
 	} else if (p->cur.type == TOK_FALSE) {
 		n->type = NODE_LITERAL;
 		n->data.literal.i_val = 0;
+		n->data.literal.i64_val = 0;
 		advance(p);
 	} else if (p->cur.type == TOK_SIZEOF) {
 		advance(p);
@@ -680,6 +728,7 @@ static ASTNode *parse_primary(Parser *p) {
 		report_error(p, "Unexpected token in expression: %s", p->cur.text);
 		n->type = NODE_LITERAL;
 		n->data.literal.i_val = 0;
+		n->data.literal.i64_val = 0;
 		advance(p);
 	}
 	return n;
@@ -978,9 +1027,9 @@ static ASTNode *parse_grind(Parser *p) {
 	if (val->type == NODE_BINARY_OP &&
 		val->data.bin_op.left->type == NODE_LITERAL &&
 		val->data.bin_op.right->type == NODE_LITERAL) {
-		int l = val->data.bin_op.left->data.literal.i_val;
-		int r = val->data.bin_op.right->data.literal.i_val;
-		int res = 0;
+		long long l = val->data.bin_op.left->data.literal.i64_val;
+		long long r = val->data.bin_op.right->data.literal.i64_val;
+		long long res = 0;
 		if (val->data.bin_op.op == TOK_STAR)
 			res = l * r;
 		else if (val->data.bin_op.op == TOK_PLUS)
@@ -991,7 +1040,8 @@ static ASTNode *parse_grind(Parser *p) {
 			res = r != 0 ? l / r : 0;
 		ASTNode *folded = arena_alloc(p->arena, sizeof(ASTNode));
 		folded->type = NODE_LITERAL;
-		folded->data.literal.i_val = res;
+		folded->data.literal.i64_val = res;
+		folded->data.literal.i_val = (int)res;
 		folded->data_type = val->data_type;
 		return folded;
 	}
@@ -1561,6 +1611,7 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 		lit->type = NODE_LITERAL;
 		lit->data_type = i32_t;
 		lit->data.literal.i_val = (int)value;
+		lit->data.literal.i64_val = value;
 
 		ASTNode *member_decl = arena_alloc(p->arena, sizeof(ASTNode));
 		member_decl->type = NODE_VAR_DECL;

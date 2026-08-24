@@ -111,6 +111,7 @@ struct ASTNode {
 	char *arg_label;
 	int has_arg_label;
 
+
 	union {
 		struct {
 			ASTNode *stmts;
@@ -165,7 +166,8 @@ struct ASTNode {
 			struct Type *type_val; // Optional type
 		} size_of;
 		struct {
-			int i_val;
+			int i_val;      // legacy small value; i64_val is authoritative
+			long long i64_val;
 			double f_val;
 		} literal;
 		struct {

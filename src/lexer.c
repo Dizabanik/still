@@ -348,6 +348,29 @@ Token lexer_next(Lexer *l) {
 			return make_token(l, TOK_INT_LIT, arena_strdup(l->arena, int_str));
 		}
 
+		// Radix prefixes: 0x/0X hex, 0b/0B binary, 0o octal. A bare
+		// leading 0 stays decimal (no C-style auto-octal surprises).
+		if (c == '0' && (peek(l) == 'x' || peek(l) == 'X' ||
+						 peek(l) == 'b' || peek(l) == 'B' ||
+						 peek(l) == 'o' || peek(l) == 'O')) {
+			char pfx = peek(l);
+			int (*valid)(int) =
+				(pfx == 'x' || pfx == 'X') ? isxdigit : isdigit;
+			char *start = &l->src[l->pos - 1]; // include '0' in token text
+			advance(l); // consume prefix
+			if (!valid(peek(l)))
+				return error_token(l, "Digit expected after radix prefix");
+			size_t len = 2;
+			while (valid(peek(l)) || peek(l) == '_') {
+				advance(l);
+				len++;
+			}
+			char *text = arena_alloc(l->arena, len + 1);
+			memcpy(text, start, len);
+			text[len] = '\0';
+			return make_token(l, TOK_INT_LIT, text);
+		}
+
 		if (isdigit(c)) {
 			char *start = &l->src[l->pos - 1];
 			size_t len = 1;

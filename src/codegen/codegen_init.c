@@ -17,6 +17,7 @@ void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
 		exit(1);
 	}
 	c->arena = arena;
+	c->opt_level = 2; // default matches the CLI's -O2
 
 	LLVMInitializeNativeTarget();
 	LLVMInitializeNativeAsmPrinter();
