@@ -102,6 +102,8 @@ struct ASTNode {
 	NodeType type;
 	Type *data_type;
 	Dependency *dependents;
+	int line; // source line, stamped by the parser where it matters
+			  // (diagnostics: traps, runtime errors)
 
 	union {
 		struct {

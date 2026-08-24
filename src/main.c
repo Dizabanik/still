@@ -168,6 +168,7 @@ static void usage(const char *prog) {
 		   "Options:\n"
 		   "  -o <name>    output executable name (default: source stem)\n"
 		   "  -c           compile to output.bc only, don't link\n"
+			   "  --debug/-g   runtime bounds checks (trap on violation)\n"
 		   "  -O0/-O1/-O2/-O3  optimization level passed through (default -O2)\n"
 		   "  --version    print version and exit\n"
 		   "  -h, --help   show this help\n",
@@ -179,12 +180,15 @@ int main(int argc, char **argv) {
 	const char *out_name = NULL;
 	int opt_level = 2;
 	int link_exe = 1;
+	int debug_build = 0;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
 			out_name = argv[++i];
 		} else if (strcmp(argv[i], "-c") == 0) {
 			link_exe = 0;
+		} else if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-g") == 0) {
+			debug_build = 1;
 		} else if (strncmp(argv[i], "-O", 2) == 0 &&
 				   argv[i][2] >= '0' && argv[i][2] <= '3' && !argv[i][3]) {
 			opt_level = argv[i][2] - '0';
@@ -231,6 +235,8 @@ int main(int argc, char **argv) {
 
 	KawaCompiler kc;
 	kawa_init(&kc, "kawa_main", &a);
+	kawa_set_debug(&kc, debug_build);
+	kawa_set_source_file(&kc, src_path);
 	kawa_compile(&kc, root);
 	kawa_optimize_and_write(&kc, "output.bc");
 	(void)opt_level; // TODO: wire opt level into the pipeline

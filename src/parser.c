@@ -666,6 +666,7 @@ static ASTNode *parse_postfix(Parser *p) {
 			consume(p, TOK_RBRACKET, "Expected ']' after index");
 			ASTNode *index = arena_alloc(p->arena, sizeof(ASTNode));
 			index->type = NODE_INDEX;
+			index->line = p->cur.line;
 			index->data.index.object = expr;
 			index->data.index.index = idx;
 			// Element type: peel one array/pointer layer.

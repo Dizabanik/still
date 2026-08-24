@@ -379,6 +379,125 @@ static Type *deref_value_type(KawaCompiler *c, ASTNode *n) {
 // nodes therefore return the loaded pointer itself (the address of the
 // pointee), which makes chains like `(*p)->field` and `**pp` resolve
 // uniformly: each deref level contributes exactly one load of a pointer.
+// Lazily DEFINE the module-wide trap: `kawa_trap(msg, file, line)` writes a
+// diagnostic to stderr and aborts. Defined into the module itself (not
+// linked from a runtime lib) so generated programs stay self-contained.
+// Modules that never trap carry no definition at all.
+//
+// The body uses only portable libc: snprintf into a stack buffer, then
+// write(2) to fd 2 -- avoids FILE*/stderr plumbing that differs per libc.
+static LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
+	if (c->trap_fn)
+		return c->trap_fn;
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef fn_t = LLVMFunctionType(LLVMVoidTypeInContext(ctx),
+										(LLVMTypeRef[]){i8ptr, i8ptr, i32t},
+										3, 0);
+	LLVMValueRef fn = LLVMAddFunction(c->module, "kawa_trap", fn_t);
+	const char *noreturn = "noreturn";
+	LLVMAddAttributeAtIndex(
+		fn, LLVMAttributeFunctionIndex,
+		LLVMCreateEnumAttribute(
+			ctx,
+			LLVMGetEnumAttributeKindForName(noreturn, strlen(noreturn)),
+			0));
+	c->trap_fn = fn;
+
+	// Saved builder/function position -- this runs mid-emission elsewhere.
+	LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
+	LLVMValueRef saved_func = c->current_func;
+
+	LLVMBasicBlockRef bb = LLVMAppendBasicBlock(fn, "entry");
+	LLVMPositionBuilderAtEnd(c->builder, bb);
+
+	// declare i32 @snprintf(ptr, i64, ptr, ...)
+	LLVMTypeRef snprintf_t =
+		LLVMFunctionType(i32t, (LLVMTypeRef[]){i8ptr, i64t, i8ptr}, 3, 1);
+	LLVMValueRef snprintf_fn = LLVMGetNamedFunction(c->module, "snprintf");
+	if (!snprintf_fn)
+		snprintf_fn = LLVMAddFunction(c->module, "snprintf", snprintf_t);
+	// declare i32 @write(i32, ptr, i64)
+	LLVMTypeRef write_t = LLVMFunctionType(
+		i64t, (LLVMTypeRef[]){i32t, i8ptr, i64t}, 3, 0);
+	LLVMValueRef write_fn = LLVMGetNamedFunction(c->module, "write");
+	if (!write_fn)
+		write_fn = LLVMAddFunction(c->module, "write", write_t);
+	// declare void @abort()
+	LLVMTypeRef abort_t = LLVMFunctionType(LLVMVoidTypeInContext(ctx), NULL, 0, 0);
+	LLVMValueRef abort_fn = LLVMGetNamedFunction(c->module, "abort");
+	if (!abort_fn)
+		abort_fn = LLVMAddFunction(c->module, "abort", abort_t);
+
+	// char buf[512];
+	LLVMValueRef buf = LLVMBuildArrayAlloca(
+		c->builder, LLVMInt8TypeInContext(ctx),
+		LLVMConstInt(i64t, 512, 0), "trap_buf");
+
+	// n = snprintf(buf, 512, "kawa: trap: %s at %s:%d\n", msg, file, line);
+	// Params: msg=0, file=1, line=2.
+	LLVMValueRef fmt = LLVMBuildGlobalStringPtr(
+		c->builder, "kawa: trap: %s at %s:%d\n", "trap_fmt");
+	LLVMValueRef snargs[6] = {
+		buf, LLVMConstInt(i64t, 512, 0), fmt,
+		LLVMGetParam(fn, 0), // msg
+		LLVMGetParam(fn, 1), // file
+		LLVMGetParam(fn, 2)  // line (i32 vararg promotes itself)
+	};
+	LLVMValueRef n = LLVMBuildCall2(c->builder, snprintf_t, snprintf_fn,
+									snargs, 6, "n");
+
+	// write(2, buf, n);
+	LLVMValueRef wargs[3] = {LLVMConstInt(i32t, 2, 0), buf,
+							 LLVMBuildSExt(c->builder, n, i64t, "n64")};
+	LLVMBuildCall2(c->builder, write_t, write_fn, wargs, 3, "");
+
+	LLVMBuildCall2(c->builder, abort_t, abort_fn, NULL, 0, "");
+	LLVMBuildUnreachable(c->builder);
+
+	c->current_func = saved_func;
+	if (saved_bb)
+		LLVMPositionBuilderAtEnd(c->builder, saved_bb);
+	return fn;
+}
+
+// Debug-build bounds check for array indexing: branch to a trap block when
+// idx >= len. Release builds never call this -- zero cost by construction,
+// not by optimizer mercy.
+static void emit_bounds_check(KawaCompiler *c, LLVMValueRef idx_i64,
+							  long long array_len, const char *file,
+							  int line) {
+	if (!c->debug_build)
+		return;
+	LLVMContextRef ctx = c->context;
+	LLVMValueRef len_const =
+		LLVMConstInt(LLVMInt64TypeInContext(ctx), (unsigned long long)array_len, 0);
+	LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx_i64,
+									len_const, "bounds_ok");
+	LLVMBasicBlockRef cont_bb =
+		LLVMAppendBasicBlock(c->current_func, "idx_in_bounds");
+	LLVMBasicBlockRef trap_bb =
+		LLVMAppendBasicBlock(c->current_func, "idx_oob");
+	LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
+
+	LLVMPositionBuilderAtEnd(c->builder, trap_bb);
+	LLVMValueRef msg = LLVMBuildGlobalStringPtr(
+		c->builder, "index out of bounds", "trap_msg");
+	LLVMValueRef file_v =
+		LLVMBuildGlobalStringPtr(c->builder, file ? file : "?", "trap_file");
+	LLVMValueRef args[3] = {
+		msg, file_v,
+		LLVMConstInt(LLVMInt32TypeInContext(ctx), line, 1)};
+	LLVMBuildCall2(c->builder,
+				   LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
+				   get_or_declare_trap_fn(c), args, 3, "");
+	LLVMBuildUnreachable(c->builder);
+
+	LLVMPositionBuilderAtEnd(c->builder, cont_bb);
+}
+
 LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 	switch (n->type) {
 	case NODE_VAR_REF: {
@@ -495,6 +614,20 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		idx64.kind = TYPE_I64;
 		idx = coerce_value(c, idx, n->data.index.index->data_type,
 						   LLVMInt64TypeInContext(c->context), &idx64);
+
+		// Debug builds trap on out-of-bounds fixed-array indexing. The
+		// bound comes from the AST declaration ([N]T), not LLVM -- opaque
+		// pointers carry no length.
+		if (c->debug_build && obj->type == NODE_VAR_REF) {
+			Scope *s_chk = scope_find(c, obj->data.var_ref.name);
+			if (s_chk && s_chk->node && s_chk->node->data_type &&
+				s_chk->node->data_type->kind == TYPE_ARRAY) {
+				emit_bounds_check(c, idx,
+								  s_chk->node->data_type->array_len,
+								  c->source_filename, n->line);
+			}
+		}
+
 		LLVMValueRef addr =
 			LLVMBuildGEP2(c->builder, elem, base, &idx, 1, "elem_addr");
 		if (out_type)

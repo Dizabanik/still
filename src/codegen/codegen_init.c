@@ -1,5 +1,11 @@
 #include "codegen_internal.h"
 
+void kawa_set_debug(KawaCompiler *c, int debug) { c->debug_build = debug; }
+
+void kawa_set_source_file(KawaCompiler *c, const char *filename) {
+	c->source_filename = filename;
+}
+
 void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
 	// Zero everything first so any field we forget to initialize below
 	// is at least NULL/0 and not garbage.

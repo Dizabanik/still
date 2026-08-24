@@ -42,6 +42,16 @@ typedef struct {
 	LLVMBuilderRef builder;
 	LLVMContextRef context;
 
+	// Debug build: emit runtime checks (bounds traps). Release builds pay
+	// literally nothing -- no check instructions are generated at all.
+	int debug_build;
+
+	// Lazily-declared noreturn trap: kawa_trap(msg, file, line).
+	LLVMValueRef trap_fn;
+
+	// Source filename for diagnostics (owned by the driver).
+	const char *source_filename;
+
 	// Arena shared with the parser. Owns all codegen-side heap-ish memory:
 	// Scope frames, StructDef/AliasDef nodes, duplicated names. Lifetime
 	// is the same as the compiler (typically program lifetime).
@@ -122,6 +132,11 @@ typedef struct {
 // the lifetime of `c`. The arena is used for all codegen-side heap
 // allocations (scope frames, struct/alias registries, duplicated names).
 void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena);
+// Enable debug-build instrumentation (bounds traps). Call after kawa_init,
+// before kawa_compile.
+void kawa_set_debug(KawaCompiler *c, int debug);
+// Source filename used in trap diagnostics.
+void kawa_set_source_file(KawaCompiler *c, const char *filename);
 void kawa_compile(KawaCompiler *c, ASTNode *root);
 void kawa_optimize_and_write(KawaCompiler *c, const char *filename);
 
