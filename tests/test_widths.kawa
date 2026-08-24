@@ -1,0 +1,32 @@
+// Every-width arithmetic: wraparound, sign extension, radix literals.
+import stdc;
+
+fn i32 main() {
+    i64 a = 10000000000;      // literal above u32 range
+    u64 b = 18000000000;
+    printf("%lld %lld\n", a, a / 2 + b / 4);
+
+    i16 e = -300;
+    i16 f = e * 2;            // stays signed through narrow math
+    printf("%d %d\n", f, ((i32)f));
+
+    u16 w = 65535;
+    let promoted = ((i32)w) + 1; // widen unsigned by ITS own sign
+    printf("%d\n", promoted);
+
+    u64 m = 255;
+    let inv = ~m;             // all-ones at u64 width
+    printf("%llu\n", inv);
+
+    u32 h = 0xDEADBEEF;       // radix literals
+    u8 bits = 0b1010_1010;
+    printf("%u %d\n", h, bits);
+
+    u8 wrap = 200 + 100;      // unsigned arithmetic wraps (no poison)
+    printf("%d\n", wrap);
+
+    i8 n = -5;
+    let wide = n + ((i64)0);  // signed narrow widens by sign
+    printf("%lld\n", wide);
+    return 0;
+}

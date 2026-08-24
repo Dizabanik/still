@@ -21,5 +21,6 @@ kawac
 output.bc
 output.ll
 output.o
-tests/test*
+tests/test
+/tests/test_attrs
 tmp/
