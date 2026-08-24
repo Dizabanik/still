@@ -345,6 +345,7 @@ static ASTNode *parse_unary(Parser *p) {
 }
 static ASTNode *parse_expr(Parser *p);
 static ASTNode *parse_statement(Parser *p);
+static ASTNode *parse_statement_inner(Parser *p, int stmt_line);
 static ASTNode *parse_block(Parser *p);
 static ASTNode *parse_grind(Parser *p);
 static ASTNode *parse_var_or_expr_no_semi(Parser *p);
@@ -911,6 +912,17 @@ static ASTNode *parse_grind(Parser *p) {
 }
 
 static ASTNode *parse_statement(Parser *p) {
+	int stmt_line = p->cur.line;
+	ASTNode *result = parse_statement_inner(p, stmt_line);
+	// Stamp every statement with its starting line -- debug locations and
+	// runtime diagnostics read this.
+	if (result && result->line == 0)
+		result->line = stmt_line;
+	return result;
+}
+
+static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
+	(void)stmt_line;
 	if (p->cur.type == TOK_ERROR) {
 		synchronize(p);
 		return NULL;
@@ -1384,6 +1396,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 
 	ASTNode *fn_node = arena_alloc(p->arena, sizeof(ASTNode));
 	fn_node->type = NODE_FUNC_DECL;
+	fn_node->line = p->prev.line; // `fn` keyword line, for debug info
 	fn_node->data.func.is_pure = is_pure;
 	fn_node->data.func.is_drip = is_drip;
 	fn_node->data.func.name = func_name;

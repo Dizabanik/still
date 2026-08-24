@@ -55,6 +55,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
 	c->current_ret_type = ret_t;
 
+	// Debug info: attach a DISubprogram so stacks/profiles show real names.
+	// fn_node line isn't tracked at decl granularity; use 1 (file scope).
+	kawa_di_attach_subprogram(c, llvm_name, cur);
+
 	// Optimization attributes: nounwind enables exception-free codegen and
 	// better scheduling; willreturn + memory(none) on pure functions lets
 	// the optimizer hoist/delete calls. noinline keeps drip coroutines from
@@ -89,6 +93,11 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	LLVMBasicBlockRef entry = LLVMAppendBasicBlock(c->current_func, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
+
+	// Clear any debug location left over from the previous function --
+	// instructions emitted here (param spills) would otherwise reference
+	// the previous function's subprogram and fail verification.
+	LLVMSetCurrentDebugLocation2(c->builder, NULL);
 
 	// Defer/filter stacks are per-function; save and clear before the body.
 	DeferFrame *saved_defers = c->defer_stack;

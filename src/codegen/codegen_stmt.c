@@ -6,6 +6,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 		return;
 
+	// Attribute instructions emitted for this statement to its source line
+	// (no-op unless -g). Line info is what makes profiles and stack traces
+	// point at Kawa code instead of raw addresses.
+	kawa_di_set_location(c, n->line);
+
 	switch (n->type) {
 
 	case NODE_CALL:

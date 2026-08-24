@@ -259,10 +259,12 @@ int main(int argc, char **argv) {
 	}
 
 	char cmd[4096];
+	// Link the kawac-emitted object (output.o) rather than recompiling the
+	// bitcode: keeps debug sections intact and skips redundant codegen.
 	snprintf(cmd, sizeof(cmd),
-			 "clang output.bc -O%d -o '%s' 2>/dev/null || "
-			 "cc output.bc -o '%s'",
-			 opt_level, out_name, out_name);
+			 "clang output.o -o '%s' 2>/dev/null || "
+			 "cc output.o -o '%s'",
+			 out_name, out_name);
 	int rc = system(cmd);
 	if (rc != 0) {
 		fprintf(stderr, "kawac: linking failed\n");

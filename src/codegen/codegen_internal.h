@@ -58,6 +58,15 @@ void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 						unsigned true_weight, unsigned false_weight);
 void set_fast_math(LLVMValueRef instr);
 
+// --- codegen_debug.c (-g) ---
+void kawa_di_init(KawaCompiler *c, const char *source_filename);
+void kawa_di_finalize(KawaCompiler *c);
+LLVMMetadataRef kawa_di_subprogram(KawaCompiler *c, const char *name,
+								   unsigned line, ASTNode *fn_node);
+void kawa_di_attach_subprogram(KawaCompiler *c, const char *name,
+							   ASTNode *fn_node);
+void kawa_di_set_location(KawaCompiler *c, int line);
+
 // --- codegen_scope.c ---
 char *get_var_path(KawaCompiler *c, const char *s);
 const char *resolve_type_name(KawaCompiler *c, ASTNode *n);

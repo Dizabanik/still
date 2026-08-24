@@ -280,10 +280,24 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 					  machine, opts);
 	LLVMDisposePassBuilderOptions(opts);
 
+	// Finalize debug info BEFORE optimization runs -- DIBuilder must see
+	// its subprograms intact.
+	kawa_di_finalize(c);
+
 	if (LLVMWriteBitcodeToFile(c->module, filename) != 0)
 		timbr_err("Error writing bitcode\n");
 	if (LLVMPrintModuleToFile(c->module, "output.ll", &error_msg)) {
 		timbr_err("Writing file failed: %s\n", error_msg);
+		LLVMDisposeMessage(error_msg);
+	}
+
+	// Emit the object file directly through the same TargetMachine. This
+	// keeps DWARF sections (clang's .bc pipeline was dropping them) and
+	// gives the driver something to link without recompiling LLVM IR.
+	const char *obj_path = "output.o";
+	if (LLVMTargetMachineEmitToFile(machine, c->module, obj_path,
+									LLVMObjectFile, &error_msg)) {
+		timbr_err("Emitting object failed: %s\n", error_msg);
 		LLVMDisposeMessage(error_msg);
 	}
 

@@ -5,6 +5,7 @@
 #include "ast.h"
 #include "lexer.h"
 #include <llvm-c/Core.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
 
@@ -48,6 +49,14 @@ typedef struct {
 
 	// Lazily-declared noreturn trap: kawa_trap(msg, file, line).
 	LLVMValueRef trap_fn;
+
+	// Debug info (-g). DIBuilder + CU/file/subprogram metadata; NULL when
+	// debug info is off so every emission site can just check di_builder.
+	LLVMDIBuilderRef di_builder;
+	LLVMMetadataRef di_cu;
+	LLVMMetadataRef di_file;
+	// Current source line for instruction locations (updated per statement).
+	int di_line;
 
 	// Source filename for diagnostics (owned by the driver).
 	const char *source_filename;

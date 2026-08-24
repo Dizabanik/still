@@ -4,6 +4,7 @@ void kawa_set_debug(KawaCompiler *c, int debug) { c->debug_build = debug; }
 
 void kawa_set_source_file(KawaCompiler *c, const char *filename) {
 	c->source_filename = filename;
+	kawa_di_init(c, filename); // no-op unless debug_build is set
 }
 
 void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
