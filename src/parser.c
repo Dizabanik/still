@@ -218,14 +218,13 @@ static Type *parse_type(Parser *p) {
 		t->kind = TYPE_F64;
 	else if (tok == TOK_STR) {
 		// `str` is a builtin: pointer to char (NUL-terminated, matching
-		// string literals).
+		// string literals). Falls through to the shared postfix handling
+		// below, so `str*` (char**, argv-style) and `str[4]` also work.
 		Type *ch = arena_alloc(p->arena, sizeof(Type));
 		ch->kind = TYPE_CHAR;
 		ch->inner = NULL;
 		t->kind = TYPE_PTR;
 		t->inner = ch;
-		advance(p);
-		return t;
 	} else if (tok == TOK_IDENTIFIER) {
 		t->kind = TYPE_STRUCT;
 		t->name = p->cur.text;
@@ -1514,13 +1513,30 @@ ASTNode *parse_program(Parser *p) {
 			parse_enum(p, &tail);
 		} else if (p->cur.type == TOK_IMPORT) {
 			advance(p);
-			ASTNode *imp = arena_alloc(p->arena, sizeof(ASTNode));
-			imp->type = NODE_IMPORT;
-			imp->data.import.lib_name = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Lib name");
-			consume(p, TOK_SEMICOLON, ";");
-			*tail = imp;
-			tail = &imp->next;
+			if (p->cur.type == TOK_STRING_LIT) {
+				// `import "lib/file.kawa";` -- a real multi-file import.
+				// The driver expands these before compilation (see
+				// expand_imports); the parser just validates the shape.
+				char *path = p->cur.text;
+				consume(p, TOK_STRING_LIT, "Expected quoted path");
+				consume(p, TOK_SEMICOLON, ";");
+				ASTNode *imp = arena_alloc(p->arena, sizeof(ASTNode));
+				imp->type = NODE_IMPORT;
+				imp->data.import.lib_name = path;
+				*tail = imp;
+				tail = &imp->next;
+			} else {
+				// `import stdc;` -- module-namespace marker only; stdc.*
+				// calls resolve to C symbols in codegen.
+				char *name = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Lib name or quoted path");
+				consume(p, TOK_SEMICOLON, ";");
+				ASTNode *imp = arena_alloc(p->arena, sizeof(ASTNode));
+				imp->type = NODE_IMPORT;
+				imp->data.import.lib_name = name;
+				*tail = imp;
+				tail = &imp->next;
+			}
 		} else if (p->cur.type == TOK_ALIAS) {
 			ASTNode *s = parse_statement(p);
 			*tail = s;

@@ -35,7 +35,24 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	LLVMTypeRef func_t = LLVMFunctionType(ret_t, param_types, total_arg_cnt, 0);
 
-	c->current_func = LLVMAddFunction(c->module, cur->data.func.name, func_t);
+	// `main` adaptation: the OS entry point is `i32 @main(i32 argc,
+	// ptr argv)`. A user main declared with those two params maps straight
+	// onto it; any other shape gets renamed to kawa_main with a thin
+	// synthesized @main wrapper calling it.
+	const char *llvm_name = cur->data.func.name;
+	int is_user_main = strcmp(llvm_name, "main") == 0 && !implicit_self_struct;
+	if (is_user_main) {
+		int args_ok = explicit_arg_cnt == 2 &&
+					  cur->data.func.args->data_type &&
+					  cur->data.func.args->data_type->kind == TYPE_I32 &&
+					  cur->data.func.args->next &&
+					  cur->data.func.args->next->data_type &&
+					  cur->data.func.args->next->data_type->kind == TYPE_PTR;
+		if (!args_ok)
+			llvm_name = "kawa_main";
+	}
+
+	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
 	c->current_ret_type = ret_t;
 
 	// Optimization attributes: nounwind enables exception-free codegen and

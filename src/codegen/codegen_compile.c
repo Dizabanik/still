@@ -186,10 +186,38 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	emit_runtime_global_inits(c, pending_inits, &globals_init_fn,
 							  &globals_init_type);
 
+	// If user `main` was renamed kawa_main (any signature that isn't
+	// exactly (i32 argc, ptr argv)), synthesize the real entry point:
+	//   i32 @main(i32 argc, ptr argv) { return kawa_main(); }
+	LLVMValueRef renamed = LLVMGetNamedFunction(c->module, "kawa_main");
+	int wrapper_handled_globals_init = 0;
+	if (renamed) {
+		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
+		LLVMTypeRef i8ptr =
+			LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+		LLVMTypeRef params[] = {i32_t, i8ptr};
+		LLVMTypeRef main_t = LLVMFunctionType(i32_t, params, 2, 0);
+		LLVMValueRef wrapper = LLVMAddFunction(c->module, "main", main_t);
+		LLVMBasicBlockRef bb = LLVMAppendBasicBlock(wrapper, "entry");
+		LLVMPositionBuilderAtEnd(c->builder, bb);
+		// The globals-init injection below targets @main's entry; build the
+		// call AFTER positioning so it lands inside this new block.
+		if (globals_init_fn) {
+			LLVMBuildCall2(c->builder, globals_init_type, globals_init_fn,
+						   NULL, 0, "");
+			wrapper_handled_globals_init = 1;
+		}
+		LLVMBuildCall2(
+			c->builder, LLVMGlobalGetValueType(renamed), renamed, NULL, 0,
+			"");
+		LLVMBuildRet(c->builder, LLVMConstNull(i32_t));
+	}
+
 	// Inject a call to kawa_globals_init at the top of main() so runtime-
 	// initialized globals are ready before any user code runs. Constant-
-	// initialized globals need no call at all.
-	if (globals_init_fn) {
+	// initialized globals need no call at all. (Skipped when the synthesized
+	// kawa_main wrapper already emitted the call -- it would run twice.)
+	if (globals_init_fn && !wrapper_handled_globals_init) {
 		LLVMValueRef main_fn = LLVMGetNamedFunction(c->module, "main");
 		if (main_fn) {
 			LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(main_fn);

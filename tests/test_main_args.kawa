@@ -1,0 +1,10 @@
+// main with OS arguments: (i32 argc, str* argv) maps directly onto the C
+// entry point. Zero-arg mains get a synthesized wrapper (covered by every
+// other test). Run without extra args: argc==1, argv[0] is the binary name.
+import stdc;
+
+fn int main(i32 argc, str* argv) {
+    stdc.printf("argc>0=%d name_set=%d\n", argc > 0,
+                argv[0][0] != 0);
+    return 0;
+}
