@@ -1,0 +1,7 @@
+eq
+ne
+lt
+ge
+runtime eq
+tab:	x
+hex:AB

@@ -1,0 +1,34 @@
+#!/usr/bin/env kawa run
+// String relations compare CONTENT (strcmp), not pointers -- including
+// strings built at runtime. Escapes cover \n \t \r \0 \" \' \\ \xNN.
+import stdc;
+
+fn int main() {
+    let a = "apple";
+    let same = "apple";
+    let b = "banana";
+
+    if (a == same) {
+        stdc.printf("eq\n");
+    }
+    if (a != b) {
+        stdc.printf("ne\n");
+    }
+    if (a < b) {
+        stdc.printf("lt\n");
+    }
+    if (b >= a) {
+        stdc.printf("ge\n");
+    }
+
+    // Runtime-built string: content comparison must not depend on address.
+    let buf = (str)stdc.malloc(16);
+    stdc.strcpy(buf, "apple");
+    if (a == buf) {
+        stdc.printf("runtime eq\n");
+    }
+
+    stdc.printf("%s\n", "tab:\tx");
+    stdc.printf("%s\n", "hex:\x41\x42");
+    return 0;
+}

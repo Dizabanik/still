@@ -56,6 +56,8 @@ static LLVMValueRef build_int_binop(KawaCompiler *c, int op, LLVMValueRef l,
 	}
 }
 
+static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name);
+
 // Resolve the callee of a call expression to a module-level function name.
 // Handles plain calls (`foo()`), stdc passthrough (`stdc.printf`),
 // type-qualified calls (`User__add`) and method sugar already mangled by
@@ -154,6 +156,27 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				fn = c->malloc_fn;
 			} else if (strcmp(func_name, "free") == 0) {
 				fn = c->free_fn;
+			} else if (n->data.call.callee->type == NODE_MEMBER_ACCESS &&
+					   n->data.call.callee->data.member_access.object->type ==
+						   NODE_VAR_REF &&
+					   strcmp(n->data.call.callee->data.member_access.object
+								  ->data.var_ref.name,
+							  "stdc") == 0) {
+				// stdc.<anything>: declare it and call through. The C
+				// library is the runtime surface; every libc symbol should
+				// just work without per-symbol stubs. Known signatures get
+				// exact prototypes (a wrong one is UB -- e.g. a variadic
+				// decl of strcpy miscompiles on arm64); everything else is
+				// assumed `i32 f(ptr, ...)` which covers printf-style use.
+				fn = declare_libc_fn(c, func_name);
+				if (!fn) {
+					LLVMTypeRef fn_t = LLVMFunctionType(
+						LLVMInt32TypeInContext(c->context),
+						(LLVMTypeRef[]){LLVMPointerType(
+							LLVMInt8TypeInContext(c->context), 0)},
+						1, 1);
+					fn = LLVMAddFunction(c->module, func_name, fn_t);
+				}
 			} else {
 				char *f_path = get_var_path(c, func_name);
 				timbr_err("Undefined function: %s\n", f_path);
@@ -491,12 +514,120 @@ static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n) {
 	return phi;
 }
 
+
+// Relational operators on `str` become strcmp(...) OP 0 -- content
+// semantics, not pointer identity (identical literals dedupe to one global,
+// so raw pointer == "works" for them and silently miscompares runtime
+// strings).
+static LLVMValueRef build_strcmp_call(KawaCompiler *c, LLVMValueRef l,
+									  LLVMValueRef r) {
+	LLVMTypeRef i8ptr =
+		LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+	LLVMTypeRef fn_t =
+		LLVMFunctionType(LLVMInt32TypeInContext(c->context),
+						 (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
+	LLVMValueRef fn = LLVMGetNamedFunction(c->module, "strcmp");
+	if (!fn)
+		fn = LLVMAddFunction(c->module, "strcmp", fn_t);
+	LLVMValueRef args[2] = {l, r};
+	return LLVMBuildCall2(c->builder, fn_t, fn, args, 2, "str_cmp");
+}
+
+// Exact prototypes for common libc functions used via stdc.*. A mismatched
+// declaration is UB -- e.g. declaring strcpy variadic miscompiles on arm64
+// because the backend routes varargs calls through a different ABI path.
+static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name) {
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx);
+	// Existing definition/declaration wins.
+	if (LLVMGetNamedFunction(c->module, name))
+		return NULL;
+	struct {
+		const char *name;
+		LLVMTypeRef ret;
+		LLVMTypeRef params[4];
+		unsigned n;
+	} table[] = {
+		{"strcpy", i8ptr, {i8ptr, i8ptr}, 2},
+		{"strncpy", i8ptr, {i8ptr, i8ptr, i64}, 3},
+		{"strcat", i8ptr, {i8ptr, i8ptr}, 2},
+		{"strcmp", i32, {i8ptr, i8ptr}, 2},
+		{"strncmp", i32, {i8ptr, i8ptr, i64}, 3},
+		{"strlen", i64, {i8ptr}, 1},
+		{"strchr", i8ptr, {i8ptr, i32}, 2},
+		{"strstr", i8ptr, {i8ptr, i8ptr}, 2},
+		{"memset", i8ptr, {i8ptr, i32, i64}, 3},
+		{"memcpy", i8ptr, {i8ptr, i8ptr, i64}, 3},
+		{"memmove", i8ptr, {i8ptr, i8ptr, i64}, 3},
+		{"memcmp", i32, {i8ptr, i8ptr, i64}, 3},
+		{"puts", i32, {i8ptr}, 1},
+	};
+	for (unsigned k = 0; k < sizeof(table) / sizeof(table[0]); k++) {
+		if (strcmp(table[k].name, name) != 0)
+			continue;
+		return LLVMAddFunction(
+			c->module, name,
+			LLVMFunctionType(table[k].ret, table[k].params, table[k].n, 0));
+	}
+	return NULL;
+}
+
+// A Kawa `str` is ptr<char>; both sides being char-pointers means the user
+// wrote a relational operator on strings.
+static int str_relational(KawaCompiler *c, ASTNode *side) {
+	Type *t = NULL;
+	if (side && side->data_type) {
+		t = side->data_type;
+	} else if (side && side->type == NODE_VAR_REF) {
+		// Bare VAR_REFs carry no parser-side type; resolve through scope
+		// like NODE_INDEX does for array indices.
+		Scope *sv = scope_find(c, side->data.var_ref.name);
+		t = sv ? sv->node->data_type : NULL;
+	}
+	if (!t || t->kind != TYPE_PTR || !t->inner)
+		return 0;
+	return t->inner->kind == TYPE_CHAR;
+}
+
 LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 						 LLVMValueRef r) {
 	int op = n->data.bin_op.op;
 
 	LLVMTypeRef l_ty = LLVMTypeOf(l);
 	LLVMTypeRef r_ty = LLVMTypeOf(r);
+
+	// String relations: == != < > <= >= become strcmp(...) OP 0. Content
+	// semantics, not pointer identity. (String literals with identical
+	// contents dedupe to one global, so raw pointer == "works" for them --
+	// and silently miscompares anything built at runtime.)
+	switch (op) {
+	case TOK_ISEQ:
+	case TOK_NOTEQ:
+	case TOK_LANGLE:
+	case TOK_RANGLE:
+	case TOK_LEQ:
+	case TOK_REQ:
+		if (str_relational(c, n->data.bin_op.left) &&
+			str_relational(c, n->data.bin_op.right)) {
+			LLVMValueRef cmp = build_strcmp_call(c, l, r);
+			return LLVMBuildICmp(c->builder,
+								 op == TOK_ISEQ	 ? LLVMIntEQ
+								 : op == TOK_NOTEQ ? LLVMIntNE
+								 : op == TOK_LANGLE ? LLVMIntSLT
+								 : op == TOK_RANGLE ? LLVMIntSGT
+								 : op == TOK_LEQ	? LLVMIntSLE
+													: LLVMIntSGE,
+								 cmp,
+								 LLVMConstInt(LLVMInt32TypeInContext(
+									 c->context),0,1),
+								 "str_rel");
+		}
+		break;
+	default:
+		break;
+	}
 
 	int l_is_fp = (LLVMGetTypeKind(l_ty) == LLVMFloatTypeKind ||
 				   LLVMGetTypeKind(l_ty) == LLVMDoubleTypeKind);

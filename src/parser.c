@@ -477,6 +477,15 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_STRING_LIT) {
 		n->type = NODE_STRING_LIT;
 		n->data.str_lit.s_val = p->cur.text;
+		// A string literal IS a str (ptr<char>). Without this, `let s =
+		// "x"` inferred u32 and s == other_str compared an i32 against a
+		// pointer.
+		Type *ch = arena_alloc(p->arena, sizeof(Type));
+		ch->kind = TYPE_CHAR;
+		Type *st = arena_alloc(p->arena, sizeof(Type));
+		st->kind = TYPE_PTR;
+		st->inner = ch;
+		n->data_type = st;
 		advance(p);
 	} else if (p->cur.type == TOK_TRUE) {
 		n->type = NODE_LITERAL;

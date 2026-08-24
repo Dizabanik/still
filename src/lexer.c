@@ -22,6 +22,17 @@ static inline char advance(Lexer *l) { return l->src[l->pos++]; }
 static inline char peek(Lexer *l) { return l->src[l->pos]; }
 static inline int is_at_end(Lexer *l) { return l->pos >= l->len; }
 
+// Hex digit value, or -1 if not a hex digit. Used by \xNN escapes.
+static inline int hex_val(char ch) {
+	if (ch >= '0' && ch <= '9')
+		return ch - '0';
+	if (ch >= 'a' && ch <= 'f')
+		return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F')
+		return ch - 'A' + 10;
+	return -1;
+}
+
 static Token make_token(Lexer *l, TokenType type, char *text) {
 	Token t;
 	t.type = type;
@@ -76,6 +87,15 @@ Token lexer_next(Lexer *l) {
 			continue;
 
 		if (c == '/' && peek(l) == '/') {
+			while (peek(l) != '\n' && !is_at_end(l))
+				advance(l);
+			continue;
+		}
+
+		// `#` comments: shell-script shebangs (`#!/usr/bin/env kawa run`)
+		// become possible. Only a line comment -- `#` has no other meaning
+		// in the grammar today.
+		if (c == '#') {
 			while (peek(l) != '\n' && !is_at_end(l))
 				advance(l);
 			continue;
@@ -242,13 +262,37 @@ Token lexer_next(Lexer *l) {
 					case 'r':
 						buffer[idx++] = '\r';
 						break;
+					case '0':
+						buffer[idx++] = '\0';
+						break;
 					case '"':
 						buffer[idx++] = '"';
+						break;
+					case '\'':
+						buffer[idx++] = '\'';
 						break;
 					case '\\':
 						buffer[idx++] = '\\';
 						break;
+					case 'x': {
+						// \xNN -- exactly two hex digits.
+						int hi = hex_val(peek(l));
+						if (hi < 0)
+							return error_token(
+								l, "\\x needs two hex digits");
+						advance(l);
+						int lo = hex_val(peek(l));
+						if (lo < 0)
+							return error_token(
+								l, "\\x needs two hex digits");
+						advance(l);
+						buffer[idx++] = (char)(hi * 16 + lo);
+						break;
+					}
 					default:
+						// Unknown escape: keep the character but drop the
+						// backslash (matches common practice; avoids a
+						// silent literal backslash in output).
 						buffer[idx++] = esc;
 						break;
 					}
