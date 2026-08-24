@@ -1,0 +1,21 @@
+// std.* seeds: process exit + io puts/eputs.
+import stdc;
+
+fn str classify(int n) {
+    if (n < 10) { return "small"; }
+    if (n < 100) { return "medium"; }
+    return "large";
+}
+
+fn u8 main() {
+    stdc.printf("%s\n", classify(7));
+    let bytes = "roast";
+    if (strlen(bytes) == 5) {
+        std.io.puts("len ok\n");
+    } else {
+        std.io.eputs("len bad\n");
+        std.process.exit(1);
+    }
+    stdc.printf("unreachable\n");
+    std.process.exit(0);
+}

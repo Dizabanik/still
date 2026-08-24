@@ -58,6 +58,36 @@ static LLVMValueRef build_int_binop(KawaCompiler *c, int op, LLVMValueRef l,
 
 static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name);
 
+static LLVMValueRef declare_std_fn(KawaCompiler *c, const char *qualified);
+
+// Exact prototypes for the std.* process/io surface. Like declare_libc_fn,
+// a wrong prototype is UB, so each symbol is spelled out; anything not
+// listed returns NULL.
+static LLVMTypeRef kawa_std_fn_type(KawaCompiler *c, const char *qualified) {
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	if (strcmp(qualified, "std.process.exit") == 0)
+		return LLVMFunctionType(LLVMVoidTypeInContext(ctx),
+								(LLVMTypeRef[]){i32}, 1, 0);
+	if (strcmp(qualified, "std.io.puts") == 0)
+		return LLVMFunctionType(i32, (LLVMTypeRef[]){ptr}, 1, 0);
+	if (strcmp(qualified, "std.io.eputs") == 0)
+		// macOS exposes `stderr` as a macro over __stderrp, so there is no
+		// linkable C symbol; back eputs with write(2) instead (fd 2), and
+		// return the byte count like fputs would.
+		return LLVMFunctionType(i64,
+								(LLVMTypeRef[]){ptr, i64},
+								2, 0);
+	if (strcmp(qualified, "std.io.puts") == 0)
+		// puts appends a newline; keep that contract: strlen + write(1).
+		return LLVMFunctionType(i64,
+								(LLVMTypeRef[]){ptr, i64, i64},
+								3, 0);
+	return NULL;
+}
+
 // Resolve the callee of a call expression to a module-level function name.
 // Handles plain calls (`foo()`), stdc passthrough (`stdc.printf`),
 // type-qualified calls (`User__add`) and method sugar already mangled by
@@ -78,6 +108,26 @@ static LLVMValueRef resolve_callee(KawaCompiler *c, ASTNode *callee, char *out,
 		if (strlen(member) >= out_size) {
 			timbr_err("Function name too long\n");
 			exit(1);
+		}
+		// std.* / std.*.* functions live in the module under their bare
+		// leaf name (`exit`, `puts`); resolve straight past the namespace.
+		// Walk down through nested member access to find the root; any
+		// path rooted at `std` names a std function.
+		if (obj->type == NODE_MEMBER_ACCESS || obj->type == NODE_VAR_REF) {
+			ASTNode *root = obj;
+			while (root->type == NODE_MEMBER_ACCESS)
+				root = root->data.member_access.object;
+			if (root->type == NODE_VAR_REF &&
+				strcmp(root->data.var_ref.name, "std") == 0) {
+				LLVMValueRef f = LLVMGetNamedFunction(c->module, member);
+				if (f)
+					return f;
+				// Not declared yet: hand back the bare leaf name so the
+				// call site maps it to its exact prototype.
+				strncpy(out, member, out_size - 1);
+				out[out_size - 1] = '\0';
+				return NULL;
+			}
 		}
 		if (obj->type == NODE_VAR_REF &&
 			strcmp(obj->data.var_ref.name, "stdc") == 0) {
@@ -156,6 +206,20 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				fn = c->malloc_fn;
 			} else if (strcmp(func_name, "free") == 0) {
 				fn = c->free_fn;
+			} else if (strcmp(func_name, "exit") == 0) {
+				fn = declare_std_fn(c, "std.process.exit");
+			} else if (strcmp(func_name, "puts") == 0 ||
+					   strcmp(func_name, "eputs") == 0) {
+				// `puts` bare resolves through libc; `std.io.puts` is the
+				// same libc symbol reached via the std namespace.
+				fn = declare_libc_fn(c, func_name);
+				if (!fn)
+					fn = declare_std_fn(
+						c, func_name[0] == 'e' ? "std.io.eputs"
+											   : "std.io.puts");
+			} else if ((fn = declare_libc_fn(c, func_name)) != NULL) {
+				// Bare calls of known libc functions (`strlen(s)` etc.)
+				// work like stdc.strlen -- exact prototype, zero overhead.
 			} else if (n->data.call.callee->type == NODE_MEMBER_ACCESS &&
 					   n->data.call.callee->data.member_access.object->type ==
 						   NODE_VAR_REF &&
@@ -169,6 +233,16 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				// decl of strcpy miscompiles on arm64); everything else is
 				// assumed `i32 f(ptr, ...)` which covers printf-style use.
 				fn = declare_libc_fn(c, func_name);
+				if (!fn) {
+					// std.io.* / std.process.* reach here with the bare
+					// leaf name in func_name; give them their exact
+					// prototypes before falling back to variadic.
+					fn = declare_std_fn(
+						c, strcmp(func_name, "exit") == 0
+							   ? "std.process.exit"
+							   : func_name[0] == 'e' ? "std.io.eputs"
+													 : "std.io.puts");
+				}
 				if (!fn) {
 					LLVMTypeRef fn_t = LLVMFunctionType(
 						LLVMInt32TypeInContext(c->context),
@@ -634,8 +708,7 @@ static LLVMValueRef build_strcmp_call(KawaCompiler *c, LLVMValueRef l,
 	return LLVMBuildCall2(c->builder, fn_t, fn, args, 2, "str_cmp");
 }
 
-// Exact prototypes for common libc functions used via stdc.*. A mismatched
-// declaration is UB -- e.g. declaring strcpy variadic miscompiles on arm64
+// Exact prototypes for common libc functions used via stdc.*. A mismatched// declaration is UB -- e.g. declaring strcpy variadic miscompiles on arm64
 // because the backend routes varargs calls through a different ABI path.
 static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name) {
 	LLVMContextRef ctx = c->context;
@@ -673,6 +746,79 @@ static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name) {
 			LLVMFunctionType(table[k].ret, table[k].params, table[k].n, 0));
 	}
 	return NULL;
+}
+
+// Declare a std.* function under its bare leaf name with its exact
+// prototype. Returns the existing declaration if one is already present.
+static LLVMValueRef declare_std_fn(KawaCompiler *c, const char *qualified) {
+	const char *leaf = strrchr(qualified, '.');
+	leaf = leaf ? leaf + 1 : qualified;
+	if (LLVMGetNamedFunction(c->module, leaf))
+		return LLVMGetNamedFunction(c->module, leaf);
+	LLVMTypeRef t = kawa_std_fn_type(c, qualified);
+	if (!t)
+		return NULL;
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	// eputs/puts lower onto write(2): declare it once and synthesize the
+	// full call inside a tiny module-local wrapper so callers see a plain
+	// i32(str)-shaped function.
+	if (strcmp(qualified, "std.io.puts") == 0 ||
+		strcmp(qualified, "std.io.eputs") == 0) {
+		int fd = strcmp(qualified, "std.io.eputs") == 0 ? 2 : 1;
+		char wname[32];
+		snprintf(wname, sizeof(wname), "__kawa_write_fd%d", fd);
+		LLVMValueRef wfn = LLVMGetNamedFunction(c->module, wname);
+		if (!wfn) {
+			wfn = LLVMAddFunction(
+				c->module, wname,
+				LLVMFunctionType(LLVMInt64TypeInContext(c->context),
+								 (LLVMTypeRef[]){ptr}, 1, 0));
+			LLVMAppendBasicBlockInContext(c->context, wfn, "entry");
+			LLVMBuilderRef wb =
+				LLVMCreateBuilderInContext(c->context);
+			LLVMPositionBuilderAtEnd(
+				wb, LLVMGetEntryBasicBlock(wfn));
+			LLVMValueRef sfn = LLVMGetNamedFunction(c->module, "strlen");
+			if (!sfn)
+				sfn = LLVMAddFunction(
+					c->module, "strlen",
+					LLVMFunctionType(LLVMInt64TypeInContext(c->context),
+									 (LLVMTypeRef[]){ptr}, 1, 0));
+			LLVMValueRef wlen = LLVMBuildCall2(
+				wb,
+				LLVMFunctionType(LLVMInt64TypeInContext(c->context),
+								 (LLVMTypeRef[]){ptr}, 1, 0),
+				sfn, (LLVMValueRef[]){LLVMGetParam(wfn, 0)}, 1, "len");
+			LLVMBuildCall2(
+				wb,
+				LLVMFunctionType(LLVMInt64TypeInContext(c->context),
+								 (LLVMTypeRef[]){i32, ptr, i64},
+								 3, 0),
+				LLVMGetNamedFunction(c->module, "write")
+					? LLVMGetNamedFunction(c->module, "write")
+					: LLVMAddFunction(
+						  c->module, "write",
+						  LLVMFunctionType(LLVMInt64TypeInContext(ctx),
+										   (LLVMTypeRef[]){i32, ptr, i64},
+										   3, 0)),
+				(LLVMValueRef[]){LLVMConstInt(i32, (unsigned long long)fd,
+											  0),
+								 LLVMGetParam(wfn, 0), wlen},
+				3, "");
+			LLVMBuildRet(wb, wlen);
+			LLVMDisposeBuilder(wb);
+		}
+		return LLVMGetNamedFunction(c->module, wname);
+	}
+	LLVMValueRef fn = LLVMAddFunction(c->module, leaf, t);
+	// exit never returns: mark it noreturn so LLVM knows no fallthrough
+	// code after the call can be reached.
+	if (strcmp(qualified, "std.process.exit") == 0)
+		LLVMAddTargetDependentFunctionAttr(fn, "noreturn", "");
+	return fn;
 }
 
 // A Kawa `str` is ptr<char>; both sides being char-pointers means the user
