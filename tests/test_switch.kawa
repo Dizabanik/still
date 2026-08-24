@@ -1,0 +1,49 @@
+// C-style switch: integer selector, compile-time case labels (literals,
+// consts, enum members, const arithmetic), fallthrough without break,
+// break binds to the switch, continue passes through to the loop.
+enum Fruit { APPLE = 1, BANANA, CHERRY };
+
+fn int classify(int v) {
+    switch (v) {
+        case 0:
+            stdc.printf("zero\n");
+            break;
+        case Fruit_APPLE:
+            stdc.printf("apple\n");
+            break;
+        case 3 + 4:
+            stdc.printf("seven\n");
+            // deliberate fallthrough
+        case 8:
+            stdc.printf("seven-or-eight\n");
+            break;
+        default:
+            stdc.printf("other\n");
+    }
+    return 0;
+}
+
+fn int main() {
+    classify(0);
+    classify(1);
+    classify(7);
+    classify(8);
+    classify(42);
+
+    // break exits the switch only; continue skips to the loop's step.
+    for (let i = 0; i < 6; i += 1) {
+        switch (i) {
+            case 2:
+                stdc.printf("two ");
+                break;
+            case 4:
+                stdc.printf("four ");
+                continue;
+            default:
+                stdc.printf("[%d] ", i);
+        }
+        stdc.printf("|");
+    }
+    stdc.printf("\n");
+    return 0;
+}

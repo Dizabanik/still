@@ -181,6 +181,112 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		return;
 	}
 
+	case NODE_SWITCH: {
+		// C semantics: the switched value selects a case body; bodies
+		// fall through into each other unless interrupted (break/return).
+		// `break` binds to this switch (loop_stack push shadows any outer
+		// loop's break); `continue` still reaches the enclosing loop.
+		LLVMValueRef cond = codegen_expr(c, n->data.switch_stmt.value);
+
+		if (LLVMGetTypeKind(LLVMTypeOf(cond)) != LLVMIntegerTypeKind) {
+			timbr_err("switch value must be an integer\n");
+			exit(1);
+		}
+		unsigned bits = LLVMGetIntTypeWidth(LLVMTypeOf(cond));
+
+		LLVMContextRef ctx = c->context;
+		LLVMBasicBlockRef exit_bb =
+			LLVMAppendBasicBlock(c->current_func, "switch_exit");
+
+		// One body block per case, in source order -- fallthrough is then
+		// just "no terminator at the end of the previous body".
+		int case_count = 0;
+		for (ASTNode *cs = n->data.switch_stmt.cases; cs; cs = cs->next)
+			case_count++;
+
+		LLVMBasicBlockRef *body_bbs = arena_alloc(
+			c->arena,
+			sizeof(LLVMBasicBlockRef) * (case_count > 0 ? case_count : 1));
+		LLVMBasicBlockRef default_bb = NULL;
+		int i = 0;
+		for (ASTNode *cs = n->data.switch_stmt.cases; cs; cs = cs->next, i++) {
+			body_bbs[i] = LLVMAppendBasicBlock(c->current_func, "case_body");
+			if (!cs->data.case_stmt.expr)
+				default_bb = body_bbs[i];
+		}
+
+		struct LoopTargets targets = {exit_bb, NULL, c->loop_stack};
+		// `continue` inside a switch belongs to the enclosing loop; pass it
+		// through so NODE_CONTINUE resolves against the right target (or
+		// errors with its own message when there is no loop).
+		targets.continue_bb =
+			c->loop_stack ? c->loop_stack->continue_bb : NULL;
+
+		// Dispatch: LLVMBuildSwitch needs the default destination up front.
+		// Case labels are compile-time integers -- literals, consts, enum
+		// members, const arithmetic -- folded via const_eval_i64 and
+		// truncated to the selector's width (bit pattern compare).
+		c->loop_stack = &targets;
+		LLVMValueRef switch_instr = NULL;
+		long long *seen_vals =
+			arena_alloc(c->arena, sizeof(long long) *
+									  (case_count > 0 ? case_count : 1));
+		int seen_count = 0;
+		i = 0;
+		for (ASTNode *cs = n->data.switch_stmt.cases; cs; cs = cs->next, i++) {
+			if (!cs->data.case_stmt.expr)
+				continue; // default: handled as the dispatch fallback
+			long long cv = 0;
+			if (!const_eval_i64(c, cs->data.case_stmt.expr, &cv)) {
+				timbr_err("case value must be a compile-time integer "
+						  "(literal or const)\n");
+				exit(1);
+			}
+			unsigned long long raw =
+				(unsigned long long)cv &
+				(bits >= 64 ? ~0ULL : ((1ULL << bits) - 1ULL));
+			// Duplicate labels are a user error -- the verifier would reject
+			// them anyway, but this reports the actual case values.
+			for (int k = 0; k < seen_count; k++) {
+				if (((unsigned long long)seen_vals[k] &
+					 (bits >= 64 ? ~0ULL : ((1ULL << bits) - 1ULL))) == raw) {
+					timbr_err("duplicate case value %lld in switch\n", cv);
+					exit(1);
+				}
+			}
+			seen_vals[seen_count++] = cv;
+			LLVMValueRef case_const =
+				LLVMConstInt(LLVMIntTypeInContext(ctx, bits), raw, 0);
+			if (!switch_instr) {
+				switch_instr = LLVMBuildSwitch(
+					c->builder, cond, default_bb ? default_bb : exit_bb,
+					case_count);
+			}
+			LLVMAddCase(switch_instr, case_const, body_bbs[i]);
+		}
+		if (!switch_instr) {
+			// No constant cases at all: control goes to default/exit.
+			LLVMBuildBr(c->builder, default_bb ? default_bb : exit_bb);
+		}
+
+		// Bodies, in order. Each falls through to the next by omitting a
+		// terminator when the source did (C fallthrough); break/return
+		// terminate their own block.
+		i = 0;
+		for (ASTNode *cs = n->data.switch_stmt.cases; cs; cs = cs->next, i++) {
+			LLVMPositionBuilderAtEnd(c->builder, body_bbs[i]);
+			codegen_stmt(c, cs->data.case_stmt.body);
+			if (!LLVMGetBasicBlockTerminator(
+					LLVMGetInsertBlock(c->builder))) {
+				LLVMBuildBr(c->builder, cs->next ? body_bbs[i + 1] : exit_bb);
+			}
+		}
+
+		c->loop_stack = targets.next;
+		LLVMPositionBuilderAtEnd(c->builder, exit_bb);
+		return;
+	}
+
 	case NODE_BREAK:
 	case NODE_CONTINUE: {
 		if (!c->loop_stack) {

@@ -69,6 +69,8 @@ static void synchronize(Parser *p) {
 		case TOK_IF:
 		case TOK_WHILE:
 		case TOK_RETURN:
+		case TOK_CASE:	  // switch labels own their bodies
+		case TOK_DEFAULT: // -- don't skip past them during recovery
 			return;
 		default:;
 		}
@@ -888,6 +890,11 @@ static ASTNode *parse_statement(Parser *p) {
 		synchronize(p);
 		return NULL;
 	}
+	// A case/default label terminates the enclosing switch body's statement
+	// list -- it belongs to parse_switch, not to whatever statement loop is
+	// running. Returning NULL here lets every body loop stop cleanly.
+	if (p->cur.type == TOK_CASE || p->cur.type == TOK_DEFAULT)
+		return NULL;
 
 	int is_c_style_decl = 0;
 	if (p->cur.type == TOK_LBRACKET) {
@@ -1051,6 +1058,72 @@ static ASTNode *parse_statement(Parser *p) {
 		loop->data.for_stmt.step = step;
 		loop->data.for_stmt.body = body;
 		return loop;
+	}
+	if (p->cur.type == TOK_SWITCH) {
+		advance(p);
+		consume(p, TOK_LPAREN, "(");
+		ASTNode *value = parse_expr(p);
+		consume(p, TOK_RPAREN, ")");
+		consume(p, TOK_LBRACE, "Expected '{' after switch value");
+
+		ASTNode *cases_head = NULL;
+		ASTNode **cases_tail = &cases_head;
+
+		int seen_default = 0;
+		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			int is_default = 0;
+			ASTNode *case_expr = NULL;
+			if (p->cur.type == TOK_CASE) {
+				advance(p);
+				case_expr = parse_expr(p);
+			} else if (p->cur.type == TOK_DEFAULT) {
+				advance(p);
+				is_default = 1;
+				if (seen_default)
+					report_error(p, "Duplicate 'default' in switch");
+				seen_default = 1;
+			} else {
+				report_error(p,
+							 "Expected 'case' or 'default' inside switch");
+				break;
+			}
+			consume(p, TOK_COLON, "Expected ':' after case label");
+
+			// Body: statements until the next case/default/close. C
+			// fallthrough semantics come free -- consecutive cases just run
+			// into each other because we don't emit anything between them.
+			ASTNode *body_head = NULL;
+			ASTNode **body_tail = &body_head;
+			while (p->cur.type != TOK_CASE && p->cur.type != TOK_DEFAULT &&
+				   p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+				ASTNode *s = parse_statement(p);
+				if (!s)
+					break;
+				*body_tail = s;
+				body_tail = &s->next;
+			}
+
+			ASTNode *cs = arena_alloc(p->arena, sizeof(ASTNode));
+			cs->type = NODE_CASE;
+			cs->data.case_stmt.expr = case_expr;
+			// Wrap the statement chain in a NODE_BLOCK: codegen_stmt
+			// dispatches one node at a time, and only NODE_BLOCK iterates.
+			ASTNode *body_block = arena_alloc(p->arena, sizeof(ASTNode));
+			body_block->type = NODE_BLOCK;
+			body_block->data.block.stmts = body_head;
+			cs->data.case_stmt.body = body_block;
+
+			*cases_tail = cs;
+			cases_tail = &cs->next;
+			(void)is_default; // default == NULL expr
+		}
+		consume(p, TOK_RBRACE, "Expected '}' to close switch");
+
+		ASTNode *sw = arena_alloc(p->arena, sizeof(ASTNode));
+		sw->type = NODE_SWITCH;
+		sw->data.switch_stmt.value = value;
+		sw->data.switch_stmt.cases = cases_head;
+		return sw;
 	}
 	if (p->cur.type == TOK_BREAK) {
 		advance(p);

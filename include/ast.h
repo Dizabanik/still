@@ -73,6 +73,8 @@ typedef enum {
 	NODE_FOR,
 	NODE_BREAK,
 	NODE_CONTINUE,
+	NODE_SWITCH,
+	NODE_CASE,
 	NODE_BATCH,
 	NODE_DEFER,
 	NODE_FILTER,
@@ -200,8 +202,13 @@ struct ASTNode {
 			ASTNode *body;
 		} for_stmt;
 		struct {
-			// int unused -- leaf nodes
-		} break_stmt;
+			ASTNode *value;      // switched-on expression
+			ASTNode *cases;      // NODE_CASE chain, in source order
+		} switch_stmt;
+		struct {
+			ASTNode *expr;       // case value (const); NULL for default
+			ASTNode *body;       // stmts run when matched (fallthrough = C)
+		} case_stmt;
 		struct {
 			char *iterator_var;
 			ASTNode *collection;

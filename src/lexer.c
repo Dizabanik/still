@@ -374,6 +374,12 @@ Token lexer_next(Lexer *l) {
 				type = TOK_BREAK;
 			else if (strcmp(text, "continue") == 0)
 				type = TOK_CONTINUE;
+			else if (strcmp(text, "switch") == 0)
+				type = TOK_SWITCH;
+			else if (strcmp(text, "case") == 0)
+				type = TOK_CASE;
+			else if (strcmp(text, "default") == 0)
+				type = TOK_DEFAULT;
 			else if (strcmp(text, "in") == 0)
 				type = TOK_IN;
 			else if (strcmp(text, "true") == 0)

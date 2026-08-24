@@ -90,6 +90,9 @@ LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond);
 int global_init_is_constant(KawaCompiler *c, ASTNode *n);
 LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 									LLVMTypeRef dst, Type *dst_ast);
+// Fold an expression to a compile-time i64 (literals, consts/enum members,
+// const arithmetic). Returns 0 when the expr isn't a compile-time integer.
+int const_eval_i64(KawaCompiler *c, ASTNode *n, long long *out);
 
 // --- codegen_expr.c ---
 void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node);

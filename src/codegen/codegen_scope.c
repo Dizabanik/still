@@ -85,6 +85,16 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 	case NODE_LITERAL:
 	case NODE_STRING_LIT:
 		return 1;
+	case NODE_VAR_REF: {
+		// Consts (incl. enum members, which desugar to consts) are
+		// compile-time values when their initializer is one. The parser's
+		// decl table already validated forward refs.
+		Scope *sv = scope_find(c, n->data.var_ref.name);
+		return sv && sv->node && sv->node->type == NODE_VAR_DECL &&
+			   sv->node->data.var_decl.is_const &&
+			   global_init_is_constant(c,
+									   sv->node->data.var_decl.init);
+	}
 	case NODE_BINARY_OP:
 		return global_init_is_constant(c, n->data.bin_op.left) &&
 			   global_init_is_constant(c, n->data.bin_op.right);
@@ -221,6 +231,13 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		return LLVMConstInt(LLVMInt32TypeInContext(c->context),
 							n->data.literal.i_val,
 							n->data_type ? type_is_signed(c, n->data_type) : 0);
+	case NODE_VAR_REF: {
+		Scope *sv = scope_find(c, n->data.var_ref.name);
+		if (!sv || !sv->node || sv->node->type != NODE_VAR_DECL ||
+			!sv->node->data.var_decl.is_const)
+			return NULL;
+		return const_eval_expr(c, sv->node->data.var_decl.init, dst);
+	}
 	case NODE_BINARY_OP: {
 		// Fold manually: LLVM 21's C API has no ConstBinOp/Mul/Div family.
 		// GetSExtValue/GetZExtValue already return the value carried to
@@ -290,6 +307,22 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 }
 
 // --- end constant initializer helpers ------------------------------------
+
+// Compile-time integer fold for case labels: literals, consts (enum members
+// are consts), and const arithmetic. Sign comes from the expression itself.
+int const_eval_i64(KawaCompiler *c, ASTNode *n, long long *out) {
+	if (!global_init_is_constant(c, n))
+		return 0;
+	LLVMValueRef v = const_eval_expr(c, n, NULL);
+	if (!v || LLVMGetTypeKind(LLVMTypeOf(v)) != LLVMIntegerTypeKind)
+		return 0;
+	if (LLVMIsConstant(v) &&
+		init_is_signed(c, n))
+		*out = LLVMConstIntGetSExtValue(v);
+	else
+		*out = (long long)LLVMConstIntGetZExtValue(v);
+	return 1;
+}
 
 void scope_push(KawaCompiler *c, const char *name, LLVMValueRef val,
 				LLVMTypeRef type, ASTNode *node) {
