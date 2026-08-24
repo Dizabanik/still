@@ -80,12 +80,25 @@ static LLVMTypeRef kawa_std_fn_type(KawaCompiler *c, const char *qualified) {
 		return LLVMFunctionType(i64,
 								(LLVMTypeRef[]){ptr, i64},
 								2, 0);
-	if (strcmp(qualified, "std.io.puts") == 0)
-		// puts appends a newline; keep that contract: strlen + write(1).
-		return LLVMFunctionType(i64,
-								(LLVMTypeRef[]){ptr, i64, i64},
-								3, 0);
+	if (strcmp(qualified, "std.process.arg_count") == 0)
+		return LLVMFunctionType(i32, NULL, 0, 0);
+	if (strcmp(qualified, "std.process.arg_at") == 0)
+		// Returns ptr<char> (a Kawa str); bounds check happens at the
+		// call site in debug builds.
+		return LLVMFunctionType(ptr, (LLVMTypeRef[]){i32}, 1, 0);
 	return NULL;
+}
+
+// std.io.puts is libc puts(3) itself: same newline-appending contract,
+// goes through stdio so it interleaves correctly with printf. (eputs
+// keeps the raw write(2) path -- stderr is unbuffered by C standard.)
+static LLVMValueRef declare_puts_std(KawaCompiler *c) {
+	LLVMTypeRef i32 = LLVMInt32TypeInContext(c->context);
+	LLVMTypeRef ptr = LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+	if (!LLVMGetNamedFunction(c->module, "puts"))
+		LLVMAddFunction(c->module, "puts",
+						LLVMFunctionType(i32, (LLVMTypeRef[]){ptr}, 1, 0));
+	return LLVMGetNamedFunction(c->module, "puts");
 }
 
 // Resolve the callee of a call expression to a module-level function name.
@@ -206,6 +219,28 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				fn = c->malloc_fn;
 			} else if (strcmp(func_name, "free") == 0) {
 				fn = c->free_fn;
+			} else if (n->data.call.callee->type == NODE_MEMBER_ACCESS &&
+					   n->data.call.callee->data.member_access.object
+						   ->type == NODE_MEMBER_ACCESS) {
+				// Two-level namespace call (`std.io.puts`) with the leaf
+				// name in func_name: rebuild the dotted path from the AST
+				// when it is rooted at std and try the exact table.
+				ASTNode *mid =
+					n->data.call.callee->data.member_access.object;
+				if (mid && mid->data.member_access.object &&
+					mid->data.member_access.object->type == NODE_VAR_REF &&
+					strcmp(mid->data.member_access.object->data.var_ref.name,
+						   "std") == 0 && mid->data.member_access.member) {
+					char qual[256];
+					snprintf(qual, sizeof(qual), "std.%s.%s",
+							 mid->data.member_access.member,
+							 n->data.call.callee->data.member_access.member);
+					fn = declare_std_fn(c, qual);
+					if (!fn) {
+						timbr_err("Unknown std function: %s\n", qual);
+						exit(1);
+					}
+				}
 			} else if (strcmp(func_name, "exit") == 0) {
 				fn = declare_std_fn(c, "std.process.exit");
 			} else if (strcmp(func_name, "puts") == 0 ||
@@ -786,12 +821,72 @@ static LLVMValueRef declare_std_fn(KawaCompiler *c, const char *qualified) {
 	LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx);
 	LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx);
 	LLVMTypeRef ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
-	// eputs/puts lower onto write(2): declare it once and synthesize the
-	// full call inside a tiny module-local wrapper so callers see a plain
-	// i32(str)-shaped function.
-	if (strcmp(qualified, "std.io.puts") == 0 ||
-		strcmp(qualified, "std.io.eputs") == 0) {
-		int fd = strcmp(qualified, "std.io.eputs") == 0 ? 2 : 1;
+	// std.process.arg_count/arg_at read __kawa_argc/__kawa_argv globals
+	// captured by @main's prologue. Synthesized here on first use.
+	if (strcmp(qualified, "std.process.arg_count") == 0 ||
+		strcmp(qualified, "std.process.arg_at") == 0) {
+		LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx);
+		const char *gname =
+			strcmp(qualified, "std.process.arg_at") == 0 ? "__kawa_argv"
+														 : "__kawa_argc";
+		LLVMValueRef gv = LLVMGetNamedGlobal(c->module, gname);
+		if (!gv) {
+			gv = LLVMAddGlobal(
+				c->module,
+				strcmp(gname, "__kawa_argv") == 0
+					? LLVMPointerType(LLVMPointerType(i8t, 0), 0)
+					: i32,
+				gname);
+			LLVMSetInitializer(gv, LLVMConstNull(LLVMGlobalGetValueType(gv)));
+			LLVMSetLinkage(gv, LLVMPrivateLinkage);
+		}
+		char fname[64];
+		snprintf(fname, sizeof(fname), "__kawa_%s",
+				 strcmp(qualified, "std.process.arg_at") == 0 ? "arg_at"
+															  : "arg_count");
+		LLVMValueRef f = LLVMGetNamedFunction(c->module, fname);
+		if (f)
+			return f;
+		if (strcmp(qualified, "std.process.arg_at") == 0) {
+			f = LLVMAddFunction(c->module, fname,
+								LLVMFunctionType(ptr, (LLVMTypeRef[]){i32},
+												 1, 0));
+			LLVMBasicBlockRef bb = LLVMAppendBasicBlock(f, "entry");
+			LLVMBuilderRef ab = LLVMCreateBuilderInContext(ctx);
+			LLVMPositionBuilderAtEnd(ab, bb);
+			LLVMTypeRef argv_t =
+				LLVMPointerType(LLVMPointerType(i8t, 0), 0);
+			LLVMValueRef slot = LLVMBuildGEP2(
+				ab, LLVMPointerType(i8t, 0),
+				LLVMBuildLoad2(ab, argv_t, gv, "argv"),
+				(LLVMValueRef[]){LLVMGetParam(f, 0)}, 1, "slot");
+			LLVMValueRef s = LLVMBuildLoad2(ab, LLVMPointerType(i8t, 0),
+											slot, "arg");
+			LLVMBuildRet(ab, s);
+			LLVMDisposeBuilder(ab);
+		} else {
+			f = LLVMAddFunction(c->module, fname,
+								LLVMFunctionType(i32, NULL, 0, 0));
+			LLVMBasicBlockRef bb =
+				LLVMAppendBasicBlockInContext(ctx, f, "entry");
+			LLVMBuilderRef ab = LLVMCreateBuilderInContext(ctx);
+			LLVMPositionBuilderAtEnd(ab, bb);
+			LLVMValueRef n = LLVMBuildLoad2(ab, i32, gv, "argc");
+			LLVMBuildRet(ab, n);
+			LLVMDisposeBuilder(ab);
+		}
+		return f;
+	}
+
+	if (strcmp(qualified, "std.io.puts") == 0)
+		return declare_puts_std(c);
+
+	// eputs lowers onto write(2): declare it once and synthesize the full
+	// call inside a tiny module-local wrapper so callers see a plain
+	// i32(str)-shaped function. (stderr is unbuffered by C standard, so
+	// raw write cannot reorder against printf output.)
+	if (strcmp(qualified, "std.io.eputs") == 0) {
+		int fd = 2;
 		char wname[32];
 		snprintf(wname, sizeof(wname), "__kawa_write_fd%d", fd);
 		LLVMValueRef wfn = LLVMGetNamedFunction(c->module, wname);

@@ -291,6 +291,49 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMBuildRet(c->builder, LLVMConstNull(i32_t));
 	}
 
+	// Capture OS argc/argv for std.process.arg_count/arg_at. If a user
+	// main has the (i32, ptr) shape its params ARE the entry's; otherwise
+	// the synthesized wrapper receives them. Either way the values live in
+	// @main's first two params (or don't exist -> globals stay null and
+	// arg_count() returns 0).
+	{
+		LLVMValueRef main_fn = LLVMGetNamedFunction(c->module, "main");
+		if (main_fn && LLVMCountParams(main_fn) >= 2) {
+			LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
+			LLVMTypeRef i8t =
+				LLVMInt8TypeInContext(c->context);
+			LLVMValueRef argc_g = LLVMGetNamedGlobal(c->module,
+													 "__kawa_argc");
+			if (!argc_g) {
+				argc_g = LLVMAddGlobal(c->module, i32_t, "__kawa_argc");
+				LLVMSetInitializer(argc_g, LLVMConstNull(i32_t));
+				LLVMSetLinkage(argc_g, LLVMPrivateLinkage);
+			}
+			LLVMValueRef argv_g = LLVMGetNamedGlobal(c->module,
+													 "__kawa_argv");
+			if (!argv_g) {
+				argv_g = LLVMAddGlobal(
+					c->module, LLVMPointerType(LLVMPointerType(i8t, 0), 0),
+					"__kawa_argv");
+				LLVMSetInitializer(
+					argv_g,
+					LLVMConstNull(LLVMPointerType(
+						LLVMPointerType(i8t, 0), 0)));
+				LLVMSetLinkage(argv_g, LLVMPrivateLinkage);
+			}
+			LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(main_fn);
+			LLVMBuilderRef tmp = LLVMCreateBuilderInContext(c->context);
+			LLVMValueRef first = LLVMGetFirstInstruction(entry);
+			if (first)
+				LLVMPositionBuilderBefore(tmp, first);
+			else
+				LLVMPositionBuilderAtEnd(tmp, entry);
+			LLVMBuildStore(tmp, LLVMGetParam(main_fn, 0), argc_g);
+			LLVMBuildStore(tmp, LLVMGetParam(main_fn, 1), argv_g);
+			LLVMDisposeBuilder(tmp);
+		}
+	}
+
 	// Inject a call to kawa_globals_init at the top of main() so runtime-
 	// initialized globals are ready before any user code runs. Constant-
 	// initialized globals need no call at all. (Skipped when the synthesized
