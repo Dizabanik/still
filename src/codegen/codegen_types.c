@@ -191,6 +191,19 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		return LLVMStructTypeInContext(c->context, elems, 3, 0);
 	}
 
+	case TYPE_SLICE:
+		// []T is a fat pointer { T* data, i64 len }: a view with no
+		// ownership and no capacity. Passed by value like a C struct;
+		// bounds-checked on index in debug builds only.
+		t->is_signed = 0;
+		{
+			LLVMTypeRef elem = t->inner ? get_llvm_type(c, t->inner)
+										: LLVMInt8TypeInContext(c->context);
+			LLVMTypeRef fields[] = {LLVMPointerType(elem, 0),
+									LLVMInt64TypeInContext(c->context)};
+			return LLVMStructTypeInContext(c->context, fields, 2, 0);
+		}
+
 	case TYPE_STRUCT: {
 		// Follow alias chains first: `alias Bar = Foo` means a value of
 		// declared type Bar is laid out exactly like Foo.

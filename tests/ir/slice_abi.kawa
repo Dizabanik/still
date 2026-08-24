@@ -1,0 +1,23 @@
+// Slices lower to a {T*, i64} pair. Array->slice decay at a call builds the
+// view from the array's address with a CONSTANT length -- no copy, no
+// runtime work.
+//
+// OPT: 0
+import stdc;
+
+fn i64 total([]i32 xs) {
+    let acc = 0;
+    for (let k = 0; k < ((i32)xs.len); k += 1) {
+        acc += xs[k];
+    }
+    return ((i64)acc);
+}
+
+fn i32 main() {
+    [4]i32 nums = { 1, 2, 3, 4 };
+    printf("%lld\n", total(nums));
+    return 0;
+}
+
+// CHECK: define {{.*}}i64 @total({ ptr, i64 } 
+// CHECK: getelementptr {{.*}}{ ptr, i64 }{{.*}}i32 1

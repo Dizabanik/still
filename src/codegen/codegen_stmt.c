@@ -38,10 +38,57 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				!n->data.var_decl.init->data_type)
 				n->data.var_decl.init->data_type = n->data_type;
 
+			// Array -> slice binding: build the view from the ARRAY'S
+			// ADDRESS, not from a loaded copy -- slices are views, so
+			// writes through them must land in the original storage.
+			int handled_slice_view = 0;
+			if (LLVMGetTypeKind(var_type) == LLVMStructTypeKind &&
+				n->data_type && n->data_type->kind == TYPE_SLICE &&
+				n->data.var_decl.init->type == NODE_VAR_REF) {
+				Scope *sv0 = scope_find(
+					c, n->data.var_decl.init->data.var_ref.name);
+				if (sv0 && sv0->node && sv0->node->data_type &&
+					sv0->node->data_type->kind == TYPE_ARRAY) {
+					Type *at = sv0->node->data_type;
+					Type elem_ref = {0};
+					elem_ref.kind = at->inner ? at->inner->kind : TYPE_I32;
+					elem_ref.inner = at->inner ? at->inner->inner : NULL;
+					elem_ref.is_signed =
+						at->inner ? at->inner->is_signed : 0;
+					LLVMTypeRef elem = get_llvm_type(c, at->inner);
+					LLVMValueRef arr_addr = sv0->val;
+					LLVMValueRef data = LLVMBuildGEP2(
+						c->builder, elem, arr_addr,
+						(LLVMValueRef[]){LLVMConstInt(
+							LLVMInt64TypeInContext(c->context), 0, 0)},
+						1, "view_data");
+					init_val = LLVMGetUndef(var_type);
+					init_val = LLVMBuildInsertValue(
+						c->builder, init_val, data, 0, "view_ins_data");
+					init_val = LLVMBuildInsertValue(
+						c->builder, init_val,
+						LLVMConstInt(LLVMInt64TypeInContext(c->context),
+									 (unsigned long long)at->array_len, 0),
+						1, "view_ins_len");
+					handled_slice_view = 1;
+				}
+			}
+			if (!handled_slice_view) {
 			init_val = codegen_expr(c, n->data.var_decl.init);
+			// Bare var refs carry no parser-side type; stamp from their
+			// declaration so shape-aware coercions (array -> slice) fire.
+			if (!n->data.var_decl.init->data_type &&
+				n->data.var_decl.init->type == NODE_VAR_REF) {
+				Scope *sv = scope_find(
+					c, n->data.var_decl.init->data.var_ref.name);
+				if (sv && sv->node && sv->node->data_type)
+					n->data.var_decl.init->data_type =
+						sv->node->data_type;
+			}
 			init_val =
 				coerce_value(c, init_val, n->data.var_decl.init->data_type,
 							 var_type, n->data_type);
+			}
 		} else {
 			init_val = LLVMConstNull(var_type);
 		}
@@ -82,9 +129,54 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			}
 		}
 
-		LLVMValueRef val = codegen_expr(c, n->data.assign.value);
+		// Slice target + array source: bind a view over the ORIGINAL
+		// array storage (same reasoning as the decl path).
+		LLVMValueRef val = NULL;
+		int handled_slice_view = 0;
+		Type *tgt_ast = target->data_type;
+		if (!tgt_ast && target->type == NODE_VAR_REF) {
+			Scope *tv = scope_find(c, target->data.var_ref.name);
+			if (tv && tv->node)
+				tgt_ast = tv->node->data_type;
+		}
+		if (LLVMGetTypeKind(target_type) == LLVMStructTypeKind &&
+			tgt_ast && tgt_ast->kind == TYPE_SLICE &&
+			n->data.assign.value->type == NODE_VAR_REF) {
+			Scope *sv0 = scope_find(
+				c, n->data.assign.value->data.var_ref.name);
+			if (sv0 && sv0->node && sv0->node->data_type &&
+				sv0->node->data_type->kind == TYPE_ARRAY) {
+				Type *at = sv0->node->data_type;
+				LLVMTypeRef elem = get_llvm_type(c, at->inner);
+				LLVMValueRef data = LLVMBuildGEP2(
+					c->builder, elem, sv0->val,
+					(LLVMValueRef[]){LLVMConstInt(
+						LLVMInt64TypeInContext(c->context), 0, 0)},
+					1, "view_data");
+				val = LLVMGetUndef(target_type);
+				val = LLVMBuildInsertValue(c->builder, val, data, 0,
+											"view_ins_data");
+				val = LLVMBuildInsertValue(
+					c->builder, val,
+					LLVMConstInt(LLVMInt64TypeInContext(c->context),
+								 (unsigned long long)at->array_len, 0),
+					1, "view_ins_len");
+				handled_slice_view = 1;
+			}
+		}
+		if (!handled_slice_view)
+			val = codegen_expr(c, n->data.assign.value);
+		if (!handled_slice_view) {
+		if (!n->data.assign.value->data_type &&
+			n->data.assign.value->type == NODE_VAR_REF) {
+			Scope *sv = scope_find(
+				c, n->data.assign.value->data.var_ref.name);
+			if (sv && sv->node && sv->node->data_type)
+				n->data.assign.value->data_type = sv->node->data_type;
+		}
 		val = coerce_value(c, val, n->data.assign.value->data_type, target_type,
 						   target->data_type);
+		}
 		LLVMValueRef store = LLVMBuildStore(c->builder, val, target_ptr);
 		attach_tbaa(c, store, target_type);
 		return;
@@ -324,9 +416,27 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			exit(1);
 		}
 
-		int is_array = (s_coll->node && s_coll->node->data_type &&
-						s_coll->node->data_type->kind == TYPE_ARRAY);
-		if (is_array) {
+		Type *coll_ast =
+			(s_coll->node) ? s_coll->node->data_type : NULL;
+		int is_array = (coll_ast && coll_ast->kind == TYPE_ARRAY);
+		int is_slice = (coll_ast && coll_ast->kind == TYPE_SLICE);
+		if (is_slice) {
+			// []T: load the data pointer and length out of the pair. The
+			// trip count is runtime data, but the body GEP is identical
+			// to the array form -- same vectorization opportunities.
+			LLVMTypeRef slice_t = get_llvm_type(c, coll_ast);
+			elem_t = get_llvm_type(c, coll_ast->inner);
+			LLVMTypeRef ptr_t = LLVMPointerType(elem_t, 0);
+			LLVMValueRef len_ptr2 = LLVMBuildStructGEP2(
+				c->builder, slice_t, s_coll->val, 1, "len_ptr");
+			len = LLVMBuildLoad2(c->builder, i64_t, len_ptr2, "len");
+			attach_tbaa(c, len, i64_t);
+			LLVMValueRef data_pp = LLVMBuildStructGEP2(
+				c->builder, slice_t, s_coll->val, 0, "buf_ptr");
+			data_ptr =
+				LLVMBuildLoad2(c->builder, ptr_t, data_pp, "buf");
+			attach_tbaa(c, data_ptr, ptr_t);
+		} else if (is_array) {
 			// Zero-copy: GEP straight into the array alloca; the trip
 			// count is a constant so the backend can fully unroll small
 			// arrays and vectorize large ones.
@@ -376,8 +486,24 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef n_ptr =
 			create_entry_block_alloca(c, elem_t, n->data.batch.iterator_var);
 		LLVMBuildStore(c->builder, item_val, n_ptr);
+		// Synthesize a var-decl node for the iterator so type lookups on the
+		// scope entry (binop stamping, coercions) always see a data_type --
+		// a NULL node here segfaults `b == 'x'` inside the body.
+		ASTNode *iter_decl = arena_alloc(c->arena, sizeof(ASTNode));
+		iter_decl->type = NODE_VAR_DECL;
+		iter_decl->data.var_decl.name = n->data.batch.iterator_var;
+		Type *elem_ast = arena_alloc(c->arena, sizeof(Type));
+		if (is_slice) {
+			*elem_ast = *coll_ast->inner;
+		} else if (coll_ast) {
+			*elem_ast = *coll_ast->inner;
+		} else {
+			elem_ast->kind = TYPE_I32;
+		}
+		iter_decl->data_type = elem_ast;
 		Scope *old_scope = c->scope_stack;
-		scope_push(c, n->data.batch.iterator_var, n_ptr, elem_t, NULL);
+		scope_push(c, n->data.batch.iterator_var, n_ptr, elem_t,
+				   iter_decl);
 		codegen_stmt(c, n->data.batch.body);
 		c->scope_stack = old_scope;
 

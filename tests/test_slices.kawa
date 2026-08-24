@@ -1,0 +1,48 @@
+// []T slices: ptr+len views over arrays. Zero-cost in release.
+import stdc;
+
+fn i32 sum([]i32 xs) {
+    i32 acc = 0;
+    for (let k = 0; k < ((i32)xs.len); k += 1) {
+        acc += xs[k];
+    }
+    return acc;
+}
+
+fn f64 avg([]f64 xs) {
+    f64 acc = 0.0;
+    for (let k = 0; k < ((i32)xs.len); k += 1) {
+        acc += xs[k];
+    }
+    return acc / ((f64)xs.len);
+}
+
+fn i32 count_char([]u8 bytes, u8 target) {
+    i32 n = 0;
+    batch (b in bytes) {
+        if (b == target) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+fn i32 main() {
+    [5]i32 nums = { 10, 20, 30, 40, 50 };
+    printf("sum=%d len=%lld\n", sum(nums), nums.len);
+
+    [4]f64 vals = { 1.0, 2.0, 3.0, 4.0 };
+    printf("avg=%.2f\n", avg(vals));
+
+    [8]u8 word = { 'k', 'a', 'w', 'a', 'k', 'a', 'w', 'a' };
+    printf("k_count=%d a_count=%d\n", count_char(word, 'k'), count_char(word, 'a'));
+
+    // slice var decays from array; mutation through the slice is visible
+    []i32 view = nums;
+    view[0] = 99;
+    printf("mutated=%d original_len_ok=%d\n", nums[0], ((i32)view.len));
+
+    // slice through pointer-ish access: data member
+    printf("data0=%d\n", ((i32)view.data[3]));
+    return 0;
+}

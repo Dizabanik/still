@@ -24,7 +24,8 @@ typedef enum {
 	TYPE_STRUCT,
 	TYPE_ALIAS,
 	TYPE_PTR,
-	TYPE_AMP
+	TYPE_AMP,
+	TYPE_SLICE
 } TypeKind;
 
 typedef struct Type {
@@ -32,7 +33,7 @@ typedef struct Type {
 	int is_signed; // 1 for signed integer/float (i8/16/32/64, f32/f64),
 				   // 0 for unsigned integer (u8/16/32/64), bool, char, void,
 				   // and any other kind. Conservatively defaults to 0.
-	struct Type *inner; // For set<T>, T* or [N]T
+	struct Type *inner; // For set<T>, T* or [N]T; the element type of []T
 	char *name;			// For struct/alias names
 	long array_len;		// For [N]T fixed-size arrays
 } Type;

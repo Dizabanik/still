@@ -389,6 +389,44 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 		ASTNode *arg_node = n->data.call.args;
 		for (int i = 0; i < arg_count; i++) {
+			// Array -> slice decay: passing an `[N]T` lvalue where a
+			// `[]T` param is expected builds a {&arr[0], N} view in one
+			// constant pair -- no copy, no runtime work.
+			if (i < param_count && arg_node->type == NODE_VAR_REF) {
+				Scope *sv = scope_find(c, arg_node->data.var_ref.name);
+				if (sv && sv->node && sv->node->data_type &&
+					sv->node->data_type->kind == TYPE_ARRAY) {
+					Type *at = sv->node->data_type;
+					Type slice_t = {0};
+					slice_t.kind = TYPE_SLICE;
+					slice_t.inner = at->inner;
+					LLVMTypeRef want = get_llvm_type(c, &slice_t);
+					if (param_types[i] == want) {
+						LLVMTypeRef ignored;
+						LLVMValueRef arr_addr =
+							get_address(c, arg_node, &ignored);
+						LLVMTypeRef elem =
+							get_llvm_type(c, at->inner);
+						LLVMValueRef data = LLVMBuildGEP2(
+							c->builder, elem, arr_addr,
+							(LLVMValueRef[]){LLVMConstInt(
+								LLVMInt64TypeInContext(c->context), 0,
+								0)},
+							1, "slice_data");
+						LLVMValueRef len = LLVMConstInt(
+							LLVMInt64TypeInContext(c->context),
+							(unsigned long long)at->array_len, 0);
+						LLVMValueRef view = LLVMGetUndef(want);
+						view = LLVMBuildInsertValue(
+							c->builder, view, data, 0, "slice_ins_data");
+						view = LLVMBuildInsertValue(
+							c->builder, view, len, 1, "slice_ins_len");
+						llvm_args[i] = view;
+						arg_node = arg_node->next;
+						continue;
+					}
+				}
+			}
 			// Array params decay like C: passing an `[N]T` lvalue to a
 			// pointer param passes the address of element 0 -- no copy,
 			// no load of the whole array.

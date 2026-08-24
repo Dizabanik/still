@@ -118,7 +118,8 @@ static int find_decl_is_const(Parser *p, const char *name) {
 }
 
 static int is_type_token(TokenType t) {
-	return (t >= TOK_VOID && t <= TOK_F64) || t == TOK_IDENTIFIER;
+	return (t >= TOK_VOID && t <= TOK_F64) || t == TOK_IDENTIFIER ||
+		   t == TOK_LBRACKET; // [N]T arrays and []T slices
 }
 static int is_likely_cast(Parser *p) {
 	// Lookahead logic:
@@ -178,9 +179,17 @@ static Type *parse_type(Parser *p) {
 	Type *t = arena_alloc(p->arena, sizeof(Type));
 	TokenType tok = p->cur.type;
 
-	// Prefix array syntax: [N]T
+	// Prefix array syntax: [N]T. Empty brackets make a slice []T -- a
+	// ptr+len view, no ownership.
 	if (tok == TOK_LBRACKET) {
 		advance(p);
+		if (p->cur.type == TOK_RBRACKET) {
+			advance(p);
+			Type *elem = parse_type(p);
+			t->kind = TYPE_SLICE;
+			t->inner = elem;
+			return t;
+		}
 		long len = parse_array_len(p);
 		consume(p, TOK_RBRACKET, "Expected ']' after array length");
 		Type *elem = parse_type(p);
@@ -637,7 +646,15 @@ static ASTNode *parse_primary(Parser *p) {
 		advance(p);
 		return parse_grind(p);
 	} else if (p->cur.type == TOK_LBRACE) {
-		if (peek_is_struct_literal(p)) {
+		// A '{' directly after '=' (or ',' / '(' / ':' / a cast type) can
+		// only be an array/struct literal -- statement blocks never appear
+		// there. This makes single-element literals `{ 42 }` work.
+		int value_position = (p->prev.type == TOK_ASSIGN ||
+							  p->prev.type == TOK_COLON_ASSIGN ||
+							  p->prev.type == TOK_COMMA ||
+							  p->prev.type == TOK_COLON ||
+							  p->prev.type == TOK_LPAREN);
+		if (value_position || peek_is_struct_literal(p)) {
 			return parse_struct_literal(p);
 		} else {
 			return parse_block(p);
@@ -744,6 +761,33 @@ static ASTNode *parse_postfix(Parser *p) {
 			member->data.member_access.object = expr;
 			member->data.member_access.member = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected member name");
+			// Slice builtins: `xs.len` is i64, `xs.data` is T*. Bare var
+			// refs need the decl-table lookup; typed exprs carry it already.
+			if (!member->data_type) {
+				Type *obj_t = NULL;
+				if (expr->type == NODE_VAR_REF) {
+					ASTNode *decl =
+						find_decl(p, expr->data.var_ref.name);
+					obj_t = decl ? decl->data_type : NULL;
+				} else {
+					obj_t = expr->data_type;
+				}
+				if (obj_t && (obj_t->kind == TYPE_SLICE ||
+							  obj_t->kind == TYPE_ARRAY)) {
+					if (strcmp(member->data.member_access.member,
+							   "len") == 0) {
+						Type *lt = arena_alloc(p->arena, sizeof(Type));
+						lt->kind = TYPE_I64;
+						member->data_type = lt;
+					} else if (strcmp(member->data.member_access.member,
+									  "data") == 0) {
+						Type *pt = arena_alloc(p->arena, sizeof(Type));
+						pt->kind = TYPE_PTR;
+						pt->inner = obj_t->inner;
+						member->data_type = pt;
+					}
+				}
+			}
 			expr = member;
 		} else if (p->cur.type == TOK_ARROW) {
 			advance(p);
@@ -772,18 +816,21 @@ static ASTNode *parse_postfix(Parser *p) {
 			index->line = p->cur.line;
 			index->data.index.object = expr;
 			index->data.index.index = idx;
-			// Element type: peel one array/pointer layer.
+			// Element type: peel one array/pointer/slice layer.
 			if (!index->data_type && expr->type == NODE_VAR_REF) {
 				ASTNode *decl = find_decl(p, expr->data.var_ref.name);
 				if (decl && decl->data_type &&
 					(decl->data_type->kind == TYPE_ARRAY ||
 					 decl->data_type->kind == TYPE_PTR ||
+					 decl->data_type->kind == TYPE_SLICE ||
 					 decl->data_type->kind == TYPE_AMP))
 					index->data_type = decl->data_type->inner;
 			}
-			if (expr->data_type && (expr->data_type->kind == TYPE_ARRAY ||
-									expr->data_type->kind == TYPE_PTR ||
-									expr->data_type->kind == TYPE_AMP)) {
+			if (expr->data_type &&
+				(expr->data_type->kind == TYPE_ARRAY ||
+				 expr->data_type->kind == TYPE_PTR ||
+				 expr->data_type->kind == TYPE_SLICE ||
+				 expr->data_type->kind == TYPE_AMP)) {
 				index->data_type = expr->data_type->inner;
 			}
 			expr = index;
@@ -1073,9 +1120,14 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 	int is_c_style_decl = 0;
 	if (p->cur.type == TOK_LBRACKET) {
 		// Array type declaration: [N]T name = ... where N is a literal
-		// or a const identifier.
-		Lexer temp = *p->lexer;		  // Clone lexer state
-		Token t1 = lexer_next(&temp); // length literal or const name
+		// or a const identifier. `[]T name` is the slice form.
+		Lexer temp = *p->lexer;		   // Clone lexer state
+		Token t1 = lexer_next(&temp);  // length literal or const name
+		if (t1.type == TOK_RBRACKET) {
+			// `[]T name` slice form: ']' followed by an element type.
+			if (is_type_token(lexer_peek(&temp).type))
+				is_c_style_decl = 1;
+		}
 		Token t2 = lexer_next(&temp); // ']'
 		Token t3 = lexer_next(&temp); // element type
 		int len_ok = (t1.type == TOK_INT_LIT) ||

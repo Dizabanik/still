@@ -522,6 +522,82 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 	}
 
 	case NODE_MEMBER_ACCESS: {
+		// Slice builtins: `xs.len` (i64) and `xs.data` (T*). These live in
+		// field slots 1 and 0 of the {data,len} pair -- no StructDef needed.
+		// On a fixed array, `.data` decays to &arr[0] and `.len` is the
+		// constant N.
+		if (n->data.member_access.object->type == NODE_VAR_REF &&
+			(strcmp(n->data.member_access.member, "len") == 0 ||
+			 strcmp(n->data.member_access.member, "data") == 0)) {
+			Scope *sv = scope_find(c,
+				n->data.member_access.object->data.var_ref.name);
+			Type *vt =
+				(sv && sv->node) ? sv->node->data_type : NULL;
+			if (vt && vt->kind == TYPE_SLICE) {
+				int slot = strcmp(n->data.member_access.member, "len") == 0
+							   ? 1
+							   : 0;
+				LLVMTypeRef slice_t = get_llvm_type(c, vt);
+				LLVMValueRef fld = LLVMBuildStructGEP2(
+					c->builder, slice_t, sv->val, slot, "slice_fld");
+				if (out_type) {
+					if (slot == 0) {
+						LLVMTypeRef elem =
+							get_llvm_type(c, vt->inner);
+						*out_type = LLVMPointerType(elem, 0);
+					} else {
+						*out_type =
+							LLVMInt64TypeInContext(c->context);
+					}
+				}
+				return fld;
+			}
+			if (vt && vt->kind == TYPE_ARRAY) {
+				if (strcmp(n->data.member_access.member, "data") == 0) {
+					// An array has no pointer field: build one in an entry
+					// alloca holding &arr[0] so the lvalue contract holds
+					// (callers load through the returned address). -O2
+					// promotes the alloca into a register.
+					LLVMTypeRef ignored;
+					LLVMValueRef arr_addr =
+						get_address(c,
+									n->data.member_access.object,
+									&ignored);
+					LLVMTypeRef elem = get_llvm_type(c, vt->inner);
+					LLVMTypeRef ptr_t = LLVMPointerType(elem, 0);
+					LLVMValueRef data = LLVMBuildGEP2(
+						c->builder, elem, arr_addr,
+						(LLVMValueRef[]){LLVMConstInt(
+							LLVMInt64TypeInContext(c->context), 0,
+							0)},
+						1, "arr_data");
+					LLVMValueRef slot = create_entry_block_alloca(
+						c, ptr_t, "arr_data_slot");
+					LLVMBuildStore(c->builder, data, slot);
+					if (out_type)
+						*out_type = ptr_t;
+					return slot;
+				}
+				if (strcmp(n->data.member_access.member, "len") == 0) {
+					// Constant length: materialize an alloca holding N so
+					// the lvalue contract (return storage) holds.
+					LLVMValueRef len_alloca = create_entry_block_alloca(
+						c, LLVMInt64TypeInContext(c->context),
+						"arr_len_tmp");
+					LLVMBuildStore(
+						c->builder,
+						LLVMConstInt(
+							LLVMInt64TypeInContext(c->context),
+							(unsigned long long)vt->array_len, 0),
+						len_alloca);
+					if (out_type)
+						*out_type =
+							LLVMInt64TypeInContext(c->context);
+					return len_alloca;
+				}
+			}
+		}
+
 		LLVMTypeRef container_type = NULL;
 		LLVMValueRef ptr =
 			get_address(c, n->data.member_access.object, &container_type);
@@ -557,6 +633,84 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		ASTNode *obj = n->data.index.object;
 		LLVMValueRef base;
 		LLVMTypeRef elem = elem_type;
+
+		// Slice indexing xs[i]: load {data,len}, bounds-check against len
+		// in debug builds, then GEP data[i]. Release builds pay nothing --
+		// the load of data and one GEP, same as a pointer index.
+		Scope *s_slice =
+			(obj->type == NODE_VAR_REF)
+				? scope_find(c, obj->data.var_ref.name)
+				: NULL;
+		Type *obj_ast =
+			(s_slice && s_slice->node) ? s_slice->node->data_type : NULL;
+		if (obj_ast && obj_ast->kind == TYPE_SLICE) {
+			LLVMContextRef ctx = c->context;
+			LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+			LLVMTypeRef slice_t = get_llvm_type(c, obj_ast);
+			LLVMTypeRef elem = get_llvm_type(c, obj_ast->inner);
+			LLVMTypeRef ptr_t = LLVMPointerType(elem, 0);
+
+			LLVMValueRef data_p = LLVMBuildStructGEP2(
+				c->builder, slice_t, s_slice->val, 0, "slice_data_ptr");
+			LLVMValueRef datap =
+				LLVMBuildLoad2(c->builder, ptr_t, data_p, "slice_data");
+			attach_tbaa(c, datap, ptr_t);
+
+			LLVMValueRef idx = codegen_expr(c, n->data.index.index);
+			if (!n->data.index.index->data_type &&
+				n->data.index.index->type == NODE_VAR_REF) {
+				Scope *sv2 = scope_find(
+					c, n->data.index.index->data.var_ref.name);
+				if (sv2 && sv2->node && sv2->node->data_type)
+					n->data.index.index->data_type = sv2->node->data_type;
+			}
+			Type idx64t = {0};
+			idx64t.kind = TYPE_I64;
+			idx = coerce_value(c, idx, n->data.index.index->data_type,
+							   i64_t, &idx64t);
+
+			if (c->debug_build) {
+				// Dynamic-length twin of emit_bounds_check: trap when
+				// idx >= slice.len. Release never reaches this branch.
+				LLVMValueRef len_p = LLVMBuildStructGEP2(
+					c->builder, slice_t, s_slice->val, 1,
+					"slice_len_ptr");
+				LLVMValueRef slen =
+					LLVMBuildLoad2(c->builder, i64_t, len_p, "slice_len");
+				attach_tbaa(c, slen, i64_t);
+				LLVMValueRef ok = LLVMBuildICmp(
+					c->builder, LLVMIntULT, idx, slen, "bounds_ok");
+				LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlock(
+					c->current_func, "idx_in_bounds");
+				LLVMBasicBlockRef trap_bb = LLVMAppendBasicBlock(
+					c->current_func, "idx_oob");
+				LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
+
+				LLVMPositionBuilderAtEnd(c->builder, trap_bb);
+				LLVMValueRef msg = LLVMBuildGlobalStringPtr(
+					c->builder, "slice index out of bounds", "trap_msg");
+				LLVMValueRef file_v = LLVMBuildGlobalStringPtr(
+					c->builder, c->source_filename ? c->source_filename : "?",
+					"trap_file");
+				LLVMValueRef args[3] = {
+					msg, file_v,
+					LLVMConstInt(LLVMInt32TypeInContext(ctx),
+								 n->line > 0 ? n->line : 0, 1)};
+				LLVMBuildCall2(
+					c->builder,
+					LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
+					get_or_declare_trap_fn(c), args, 3, "");
+				LLVMBuildUnreachable(c->builder);
+
+				LLVMPositionBuilderAtEnd(c->builder, cont_bb);
+			}
+
+			LLVMValueRef addr = LLVMBuildGEP2(c->builder, elem, datap,
+											  &idx, 1, "elem_addr");
+			if (out_type)
+				*out_type = elem;
+			return addr;
+		}
 
 		if (obj->type == NODE_VAR_REF) {
 			// Direct storage access: arrays are allocas, pointers are
@@ -768,6 +922,46 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 						  : LLVMBuildFPTrunc(c->builder, v, dst, "fptrunc"));
 	if (sk == LLVMPointerTypeKind && dk == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "ptr_cast");
+	if (sk == LLVMArrayTypeKind && dk == LLVMStructTypeKind &&
+		src_ast && src_ast->kind == TYPE_ARRAY &&
+		dst_ast && dst_ast->kind == TYPE_SLICE) {
+		// Array value -> slice view: spill the array so the data pointer
+		// has an address, then pair it with the constant length. The
+		// optimizer promotes the spill away in release builds.
+		LLVMValueRef slot =
+			create_entry_block_alloca(c, src, "to_slice_arr");
+		LLVMBuildStore(c->builder, v, slot);
+		LLVMTypeRef elem = get_llvm_type(c, src_ast->inner);
+		LLVMValueRef data = LLVMBuildGEP2(
+			c->builder, elem, slot,
+			(LLVMValueRef[]){LLVMConstInt(LLVMInt64TypeInContext(c->context),
+										  0, 0)},
+			1, "slice_data");
+		LLVMValueRef view = LLVMGetUndef(dst);
+		view = LLVMBuildInsertValue(c->builder, view, data, 0,
+									"slice_ins_data");
+		view = LLVMBuildInsertValue(
+			c->builder, view,
+			LLVMConstInt(LLVMInt64TypeInContext(c->context),
+						 (unsigned long long)src_ast->array_len, 0),
+			1, "slice_ins_len");
+		return view;
+	}
+	if (sk == LLVMPointerTypeKind && dk == LLVMStructTypeKind &&
+		dst_ast && dst_ast->kind == TYPE_SLICE) {
+		// T* -> []T: length unknown at compile time; a raw pointer makes a
+		// zero-length view rather than a guess. Explicit and safe.
+		LLVMValueRef view = LLVMGetUndef(dst);
+		view = LLVMBuildInsertValue(c->builder, view, v, 0,
+									"slice_ins_data");
+		view = LLVMBuildInsertValue(
+			c->builder, view,
+			LLVMConstInt(LLVMInt64TypeInContext(c->context), 0, 0),
+			1, "slice_ins_len");
+		return view;
+	}
+	if (sk == LLVMPointerTypeKind && dk == LLVMStructTypeKind)
+		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
 	if (sk == dk)
 		return v;
 	// Last resort: bitcast between same-sized types; otherwise the value is
