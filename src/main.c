@@ -6,11 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Exit-code contract (uniform across the toolchain):
+//   0  success
+//   1  compilation failed -- any diagnostic from the parser or codegen
+//   2  kawac itself failed -- usage error, unreadable file, link failure
 char *read_file(const char *path) {
 	FILE *f = fopen(path, "rb");
 	if (!f) {
 		fprintf(stderr, "kawac: cannot open '%s'\n", path);
-		exit(1);
+		exit(2);
 	}
 	fseek(f, 0, SEEK_END);
 	long len = ftell(f);
@@ -18,7 +22,7 @@ char *read_file(const char *path) {
 	char *buf = malloc(len + 1);
 	if (fread(buf, 1, len, f) != (size_t)len) {
 		fprintf(stderr, "kawac: short read on '%s'\n", path);
-		exit(1);
+		exit(2);
 	}
 	buf[len] = '\0';
 	fclose(f);
@@ -49,7 +53,7 @@ static void append_char(char **out, size_t *len, size_t *cap, char ch) {
 		*out = realloc(*out, *cap);
 		if (!*out) {
 			fprintf(stderr, "kawac: out of memory\n");
-			exit(1);
+			exit(2);
 		}
 	}
 	(*out)[(*len)++] = ch;
@@ -137,7 +141,7 @@ static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
 	if (ctx->count >= MAX_IMPORT_FILES) {
 		fprintf(stderr, "kawac: too many imported files (max %d)\n",
 				MAX_IMPORT_FILES);
-		exit(1);
+		exit(2);
 	}
 	ctx->paths[ctx->count++] = arena_strdup(a, abs_path);
 
@@ -206,7 +210,7 @@ int main(int argc, char **argv) {
 		} else if (argv[i][0] == '-') {
 			fprintf(stderr, "kawac: unknown option '%s'\n", argv[i]);
 			usage(argv[0]);
-			return 1;
+			return 2;
 		} else {
 			src_path = argv[i];
 		}
@@ -214,7 +218,7 @@ int main(int argc, char **argv) {
 
 	if (!src_path) {
 		usage(argv[0]);
-		return 1;
+		return 2;
 	}
 
 	Arena a;
@@ -273,7 +277,7 @@ int main(int argc, char **argv) {
 	int rc = system(cmd);
 	if (rc != 0) {
 		fprintf(stderr, "kawac: linking failed\n");
-		return 1;
+		return 2;
 	}
 	printf("[Kawa] Built '%s'\n", out_name);
 
