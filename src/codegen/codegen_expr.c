@@ -364,6 +364,43 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		return LLVMBuildLoad2(c->builder, s_type, alloca, "lit_val");
 	}
 
+	case NODE_TERNARY: {
+		// cond ? a : b -- both arms evaluate in their own block; a phi
+		// merges the values. Same structure as short-circuit && / ||.
+		LLVMValueRef func = c->current_func;
+		LLVMValueRef cond =
+			cond_to_bool(c, codegen_expr(c, n->data.ternary.cond));
+		LLVMBasicBlockRef then_bb =
+			LLVMAppendBasicBlock(func, "tern_then");
+		LLVMBasicBlockRef else_bb =
+			LLVMAppendBasicBlock(func, "tern_else");
+		LLVMBasicBlockRef merge_bb =
+			LLVMAppendBasicBlock(func, "tern_merge");
+		LLVMBuildCondBr(c->builder, cond, then_bb, else_bb);
+
+		LLVMPositionBuilderAtEnd(c->builder, then_bb);
+		LLVMValueRef tv = codegen_expr(c, n->data.ternary.then_expr);
+		LLVMBasicBlockRef then_end = LLVMGetInsertBlock(c->builder);
+		LLVMBuildBr(c->builder, merge_bb);
+
+		LLVMPositionBuilderAtEnd(c->builder, else_bb);
+		LLVMValueRef ev = codegen_expr(c, n->data.ternary.else_expr);
+		LLVMBasicBlockRef else_end = LLVMGetInsertBlock(c->builder);
+		LLVMBuildBr(c->builder, merge_bb);
+
+		LLVMPositionBuilderAtEnd(c->builder, merge_bb);
+		if (LLVMGetTypeKind(LLVMTypeOf(tv)) == LLVMStructTypeKind ||
+			LLVMTypeOf(tv) != LLVMTypeOf(ev)) {
+			timbr_err("ternary arms must be scalars of matching type\n");
+			exit(1);
+		}
+		LLVMValueRef phi =
+			LLVMBuildPhi(c->builder, LLVMTypeOf(tv), "tern_val");
+		LLVMAddIncoming(phi, (LLVMValueRef[]){tv, ev},
+						(LLVMBasicBlockRef[]){then_end, else_end}, 2);
+		return phi;
+	}
+
 	case NODE_BINARY_OP:
 		// Short-circuit logical ops need custom control flow -- the RHS
 		// must not be evaluated unless the LHS demands it.

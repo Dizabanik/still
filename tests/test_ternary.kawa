@@ -1,0 +1,30 @@
+// Ternary operator: lowest precedence, right-associative, scalar arms.
+// Compiles to branches + phi (no branchless trickery), zero cost when the
+// optimizer folds it.
+import stdc;
+
+fn int max(int a, int b) {
+    return a > b ? a : b;
+}
+
+fn int clamp(int v, int lo, int hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+fn int main() {
+    stdc.printf("%d\n", max(3, 7));
+    stdc.printf("%d\n", max(9, 2));
+
+    let s = 5 < 10 ? "yes" : "no";
+    stdc.printf("%s\n", s);
+
+    // Nested: `1 ? 2 : 0 ? 3 : 4` == 1 ? 2 : (0 ? 3 : 4) == 2
+    stdc.printf("%d\n", 1 ? 2 : 0 ? 3 : 4);
+    stdc.printf("%d\n", 0 ? 2 : 0 ? 3 : 4);
+
+    // Chained comparisons inside arms
+    stdc.printf("%d\n", clamp(15, 0, 10));
+    stdc.printf("%d\n", clamp(-5, 0, 10));
+    stdc.printf("%d\n", clamp(7, 0, 10));
+    return 0;
+}

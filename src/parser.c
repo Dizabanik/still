@@ -818,8 +818,26 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			tok_prec = 5;
 		if (p->cur.type == TOK_TILDE_EQ)
 			tok_prec = 2;
+		if (p->cur.type == TOK_QUESTION)
+			tok_prec = 1; // ternary: lowest, checked below
 		if (tok_prec < expr_prec)
 			return lhs;
+		// Ternary: lowest precedence, right-associative. `a ? b : c ? d
+		// : e` parses as `a ? b : (c ? d : e)` -- the else branch is
+		// itself parsed as a full expression.
+		if (p->cur.type == TOK_QUESTION) {
+			advance(p);
+			ASTNode *then_expr = parse_expr(p);
+			consume(p, TOK_COLON, "Expected ':' in ternary");
+			ASTNode *else_expr = parse_expr(p);
+			ASTNode *ternary = arena_alloc(p->arena, sizeof(ASTNode));
+			ternary->type = NODE_TERNARY;
+			ternary->data.ternary.cond = lhs;
+			ternary->data.ternary.then_expr = then_expr;
+			ternary->data.ternary.else_expr = else_expr;
+			lhs = ternary;
+			continue;
+		}
 		int op = p->cur.type;
 		advance(p);
 		// Precedence climbing: parse the RHS with strictly higher

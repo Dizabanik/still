@@ -236,6 +236,9 @@ Token lexer_next(Lexer *l) {
 		if (c == '%')
 			return make_token(l, TOK_PERCENT, "%");
 
+		if (c == '?')
+			return make_token(l, TOK_QUESTION, "?");
+
 		if (c == '!') {
 			if (peek(l) == '=') {
 				advance(l);

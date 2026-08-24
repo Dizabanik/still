@@ -56,6 +56,7 @@ typedef enum {
 	NODE_ASSIGN,
 	NODE_RETURN,
 	NODE_BINARY_OP,
+	NODE_TERNARY,
 	NODE_LITERAL,
 	NODE_STRING_LIT,
 	NODE_VAR_REF,
@@ -154,6 +155,9 @@ struct ASTNode {
 			int op;
 			ASTNode *left, *right;
 		} bin_op;
+		struct {
+			ASTNode *cond, *then_expr, *else_expr;
+		} ternary;
 		struct {
 			struct ASTNode *value; // Optional expr
 			struct Type *type_val; // Optional type

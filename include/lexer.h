@@ -93,6 +93,7 @@ typedef enum {
 	TOK_OROR,	 // ||
 	TOK_BANG,	 // ! (logical not)
 	TOK_PERCENT, // % (modulo)
+	TOK_QUESTION, // ? (ternary)
 	TOK_IN,		 // 'in' for loops
 	TOK_ISEQ,	 // ==
 	TOK_NOTEQ,	 // !=
