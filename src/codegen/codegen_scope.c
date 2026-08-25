@@ -812,6 +812,21 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMTypeRef container_type = NULL;
 		LLVMValueRef ptr =
 			get_address(c, n->data.member_access.object, &container_type);
+		if (!ptr && n->data.member_access.object->data_type) {
+			// Rvalue base (`Vec.new(1,2).x`): evaluate the object to a
+			// value, spill to a temp alloca, and address through it. The
+			// optimizer promotes the temp away -- zero cost over direct
+			// field extraction.
+			LLVMTypeRef obj_t =
+				get_llvm_type(c, n->data.member_access.object->data_type);
+			LLVMValueRef tmp = create_entry_block_alloca(
+				c, obj_t, "rval_base");
+			LLVMValueRef val =
+				codegen_expr(c, n->data.member_access.object);
+			LLVMBuildStore(c->builder, val, tmp);
+			ptr = tmp;
+			container_type = obj_t;
+		}
 		if (!ptr || !container_type) {
 			kerr(KAWA_E_SEMANTIC, n,
 				 "failed to resolve member access base"); // internal

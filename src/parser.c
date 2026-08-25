@@ -530,6 +530,19 @@ static Type *find_field_type(Parser *p, Type *struct_t, const char *field) {
 	return NULL;
 }
 
+// Type for a struct declared in this program: TYPE_STRUCT carrying the name.
+static Type *find_struct_type_by_name(Parser *p, const char *name) {
+	for (int si = 0; si < p->struct_name_count; si++) {
+		if (strcmp(p->struct_names[si], name) == 0) {
+			Type *t = arena_alloc(p->arena, sizeof(Type));
+			t->kind = TYPE_STRUCT;
+			t->name = p->struct_names[si];
+			return t;
+		}
+	}
+	return NULL;
+}
+
 static int fn_sig_known(Parser *p, const char *name) {
 	for (int k = p->fn_sig_count - 1; k >= 0; k--)
 		if (strcmp(p->fn_sigs[k].name, name) == 0)
@@ -650,6 +663,22 @@ static ASTNode *parse_struct_literal(Parser *p) {
 			item->field_name = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected field name");
 			consume(p, TOK_ASSIGN, "Expected '='");
+		} else if (p->cur.type == TOK_IDENTIFIER &&
+				   lexer_peek(p->lexer).type != TOK_LPAREN &&
+				   lexer_peek(p->lexer).type != TOK_LBRACE) {
+			// Field-init shorthand: `Vec { x, y }` means `.x = x, .y = y`
+			// -- the identifier names the field AND supplies the value.
+			item->field_name = p->cur.text;
+			item->value = parse_expr(p);
+			item->next = NULL;
+			*tail = item;
+			tail = &item->next;
+			if (p->cur.type == TOK_COMMA)
+				advance(p);
+			else if (p->cur.type != TOK_RBRACE)
+				report_error(p,
+							 "Expected ',' or '}' in struct literal");
+			continue;
 		}
 
 		item->value = parse_expr(p);
@@ -1084,9 +1113,36 @@ static ASTNode *parse_postfix(Parser *p) {
 			char *struct_name = NULL;
 			char *method_name = NULL;
 
+			int is_assoc_call = 0; // Type.fn(...) associated-function call
 			if (expr->type == NODE_MEMBER_ACCESS) {
 				self_obj = expr->data.member_access.object;
 				method_name = expr->data.member_access.member;
+
+				// Associated functions first: `Vec.new(...)` where the
+				// object NAMES a struct (not a variable) and `Vec__new`
+				// exists. The callee mangles; nothing is injected -- the
+				// declared signature IS the argument list.
+				if (self_obj->type == NODE_VAR_REF && method_name) {
+					const char *tname =
+						self_obj->data.var_ref.name;
+					int t_is_struct = 0;
+					for (int si = 0; si < p->struct_name_count; si++) {
+						if (strcmp(p->struct_names[si], tname) == 0) {
+							t_is_struct = 1;
+							break;
+						}
+					}
+					if (t_is_struct && !find_decl(p, tname)) {
+						char amangled[256];
+						snprintf(amangled, sizeof(amangled), "%s__%s",
+								 tname, method_name);
+						if (fn_sig_known(p, amangled)) {
+							struct_name = arena_strdup(p->arena, tname);
+							is_method_call = 1;
+							is_assoc_call = 1;
+						}
+					}
+				}
 
 				// Resolve the receiver's struct type. A bare var ref looks
 				// up its declaration; a member chain (`d.Base.who()`) walks
@@ -1095,6 +1151,10 @@ static ASTNode *parse_postfix(Parser *p) {
 				if (self_obj->type == NODE_VAR_REF) {
 					ASTNode *decl = find_decl(p, self_obj->data.var_ref.name);
 					recv_t = decl ? decl->data_type : NULL;
+					// `c.bump()` where c is Counter*: peel one pointer layer
+					// so pointer receivers resolve like value ones.
+					if (recv_t && recv_t->kind == TYPE_PTR && recv_t->inner)
+						recv_t = recv_t->inner;
 				} else if (self_obj->type == NODE_MEMBER_ACCESS) {
 					// Walk the chain from the root, following declared
 					// field types (embedding paths included).
@@ -1217,11 +1277,13 @@ static ASTNode *parse_postfix(Parser *p) {
 				for (ASTNode *a3 = head; a3; a3 = a3->next)
 					expl_args++;
 				int inject_self = 0;
-				for (int si2 = p->fn_sig_count - 1; si2 >= 0; si2--) {
-					if (strcmp(p->fn_sigs[si2].name, mangled) == 0) {
-						inject_self =
-							p->fn_sigs[si2].nparams == expl_args + 1;
-						break;
+				if (!is_assoc_call) {
+					for (int si2 = p->fn_sig_count - 1; si2 >= 0; si2--) {
+						if (strcmp(p->fn_sigs[si2].name, mangled) == 0) {
+							inject_self =
+								p->fn_sigs[si2].nparams == expl_args + 1;
+							break;
+						}
 					}
 				}
 				// Embedding promotion (IDEAS 3): `e.describe()` where
@@ -1230,7 +1292,7 @@ static ASTNode *parse_postfix(Parser *p) {
 				// e.Person. Parse-time rewrite -- codegen sees an ordinary
 				// method call, so the emitted code costs exactly what a
 				// hand-written e.Person.describe() would.
-				if (!inject_self) {
+				if (!inject_self && !is_assoc_call) {
 					int outer_known = 0;
 					for (int k = p->fn_sig_count - 1; k >= 0; k--) {
 						if (strcmp(p->fn_sigs[k].name, mangled) == 0) {
@@ -2159,7 +2221,42 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 		Type *arg_type = NULL;
 		char *arg_name = NULL;
 
-		if (is_type_token(p->cur.type)) {
+		// `self` receiver: bare `self` takes the impl struct by value,
+		// `self*` by pointer. The parameter is materialized under the name
+		// "self" so bodies read like Rust (`self.age`, `self->age`) with
+		// zero ABI difference from an explicit first parameter -- call-site
+		// injection already handles exactly this shape.
+		if (p->cur.type == TOK_IDENTIFIER && prefix &&
+			strcmp(p->cur.text, "self") == 0) {
+			advance(p); // 'self'
+			int by_ptr = (p->cur.type == TOK_STAR);
+			if (by_ptr)
+				advance(p);
+			Type *st = find_struct_type_by_name(p, prefix);
+			if (!st) {
+				report_error(p, "`self` used outside of an impl block");
+				return;
+			}
+			Type *t;
+			if (by_ptr) {
+				// Pointer receiver: TYPE_PTR -> struct type.
+				t = arena_alloc(p->arena, sizeof(Type));
+				t->kind = TYPE_PTR;
+				t->name = NULL;
+				t->inner = st;
+			} else {
+				t = st;
+			}
+			arg_type = t;
+			arg_name = "self";
+			// Optional explicit alias (`self* v`): renames the binding so
+			// bodies can keep C-style `v->x` spellings.
+			if (p->cur.type == TOK_IDENTIFIER &&
+				lexer_peek(p->lexer).type != TOK_DOT) {
+				arg_name = p->cur.text;
+				advance(p);
+			}
+		} else if (is_type_token(p->cur.type)) {
 			arg_type = parse_type(p);
 			arg_name = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Arg name");
