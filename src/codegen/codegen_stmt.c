@@ -3,8 +3,18 @@
 void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	if (!n)
 		return;
-	if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+	if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+		// The current block already transferred control (return/break/
+		// continue/press). Anything else in this statement list is dead --
+		// warn once per statement so `return x; foo();` gets flagged.
+		if (n->type != NODE_CASE && n->line > 0 && !c->warned_unreachable) {
+			c->warned_unreachable = 1;
+			kdiag_note("this statement never runs; control left the block "
+					   "above it");
+			kwarn(KAWA_W_UNREACHABLE, n, "unreachable statement");
+		}
 		return;
+	}
 
 	// Attribute instructions emitted for this statement to its source line
 	// (no-op unless -g). Line info is what makes profiles and stack traces
@@ -124,7 +134,8 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef target_type = NULL;
 		LLVMValueRef target_ptr = get_address(c, target, &target_type);
 		if (!target_ptr || !target_type) {
-			timbr_err("Internal error: cannot resolve assignment target\n");
+			kerr(KAWA_E_SEMANTIC, n,
+				 "cannot resolve assignment target"); // internal
 			exit(1);
 		}
 
@@ -308,7 +319,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef cond = codegen_expr(c, n->data.switch_stmt.value);
 
 		if (LLVMGetTypeKind(LLVMTypeOf(cond)) != LLVMIntegerTypeKind) {
-			timbr_err("switch value must be an integer\n");
+			kerr(KAWA_E_TYPE, n, "switch value must be an integer");
 			exit(1);
 		}
 		unsigned bits = LLVMGetIntTypeWidth(LLVMTypeOf(cond));
@@ -357,8 +368,9 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				continue; // default: handled as the dispatch fallback
 			long long cv = 0;
 			if (!const_eval_i64(c, cs->data.case_stmt.expr, &cv)) {
-				timbr_err("case value must be a compile-time integer "
-						  "(literal or const)\n");
+				kerr(KAWA_E_ARGS, n,
+					 "case value must be a compile-time integer "
+					 "(literal or const)");
 				exit(1);
 			}
 			unsigned long long raw =
@@ -369,7 +381,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			for (int k = 0; k < seen_count; k++) {
 				if (((unsigned long long)seen_vals[k] &
 					 (bits >= 64 ? ~0ULL : ((1ULL << bits) - 1ULL))) == raw) {
-					timbr_err("duplicate case value %lld in switch\n", cv);
+					char case_txt[32];
+					snprintf(case_txt, sizeof(case_txt), "%lld", cv);
+					kdiag_note("value first used by the earlier arm with this label");
+					knerr(KAWA_E_SEMANTIC, cs, case_txt,
+						  "duplicate case value %lld in switch", cv);
 					exit(1);
 				}
 			}
@@ -409,8 +425,9 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	case NODE_BREAK:
 	case NODE_CONTINUE: {
 		if (!c->loop_stack) {
-			timbr_err("%s outside of a loop\n",
-					  n->type == NODE_BREAK ? "break" : "continue");
+			kdiag_help("`while` and `batch ... in` introduce loops");
+			kerr(KAWA_E_SCOPE, n, "%s outside of a loop",
+				 n->type == NODE_BREAK ? "break" : "continue");
 			exit(1);
 		}
 		LLVMBuildBr(c->builder, n->type == NODE_BREAK
@@ -429,12 +446,23 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef elem_t;
 
 		if (coll->type != NODE_VAR_REF) {
-			timbr_err("Batch requires a variable collection\n");
+			kerr(KAWA_E_ARGS, n, "batch requires a variable collection");
 			exit(1);
 		}
 		Scope *s_coll = scope_find(c, coll->data.var_ref.name);
 		if (!s_coll) {
-			timbr_err("Batch on unknown var\n");
+			const char *cands[33];
+			int nc = 0;
+			for (Scope *cur = c->scope_stack; cur && nc < 32; cur = cur->next)
+				cands[nc++] = cur->name;
+			cands[nc] = NULL;
+			const char *alt = kdiag_closest(coll->data.var_ref.name, cands);
+			if (alt)
+				kdiag_help("a variable with a similar name exists: `%s`",
+						   get_var_path(c, alt));
+			knerr(KAWA_E_UNDEF, n, coll->data.var_ref.name,
+				  "cannot find variable `%s` in this scope",
+				  get_var_path(c, coll->data.var_ref.name));
 			exit(1);
 		}
 
@@ -554,7 +582,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 					   LLVMVoidTypeKind) {
 				LLVMBuildRetVoid(c->builder);
 			} else {
-				timbr_err("'return;' in a non-void function\n");
+				kdiag_note(
+					"the enclosing function's declared return type is "
+					"not void");
+				kerr(KAWA_E_TYPE, n, "`return;` in a non-void function");
 				return;
 			}
 			return;
@@ -597,7 +628,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			 cs2 = cs2->next)
 			ncases++;
 		if (ncases > 8) {
-			timbr_err("select supports at most 8 channels\n");
+			kerr(KAWA_E_ARGS, n, "select supports at most 8 channels");
 			exit(1);
 		}
 
@@ -610,7 +641,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			cases[ci] = cs2;
 			Type *ct2 = cs2->chan->data_type;
 			if (!ct2 || ct2->kind != TYPE_CHAN) {
-				timbr_err("select case requires a chan<T>\n");
+				kerr(KAWA_E_TYPE, n, "select case requires a chan<T>");
 				exit(1);
 			}
 			chan_ts[ci] = get_llvm_type(c, ct2);
@@ -712,8 +743,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			LLVMPositionBuilderAtEnd(c->builder, resume_bb2);
 			LLVMBuildBr(c->builder, retry_bb);
 		} else {
-			timbr_err("select with no ready case blocks forever "
-					  "(no default, not in a coroutine)\n");
+			kdiag_note("add a `default:` arm or run inside a drip so select "
+					   "can yield");
+			kerr(KAWA_E_SEMANTIC, n,
+				 "select with no ready case blocks forever (no default, "
+				 "not in a coroutine)");
 			exit(1);
 		}
 
@@ -784,7 +818,8 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_PRESS: {
 		if (!c->filter_stack) {
-			timbr_err("press outside of filter/dregs: nothing to catch\n");
+			kerr(KAWA_E_SCOPE, n,
+				 "press outside of filter/dregs: nothing to catch");
 			exit(1);
 		}
 		FilterFrame *target = c->filter_stack;
@@ -878,7 +913,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		break;
 	}
 
-	timbr_err("Internal error: unknown AST node type in codegen_stmt (%d)\n",
-			  n->type);
+	kdiag_error_at(KAWA_E_SEMANTIC,
+				   c->source_filename ? c->source_filename : "<kawa>", NULL,
+				   n && n->line > 0 ? n->line : 0,
+				   "unknown AST node type %d in codegen_stmt", // internal
+				   n->type);
 	exit(1);
 }

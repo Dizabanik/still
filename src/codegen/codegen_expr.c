@@ -154,7 +154,7 @@ static LLVMValueRef resolve_callee(KawaCompiler *c, ASTNode *callee, char *out,
 	if (callee->type == NODE_VAR_REF) {
 		const char *nm = callee->data.var_ref.name;
 		if (strlen(nm) >= out_size) {
-			timbr_err("Function name too long\n");
+			kerr(KAWA_E_SEMANTIC, callee, "function name `%s` too long", nm);
 			exit(1);
 		}
 		strcpy(out, nm);
@@ -162,7 +162,8 @@ static LLVMValueRef resolve_callee(KawaCompiler *c, ASTNode *callee, char *out,
 		ASTNode *obj = callee->data.member_access.object;
 		const char *member = callee->data.member_access.member;
 		if (strlen(member) >= out_size) {
-			timbr_err("Function name too long\n");
+			kerr(KAWA_E_SEMANTIC, callee,
+				 "method name `%s` too long", member);
 			exit(1);
 		}
 		// std.* / std.*.* functions live in the module under their bare
@@ -280,7 +281,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 										   LLVMInt32TypeInContext(c->context),
 										   "sizeof_cast");
 		}
-		timbr_err("sizeof: cannot determine type\n");
+		kerr(KAWA_E_TYPE, n, "sizeof: cannot determine type");
 		exit(1);
 	}
 
@@ -453,8 +454,8 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 									 n->line > 0 ? n->line : 1);
 				fn = LLVMGetNamedFunction(c->module, mangled);
 				if (!fn) {
-					timbr_err("Generic instantiation failed: %s\n",
-							  mangled);
+					kerr(KAWA_E_SEMANTIC, n,
+						 "generic instantiation of `%s` failed", mangled);
 					exit(1);
 				}
 				// Rewrite this call site to the specialization permanently.
@@ -528,7 +529,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			// the user-visible blocking threshold.
 			Type *chan_t = n->data_type;
 			if (!chan_t || chan_t->kind != TYPE_CHAN) {
-				timbr_err("make_chan requires a chan<T> context\n");
+				kdiag_help("annotate the binding: `let ch: chan<i32> = "
+						   "make_chan(...)`");
+				kerr(KAWA_E_TYPE, n, "make_chan requires a chan<T> context");
 				exit(1);
 			}
 			LLVMContextRef ctx = c->context;
@@ -735,7 +738,8 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 							 n->data.call.callee->data.member_access.member);
 					fn = declare_std_fn(c, qual);
 					if (!fn) {
-						timbr_err("Unknown std function: %s\n", qual);
+						kerr(KAWA_E_UNDEF, n,
+							 "unknown std function `%s`", qual);
 						exit(1);
 					}
 				}
@@ -786,7 +790,22 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				}
 			} else {
 				char *f_path = get_var_path(c, func_name);
-				timbr_err("Undefined function: %s\n", f_path);
+				// Did-you-mean over every declared fn in the program.
+				const char *cands[129];
+				int nc = 0;
+				for (ASTNode *g = c->program_root ? c->program_root->next
+												  : NULL;
+					 g && nc < 128; g = g->next)
+					if (g->type == NODE_FUNC_DECL)
+						cands[nc++] = g->data.func.name;
+				cands[nc] = NULL;
+				const char *alt = kdiag_closest(func_name, cands);
+				if (alt)
+					kdiag_help("a function with a similar name exists: "
+							   "`%s`",
+							   alt);
+				knerr(KAWA_E_UNDEF, n, func_name,
+					  "cannot find function `%s` in this scope", f_path);
 				exit(1);
 			}
 		}
@@ -836,14 +855,16 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 					}
 				}
 				if (matched < 0 || matched >= 256 || used[matched]) {
-					timbr_err("No unique parameter '%s' in call\n", label);
+					kerr(KAWA_E_ARGS, n,
+						 "no unique parameter `%s` in call", label);
 					exit(1);
 				}
 				used[matched] = 1;
 				reord[matched] = a;
 			}
 			if (!ok) {
-				timbr_err("If any argument is named, all must be named\n");
+				kerr(KAWA_E_ARGS, n,
+					 "if any argument is named, all must be named");
 				exit(1);
 			}
 			// Relink the chain in parameter order.
@@ -1076,7 +1097,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	case NODE_STRUCT_LITERAL: {
 		LLVMTypeRef s_type = get_llvm_type(c, n->data_type);
 		if (!s_type) {
-			timbr_err("Internal error: literal missing type\n");
+			kerr(KAWA_E_SEMANTIC, n, "literal missing type"); // internal
 			exit(1);
 		}
 
@@ -1099,7 +1120,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		}
 
 		if (LLVMGetTypeKind(s_type) != LLVMStructTypeKind) {
-			timbr_err("Internal error: struct literal missing type\n");
+			kerr(KAWA_E_SEMANTIC, n, "struct literal missing type"); // internal
 			exit(1);
 		}
 
@@ -1155,7 +1176,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		// error.
 		int arms_ok = LLVMTypeOf(tv) == LLVMTypeOf(ev);
 		if (!arms_ok) {
-			timbr_err("ternary arms must be scalars of matching type\n");
+			kerr(KAWA_E_TYPE, n, "ternary arms must be scalars of matching type");
 			exit(1);
 		}
 		LLVMValueRef phi =
@@ -1313,7 +1334,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			n->data.send.chan->data_type = chan_t;
 		}
 		if (!chan_t || chan_t->kind != TYPE_CHAN) {
-			timbr_err("send requires a chan<T>\n");
+			kerr(KAWA_E_TYPE, n, "send requires a chan<T>");
 			exit(1);
 		}
 		LLVMTypeRef ct = get_llvm_type(c, chan_t);
@@ -1452,7 +1473,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				n->data_type = chan_t->inner;
 		}
 		if (!chan_t || chan_t->kind != TYPE_CHAN) {
-			timbr_err("receive requires a chan<T>\n");
+			kerr(KAWA_E_TYPE, n, "receive requires a chan<T>");
 			exit(1);
 		}
 		LLVMTypeRef ct = get_llvm_type(c, chan_t);
@@ -1622,8 +1643,11 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		break;
 	}
 
-	timbr_err("Internal error: unknown AST node type in codegen_expr (%d)\n",
-			  n->type);
+	kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename ? c->source_filename
+													   : "<kawa>",
+				   NULL, n && n->line > 0 ? n->line : 0,
+				   "unknown AST node type %d in codegen_expr", // internal
+				   n->type);
 	exit(1);
 }
 
@@ -1872,7 +1896,62 @@ static LLVMValueRef build_str_view_field(KawaCompiler *c,
 								 field == 0 ? "str_d" : "str_l");
 }
 
-// Content comparison of two {ptr,len} views: memcmp over the shorter
+// Equality of two {ptr,len} views for == and !=: lengths gate the compare,
+// then one memcmp over the full length. Passing l_len (not a min() select)
+// as the size lets the optimizer fold a constant length into an inline
+// load-compare -- the three-way memcmp path cannot, which is why `w ==
+// "quick"` in hot loops must come through here, not build_str_memcmp.
+static LLVMValueRef build_str_eq(KawaCompiler *c, LLVMTypeRef view_t,
+								 LLVMValueRef l, LLVMValueRef r) {
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef i1_t = LLVMInt1TypeInContext(ctx);
+	LLVMValueRef ld = build_str_view_field(c, view_t, l, 0);
+	LLVMValueRef ll = build_str_view_field(c, view_t, l, 1);
+	LLVMValueRef rd = build_str_view_field(c, view_t, r, 0);
+	LLVMValueRef rl = build_str_view_field(c, view_t, r, 1);
+
+	// len_l == len_r && bytes equal over len. When both lengths are
+	// compile-time constants that differ, fold straight to false without
+	// touching memory.
+	if (LLVMIsAConstantInt(ll) && LLVMIsAConstantInt(rl) &&
+		LLVMConstIntGetSExtValue(ll) != LLVMConstIntGetSExtValue(rl))
+		return LLVMConstInt(i1_t, 0, 0);
+
+	LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(c->builder);
+	LLVMBasicBlockRef len_ok =
+		LLVMAppendBasicBlock(c->current_func, "str_len_ok");
+	LLVMBasicBlockRef str_eq_done =
+		LLVMAppendBasicBlock(c->current_func, "str_eq_done");
+	LLVMValueRef lens_eq =
+		LLVMBuildICmp(c->builder, LLVMIntEQ, ll, rl, "str_lens");
+	LLVMBuildCondBr(c->builder, lens_eq, len_ok, str_eq_done);
+
+	LLVMPositionBuilderAtEnd(c->builder, len_ok);
+	LLVMTypeRef i8ptr =
+		LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	LLVMTypeRef i32_t = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef fn_t =
+		LLVMFunctionType(i32_t, (LLVMTypeRef[]){i8ptr, i8ptr, i64_t}, 3, 0);
+	LLVMValueRef bcmp = LLVMGetNamedFunction(c->module, "memcmp");
+	if (!bcmp)
+		bcmp = LLVMAddFunction(c->module, "memcmp", fn_t);
+	LLVMValueRef args[3] = {ld, rd, ll};
+	LLVMValueRef call =
+		LLVMBuildCall2(c->builder, fn_t, bcmp, args, 3, "str_bcmp");
+	LLVMValueRef eq_bytes = LLVMBuildICmp(c->builder, LLVMIntEQ, call,
+										  LLVMConstInt(i32_t, 0, 0),
+										  "str_bytes_eq");
+	LLVMBuildBr(c->builder, str_eq_done);
+
+	LLVMPositionBuilderAtEnd(c->builder, str_eq_done);
+	LLVMValueRef incoming[2] = {
+		eq_bytes, LLVMConstInt(i1_t, 0, 0)};
+	LLVMBasicBlockRef preds[2] = {len_ok, entry_bb};
+	LLVMValueRef out = LLVMBuildPhi(c->builder, i1_t, "str_eq");
+	LLVMAddIncoming(out, incoming, preds, 2);
+	return out;
+}
 // length, ties broken by total length -- the same ordering strcmp gives
 // without scanning for terminators. Constant operands fold at -O2.
 static LLVMValueRef build_str_memcmp(KawaCompiler *c, LLVMTypeRef view_t,
@@ -1997,13 +2076,25 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 			str_relational(c, n->data.bin_op.right)) {
 			LLVMValueRef cmp;
 			if (LLVMGetTypeKind(LLVMTypeOf(l)) == LLVMStructTypeKind) {
-				// Fat {ptr,len} views: three-way content compare.
+				// Fat {ptr,len} views. Equality takes the specialized
+				// length-gated path so constant-length compares fold into
+				// inline load-compares; orderings keep the three-way
+				// content compare.
 				Type slice_t = {0};
 				slice_t.kind = TYPE_SLICE;
 				slice_t.inner = NULL;
 				slice_t.inner = arena_alloc(c->arena, sizeof(Type));
 				slice_t.inner->kind = TYPE_U8;
 				LLVMTypeRef view_t = get_llvm_type(c, &slice_t);
+				if (op == TOK_ISEQ)
+					return build_str_eq(c, view_t, l, r);
+				if (op == TOK_NOTEQ) {
+					// != is the negation of the same equality; emit the
+					// length-gated compare once and flip it.
+					LLVMValueRef eq =
+						build_str_eq(c, view_t, l, r);
+					return LLVMBuildNot(c->builder, eq, "str_ne");
+				}
 				cmp = build_str_memcmp(c, view_t, l, r);
 			} else {
 				cmp = build_strcmp_call(c, l, r);

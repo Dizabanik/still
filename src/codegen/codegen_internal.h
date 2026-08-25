@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "ast.h"
 #include "codegen.h"
+#include "diag.h"
 #include "timbr.h"
 #include <inttypes.h>
 #include <lexer.h>
@@ -17,6 +18,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// --- Diagnostics helpers ---
+// Coded errors anchored to the AST node's source line (rendered through
+// kdiag_line from the driver-provided source text). `knerr` anchors the
+// caret to a whole-word name on that line; plain kdiag_* still work for
+// non-AST contexts.
+#define kerr(code, node, ...)                                                   \
+	kdiag_error_at(code, c->source_filename ? c->source_filename : "<kawa>",    \
+				   NULL, (node) && (node)->line > 0 ? (node)->line : 0,         \
+				   __VA_ARGS__)
+#define knerr(code, node, name_, ...)                                           \
+	kdiag_error_named(code,                                                     \
+					  c->source_filename ? c->source_filename : "<kawa>",       \
+					  (node) && (node)->line > 0 ? (node)->line : 0,            \
+					  name_, __VA_ARGS__)
+#define kwarn(code, node, ...)                                                  \
+	kdiag_warn_at(code, c->source_filename ? c->source_filename : "<kawa>",     \
+				  NULL, (node) && (node)->line > 0 ? (node)->line : 0,          \
+				  __VA_ARGS__)
 
 // --- Struct Registry ---
 // Allocated from the KawaCompiler's arena.

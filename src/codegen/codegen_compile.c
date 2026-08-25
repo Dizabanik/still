@@ -441,7 +441,10 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 		if (LLVMVerifyModule(c->module, LLVMPrintMessageAction, &error)) {
 			if (getenv("KAWA_DUMP_BAD"))
 				LLVMPrintModuleToFile(c->module, "tmp/bad2.ll", NULL);
-			timbr_err("LLVM Module Verification Failed:\n%s\n", error);
+			kdiag_error_at(KAWA_E_SEMANTIC,
+						   c->source_filename ? c->source_filename : "<kawa>",
+						   NULL, 0, "LLVM module verification failed:\n%s",
+						   error);
 			LLVMDumpModule(c->module);
 			LLVMDisposeMessage(error);
 			exit(1);
@@ -454,7 +457,9 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	LLVMTargetRef target;
 	const char *triple = LLVMGetDefaultTargetTriple();
 	if (LLVMGetTargetFromTriple(triple, &target, &error_msg)) {
-		timbr_err("Target selection failed: %s\n", error_msg);
+		kdiag_error_at(KAWA_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+					   0, "target selection failed: %s", error_msg);
 		LLVMDisposeMessage(error_msg);
 		return;
 	}
@@ -504,9 +509,13 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	kawa_di_finalize(c);
 
 	if (LLVMWriteBitcodeToFile(c->module, filename) != 0)
-		timbr_err("Error writing bitcode\n");
+		kdiag_error_at(KAWA_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+					   0, "error writing bitcode");
 	if (LLVMPrintModuleToFile(c->module, "output.ll", &error_msg)) {
-		timbr_err("Writing file failed: %s\n", error_msg);
+		kdiag_error_at(KAWA_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+					   0, "writing file failed: %s", error_msg);
 		LLVMDisposeMessage(error_msg);
 	}
 
@@ -516,7 +525,9 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	const char *obj_path = "output.o";
 	if (LLVMTargetMachineEmitToFile(machine, c->module, obj_path,
 									LLVMObjectFile, &error_msg)) {
-		timbr_err("Emitting object failed: %s\n", error_msg);
+		kdiag_error_at(KAWA_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+					   0, "emitting object failed: %s", error_msg);
 		LLVMDisposeMessage(error_msg);
 	}
 

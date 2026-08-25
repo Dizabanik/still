@@ -1,5 +1,6 @@
 #include "ast.h"
 #include "timbr.h"
+#include <diag.h>
 #include <lexer.h>
 #include <parser.h>
 #include <stdarg.h>
@@ -49,8 +50,8 @@ static void report_error(Parser *p, const char *fmt, ...) {
 	char buffer[256];
 	vsnprintf(buffer, sizeof(buffer), fmt, args);
 	char *lT = get_line_text_parser(p);
-	timbr_diagnostic(TIMBR_ERROR, "Parser Error", p->lexer->filename, lT,
-					 p->cur.line, p->cur.posA, p->cur.len, buffer);
+	kdiag_error(KAWA_E_PARSE, p->lexer->filename, lT, p->cur.line,
+				p->cur.posA, p->cur.len > 0 ? p->cur.len : 1, "%s", buffer);
 	free(lT);
 	va_end(args);
 }
@@ -827,6 +828,7 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_IDENTIFIER) {
 		n->type = NODE_VAR_REF;
 		n->data.var_ref.name = p->cur.text;
+		n->line = p->cur.line; // diagnostics: undefined-variable carets
 		advance(p);
 	} else if (p->cur.type == TOK_LPAREN) {
 		// [FIX] Use lookahead to distinguish Cast vs Grouping
@@ -995,6 +997,7 @@ static ASTNode *parse_postfix(Parser *p) {
 			}
 			ASTNode *member = arena_alloc(p->arena, sizeof(ASTNode));
 			member->type = NODE_MEMBER_ACCESS;
+			member->line = p->prev.line;
 			member->data.member_access.object = expr;
 			member->data.member_access.member = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected member name");
@@ -1040,6 +1043,7 @@ static ASTNode *parse_postfix(Parser *p) {
 
 			ASTNode *member = arena_alloc(p->arena, sizeof(ASTNode));
 			member->type = NODE_MEMBER_ACCESS;
+			member->line = p->prev.line;
 			member->data.member_access.object = deref;
 			member->data.member_access.member = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected member name after ->");
@@ -1779,6 +1783,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 
 		int seen_default = 0;
 		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			int case_line = p->cur.line; // `case`/`default` keyword line
 			int is_default = 0;
 			ASTNode *case_expr = NULL;
 			if (p->cur.type == TOK_CASE) {
@@ -1813,6 +1818,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 
 			ASTNode *cs = arena_alloc(p->arena, sizeof(ASTNode));
 			cs->type = NODE_CASE;
+			cs->line = case_line;
 			cs->data.case_stmt.expr = case_expr;
 			// Wrap the statement chain in a NODE_BLOCK: codegen_stmt
 			// dispatches one node at a time, and only NODE_BLOCK iterates.

@@ -18,6 +18,7 @@ typedef struct Scope {
 	LLVMValueRef val;
 	LLVMTypeRef type;
 	struct ASTNode *node;
+	int used; // set by scope_find; drives the unused-variable warning
 	struct Scope *next;
 } Scope;
 
@@ -87,8 +88,15 @@ typedef struct {
 	// Current source line for instruction locations (updated per statement).
 	int di_line;
 
-	// Source filename for diagnostics (owned by the driver).
+	// Source filename + full source text for diagnostics (owned by the
+	// driver). source_text backs kdiag_line(), which pulls the offending
+	// line out of the program for caret rendering.
 	const char *source_filename;
+	const char *source_text;
+	int source_len;
+
+	// Emit at most one unreachable-statement warning per function body.
+	int warned_unreachable;
 
 	// Arena shared with the parser. Owns all codegen-side heap-ish memory:
 	// Scope frames, StructDef/AliasDef nodes, duplicated names. Lifetime

@@ -1,7 +1,9 @@
 #include <arena.h>
 #include <codegen.h>
+#include <diag.h>
 #include <lexer.h>
 #include <parser.h>
+#include <timbr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,6 +177,7 @@ static void usage(const char *prog) {
 			   "  --debug/-g   runtime bounds checks (trap on violation)\n"
 			   "  --test       run #[test] functions instead of main\n"
 		   "  -O0/-O1/-O2/-O3  optimization level passed through (default -O2)\n"
+		   "  --color=<when>   diagnostics color: auto|always|never (default auto)\n"
 		   "  --version    print version and exit\n"
 		   "  -h, --help   show this help\n",
 		   prog);
@@ -197,6 +200,12 @@ int main(int argc, char **argv) {
 			debug_build = 1;
 		} else if (strcmp(argv[i], "--test") == 0) {
 			test_mode = 1;
+		} else if (strcmp(argv[i], "--color=always") == 0 ||
+				   strcmp(argv[i], "--color=auto") == 0) {
+			timbr_color_override =
+				strcmp(argv[i], "--color=always") == 0 ? 1 : 0;
+		} else if (strcmp(argv[i], "--color=never") == 0) {
+			timbr_color_override = -1;
 		} else if (strncmp(argv[i], "-O", 2) == 0 &&
 				   argv[i][2] >= '0' && argv[i][2] <= '3' && !argv[i][3]) {
 			opt_level = argv[i][2] - '0';
@@ -221,6 +230,11 @@ int main(int argc, char **argv) {
 		return 2;
 	}
 
+	timbr_init();
+	// One summary line per process, on every exit path (parser errors exit
+	// from main; codegen errors call exit(1) deep inside emission).
+	atexit(kdiag_summary);
+
 	Arena a;
 	arena_init(&a, 1024 * 1024 * 10);
 
@@ -236,16 +250,19 @@ int main(int argc, char **argv) {
 
 	ASTNode *root = parse_program(&p);
 
-	if (p.had_error) {
-		fprintf(stderr, "[Kawa] Aborting due to parse errors.\n");
-		exit(1);
-	}
+	if (p.had_error)
+		exit(1); // atexit hook prints the summary
 
 	KawaCompiler kc;
 	kawa_init(&kc, "kawa_main", &a);
 	kc.test_mode = test_mode;
 	kawa_set_debug(&kc, debug_build);
 	kawa_set_source_file(&kc, src_path);
+	// Codegen errors only know a line number; the source text lets them
+	// render caret snippets like parser errors do.
+	kdiag_set_source(expanded, (int)strlen(expanded));
+	kc.source_text = expanded;
+	kc.source_len = (int)strlen(expanded);
 	kawa_compile(&kc, root);
 	kc.opt_level = opt_level;
 	kawa_optimize_and_write(&kc, "output.bc");

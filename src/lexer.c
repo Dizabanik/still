@@ -1,5 +1,6 @@
 #include "timbr.h"
 #include <ctype.h>
+#include <diag.h>
 #include <lexer.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -68,8 +69,8 @@ char *get_line_text_lexer(Lexer *l) {
 }
 static Token error_token(Lexer *l, const char *msg) {
 	char *lT = get_line_text_lexer(l);
-	timbr_diagnostic(TIMBR_ERROR, "Lexer Error", l->filename, lT, l->line,
-					 l->posA - l->posL, l->pos - l->posA + 1, msg);
+	kdiag_error(KAWA_E_PARSE, l->filename, lT, l->line, l->posA - l->posL,
+				(int)(l->pos - l->posA + 1), "Lex error: %s", msg);
 	free(lT);
 	l->had_error = 1;
 	return make_token(l, TOK_ERROR, "Error");

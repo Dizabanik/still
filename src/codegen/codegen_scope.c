@@ -383,14 +383,17 @@ void scope_push(KawaCompiler *c, const char *name, LLVMValueRef val,
 	s->val = val;
 	s->type = type;
 	s->node = node;
+	s->used = 0;
 	s->next = c->scope_stack;
 	c->scope_stack = s;
 }
 
 Scope *scope_find(KawaCompiler *c, const char *name) {
 	for (Scope *cur = c->scope_stack; cur; cur = cur->next) {
-		if (strcmp(cur->name, name) == 0)
+		if (strcmp(cur->name, name) == 0) {
+			cur->used = 1;
 			return cur;
+		}
 	}
 	return NULL;
 }
@@ -620,7 +623,18 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		Scope *s = scope_find(c, n->data.var_ref.name);
 		if (!s) {
 			char *v_path = get_var_path(c, n->data.var_ref.name);
-			timbr_err("Undefined variable '%s'\n", v_path);
+			// Did-you-mean over everything visible in the current chain.
+			const char *cands[33];
+			int nc = 0;
+			for (Scope *cur = c->scope_stack; cur && nc < 32; cur = cur->next)
+				cands[nc++] = cur->name;
+			cands[nc] = NULL;
+			const char *alt = kdiag_closest(n->data.var_ref.name, cands);
+			if (alt)
+				kdiag_help("a variable with a similar name exists: `%s`",
+						   get_var_path(c, alt));
+			knerr(KAWA_E_UNDEF, n, n->data.var_ref.name,
+				  "cannot find variable `%s` in this scope", v_path);
 			exit(1);
 		}
 		if (out_type)
@@ -662,7 +676,12 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 							? 4
 							: -1;
 					if (slot2 < 0) {
-						timbr_err("unknown channel field\n");
+						kdiag_note(
+							"channel fields: `buf`, `cap`, `head`, "
+							"`count`, `mask`");
+						kerr(KAWA_E_UNDEF, n,
+							 "chan<T> has no field `%s`",
+							 n->data.member_access.member);
 						exit(1);
 					}
 					LLVMTypeRef cllt = get_llvm_type(c, vt);
@@ -794,7 +813,8 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMValueRef ptr =
 			get_address(c, n->data.member_access.object, &container_type);
 		if (!ptr || !container_type) {
-			timbr_err("Internal error: failed to resolve member access base\n");
+			kerr(KAWA_E_SEMANTIC, n,
+				 "failed to resolve member access base"); // internal
 			exit(1);
 		}
 
@@ -949,7 +969,20 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			Scope *s = scope_find(c, obj->data.var_ref.name);
 			if (!s) {
 				char *v_path = get_var_path(c, obj->data.var_ref.name);
-				timbr_err("Undefined variable '%s'\n", v_path);
+				const char *cands[33];
+				int nc = 0;
+				for (Scope *cur = c->scope_stack; cur && nc < 32;
+					 cur = cur->next)
+					cands[nc++] = cur->name;
+				cands[nc] = NULL;
+				const char *alt =
+					kdiag_closest(obj->data.var_ref.name, cands);
+				if (alt)
+					kdiag_help(
+						"a variable with a similar name exists: `%s`",
+						get_var_path(c, alt));
+				knerr(KAWA_E_UNDEF, n, obj->data.var_ref.name,
+					  "cannot find variable `%s` in this scope", v_path);
 				exit(1);
 			}
 			base = s->val;
@@ -1080,7 +1113,7 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef addr_type = NULL;
 		LLVMValueRef addr = get_address(c, n->data.deref.expr, &addr_type);
 		if (!addr) {
-			timbr_err("Cannot take address of a non-lvalue\n");
+			kerr(KAWA_E_ARGS, n, "cannot take address of a non-lvalue");
 			exit(1);
 		}
 		return addr;
@@ -1089,7 +1122,7 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
 	LLVMTypeRef val_type = NULL;
 	LLVMValueRef addr = get_address(c, n, &val_type);
 	if (!addr || !val_type) {
-		timbr_err("Internal error: failed to resolve lvalue\n");
+		kerr(KAWA_E_SEMANTIC, n, "failed to resolve lvalue"); // internal
 		exit(1);
 	}
 
@@ -1111,7 +1144,8 @@ LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond) {
 	case LLVMPointerTypeKind:
 		return LLVMBuildIsNotNull(c->builder, cond, "ptr_to_bool");
 	default:
-		timbr_err("Condition must be bool, integer or pointer\n");
+		kdiag_error_at(KAWA_E_TYPE, "<kawa>", NULL, 0,
+					   "condition must be bool, integer or pointer");
 		exit(1);
 	}
 }
@@ -1230,6 +1264,7 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 		LLVMGetTypeKind(src) == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
 
-	timbr_err("Internal error: cannot coerce value in codegen\n");
+	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+				   "cannot coerce value in codegen"); // internal
 	exit(1);
 }

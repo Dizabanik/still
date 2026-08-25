@@ -150,9 +150,10 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd) {
 		char *name = LLVMPrintTypeToString(struct_type);
-		timbr_err("Internal error: unknown struct type in get_field_index "
-				  "(type=%s, field=%s)\n",
-				  name, field_name);
+		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+					   "unknown struct type in get_field_index "
+					   "(type=%s, field=%s)", // internal
+					   name, field_name);
 		LLVMDisposeMessage(name);
 		exit(1);
 	}
@@ -160,9 +161,9 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 		if (strcmp(sd->fields[i].name, field_name) == 0)
 			return i;
 	}
-	timbr_err("Internal error: no field '%s' on struct (LLVM verifier should "
-			  "have caught this earlier)\n",
-			  field_name);
+	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+				   "no field `%s` on struct", // internal
+				   field_name);
 	exit(1);
 }
 
@@ -170,16 +171,17 @@ LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 						   const char *field_name) {
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd) {
-		timbr_err("Internal error: unknown struct type in get_field_type\n");
+		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+					   "unknown struct type in get_field_type"); // internal
 		exit(1);
 	}
 	for (int i = 0; i < sd->field_count; i++) {
 		if (strcmp(sd->fields[i].name, field_name) == 0)
 			return sd->fields[i].type;
 	}
-	timbr_err("Internal error: no field '%s' on struct (LLVM verifier should "
-			  "have caught this earlier)\n",
-			  field_name);
+	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+				   "no field `%s` on struct", // internal
+				   field_name);
 	exit(1);
 }
 
@@ -368,7 +370,8 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	default:
 		// An unknown TypeKind is a compiler bug -- refuse to silently
 		// emit i32 (which previously caused miscompiles).
-		timbr_err("Internal error: unknown TypeKind %d in get_llvm_type\n",
+		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+					   "unknown TypeKind %d in get_llvm_type", // internal
 				  t->kind);
 		exit(1);
 	}

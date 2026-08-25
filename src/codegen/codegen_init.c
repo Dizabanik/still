@@ -13,7 +13,8 @@ void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
 	memset(c, 0, sizeof(*c));
 
 	if (!arena) {
-		timbr_err("kawa_init: arena must not be NULL\n");
+		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+					   "kawa_init: arena must not be NULL"); // internal
 		exit(1);
 	}
 	c->arena = arena;

@@ -103,8 +103,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// Defer/filter stacks are per-function; save and clear before the body.
 	DeferFrame *saved_defers = c->defer_stack;
 	FilterFrame *saved_filters = c->filter_stack;
+	Scope *fn_scope_base = c->scope_stack;
 	c->defer_stack = NULL;
 	c->filter_stack = NULL;
+	c->warned_unreachable = 0;
 
 	// Spill each parameter to an entry-block alloca so mem2reg can promote
 	// it; parameters used exactly once never touch memory after O3.
@@ -187,6 +189,22 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 				LLVMBuildRetVoid(c->builder);
 			else
 				LLVMBuildRet(c->builder, LLVMConstNull(ret_t));
+		}
+	}
+
+	// Unused-variable warnings: walk the scope entries this function pushed
+	// (everything above the entry snapshot). Parameters count too, matching
+	// the "declared but never read" contract. Underscore-prefixed names opt out.
+	if (!cur->data.func.is_test) {
+		for (Scope *sc = c->scope_stack; sc && sc != fn_scope_base; sc = sc->next) {
+			if (sc->used || !sc->name || sc->name[0] == '_')
+				continue;
+			ASTNode *dn = sc->node;
+			int pline = dn ? dn->line : 0;
+			kdiag_warn_at(KAWA_W_UNUSED,
+						  c->source_filename ? c->source_filename : "<kawa>",
+						  NULL, pline > 0 ? pline : 0,
+						  "variable `%s` is never used", sc->name);
 		}
 	}
 
