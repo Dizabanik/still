@@ -297,6 +297,22 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		return LLVMStructTypeInContext(c->context, elems, 3, 0);
 	}
 
+	case TYPE_CHAN:
+		// chan<T> is a buffered ring: { T* buf, i64 cap, i64 head,
+		// i64 count }. Single-threaded cooperative semantics -- blocking
+		// ops spin on drop{} yields, so no atomics or locks exist in the
+		// generated code.
+		t->is_signed = 0;
+		{
+			LLVMTypeRef elem = t->inner ? get_llvm_type(c, t->inner)
+										: LLVMInt8TypeInContext(c->context);
+			LLVMTypeRef fields[] = {
+				LLVMPointerType(elem, 0), LLVMInt64TypeInContext(c->context),
+				LLVMInt64TypeInContext(c->context),
+				LLVMInt64TypeInContext(c->context)};
+			return LLVMStructTypeInContext(c->context, fields, 4, 0);
+		}
+
 	case TYPE_SLICE:
 		// []T is a fat pointer { T* data, i64 len }: a view with no
 		// ownership and no capacity. Passed by value like a C struct;
@@ -307,7 +323,8 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 										: LLVMInt8TypeInContext(c->context);
 			LLVMTypeRef fields[] = {LLVMPointerType(elem, 0),
 									LLVMInt64TypeInContext(c->context)};
-			return LLVMStructTypeInContext(c->context, fields, 2, 0);
+			LLVMTypeRef st = LLVMStructTypeInContext(c->context, fields, 2, 0);
+			return st;
 		}
 
 	case TYPE_STRUCT: {

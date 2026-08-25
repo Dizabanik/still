@@ -14,6 +14,14 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	switch (n->type) {
 
 	case NODE_CALL:
+	case NODE_SEND:
+		// `ch <- v;` as a statement: the send's value is discarded.
+		(void)codegen_expr(c, n);
+		return;
+	case NODE_RECV:
+		// `<-ch;` drains one element.
+		(void)codegen_expr(c, n);
+		return;
 	case NODE_SIP: // `sip(h);` as a statement: run it for the resume side effect
 	case NODE_SET_POUR:
 		codegen_expr(c, n);
@@ -576,6 +584,143 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		return;
 	}
 
+	case NODE_SELECT: {
+		// select { case v = <- ch: ... default: ... }: poll each channel
+		// in declaration order and run the FIRST ready one. Nothing ready
+		// with a default runs the default; nothing ready without one
+		// yields (cooperative block) and re-polls.
+		LLVMContextRef ctx = c->context;
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+
+		int ncases = 0;
+		for (struct SelectCase *cs2 = n->data.select_stmt.cases; cs2;
+			 cs2 = cs2->next)
+			ncases++;
+		if (ncases > 8) {
+			timbr_err("select supports at most 8 channels\n");
+			exit(1);
+		}
+
+		struct SelectCase *cases[8] = {0};
+		LLVMValueRef chan_addrs[8] = {0};
+		LLVMTypeRef chan_ts[8] = {0};
+		int ci = 0;
+		for (struct SelectCase *cs2 = n->data.select_stmt.cases; cs2;
+			 cs2 = cs2->next, ci++) {
+			cases[ci] = cs2;
+			Type *ct2 = cs2->chan->data_type;
+			if (!ct2 || ct2->kind != TYPE_CHAN) {
+				timbr_err("select case requires a chan<T>\n");
+				exit(1);
+			}
+			chan_ts[ci] = get_llvm_type(c, ct2);
+			chan_addrs[ci] = get_address(c, cs2->chan, NULL);
+		}
+
+		LLVMBasicBlockRef retry_bb =
+			LLVMAppendBasicBlock(c->current_func, "sel_retry");
+		LLVMBasicBlockRef none_bb =
+			LLVMAppendBasicBlock(c->current_func, "sel_none");
+		LLVMBasicBlockRef done_bb =
+			LLVMAppendBasicBlock(c->current_func, "sel_done");
+		LLVMBasicBlockRef case_bbs[8];
+		for (int k = 0; k < ncases; k++)
+			case_bbs[k] =
+				LLVMAppendBasicBlock(c->current_func, "sel_case");
+
+		LLVMBuildBr(c->builder, retry_bb);
+
+		// Poll chain: each channel is checked in declaration order; the
+		// first with cnt > 0 wins, a fully-empty chain falls to none_bb.
+		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
+		for (int k = 0; k < ncases; k++) {
+			LLVMValueRef cnt_p = LLVMBuildStructGEP2(
+				c->builder, chan_ts[k], chan_addrs[k], 3, "");
+			LLVMValueRef cnt =
+				LLVMBuildLoad2(c->builder, i64_t, cnt_p, "sel_cnt");
+			LLVMValueRef ready = LLVMBuildICmp(
+				c->builder, LLVMIntUGT, cnt,
+				LLVMConstInt(i64_t, 0, 0), "sel_ready");
+			LLVMBasicBlockRef next_poll =
+				(k + 1 < ncases) ? LLVMAppendBasicBlock(
+									   c->current_func, "sel_poll")
+								 : none_bb;
+			LLVMValueRef br = LLVMBuildCondBr(c->builder, ready,
+											  case_bbs[k], next_poll);
+			set_branch_weights(c, br, 1, 99);
+			if (k + 1 < ncases)
+				LLVMPositionBuilderAtEnd(c->builder, next_poll);
+		}
+		if (ncases == 0)
+			LLVMBuildBr(c->builder, none_bb);
+
+		for (int k = 0; k < ncases; k++) {
+			LLVMPositionBuilderAtEnd(c->builder, case_bbs[k]);
+			// Receive from channel k (guaranteed non-empty here).
+			struct SelectCase *cs = cases[k];
+			Type *elem_ast =
+				cs->chan->data_type ? cs->chan->data_type->inner : NULL;
+			ASTNode recv_node = {0};
+			recv_node.type = NODE_RECV;
+			recv_node.data_type = elem_ast;
+			recv_node.line = n->line;
+			recv_node.data.recv.chan = cs->chan;
+			LLVMValueRef val = codegen_expr(c, &recv_node);
+
+			Scope *saved_scope = c->scope_stack;
+			if (cs->var_decl) {
+				LLVMValueRef vptr = create_entry_block_alloca(
+					c, LLVMTypeOf(val), cs->var_decl->data.var_decl.name);
+				LLVMBuildStore(c->builder, val, vptr);
+				scope_push(c, cs->var_decl->data.var_decl.name, vptr,
+						   LLVMTypeOf(val), cs->var_decl);
+			}
+			codegen_stmt(c, cs->body);
+			c->scope_stack = saved_scope;
+			if (!LLVMGetBasicBlockTerminator(
+					LLVMGetInsertBlock(c->builder)))
+				LLVMBuildBr(c->builder, done_bb);
+		}
+
+		LLVMPositionBuilderAtEnd(c->builder, none_bb);
+		if (n->data.select_stmt.has_default) {
+			codegen_stmt(c, n->data.select_stmt.default_body);
+			if (!LLVMGetBasicBlockTerminator(
+					LLVMGetInsertBlock(c->builder)))
+				LLVMBuildBr(c->builder, done_bb);
+		} else if (c->in_coroutine && c->current_coro_hdl) {
+			LLVMValueRef save_token =
+				LLVMBuildCall2(c->builder, c->coro_save_type,
+							   c->coro_save, &c->current_coro_hdl, 1,
+							   "save");
+			LLVMValueRef susp = LLVMBuildCall2(
+				c->builder, c->coro_suspend_type, c->coro_suspend,
+				(LLVMValueRef[]){save_token,
+								 LLVMConstInt(
+									 LLVMInt1TypeInContext(ctx), 0, 0)},
+				2, "yield");
+			LLVMBasicBlockRef resume_bb2 =
+				LLVMAppendBasicBlock(c->current_func, "sel_resume");
+			LLVMValueRef sw = LLVMBuildSwitch(c->builder, susp,
+											  c->coro_suspend_block, 2);
+			LLVMAddCase(sw,
+						LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
+						resume_bb2);
+			LLVMAddCase(sw,
+						LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
+						c->coro_cleanup_block);
+			LLVMPositionBuilderAtEnd(c->builder, resume_bb2);
+			LLVMBuildBr(c->builder, retry_bb);
+		} else {
+			timbr_err("select with no ready case blocks forever "
+					  "(no default, not in a coroutine)\n");
+			exit(1);
+		}
+
+		LLVMPositionBuilderAtEnd(c->builder, done_bb);
+		return;
+	}
+
 	case NODE_FILTER: {
 		// filter { ... } dregs (err) { ... }: try body with an explicit
 		// error slot. `press` stores into the slot and jumps to catch_bb.
@@ -657,8 +802,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef val = codegen_expr(c, n->data.press.target);
 		val = coerce_value(c, val, n->data.press.target->data_type, slot_t,
 						   dst_ast);
-		LLVMValueRef store = LLVMBuildStore(c->builder, val, target->err_slot);
-		LLVMSetVolatile(store, 1);
+		LLVMBuildStore(c->builder, val, target->err_slot);
 		// Defers registered between the active filter and this press run
 		// before control transfers to the handler.
 		for (DeferFrame *d = c->defer_stack; d != target->defers_at_entry;

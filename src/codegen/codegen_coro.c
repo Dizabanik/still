@@ -49,6 +49,12 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 		// spawning statement list is still live.
 		LLVMValueRef buf = LLVMGetParam(fn, 0);
 
+		// One shared suspend-exit block holding coro.end(false), exactly
+		// like clang: coro-split rewrites every block CONTAINING coro.end
+		// per-funclet (`ret %hdl` here, `ret void` in .resume). A default
+		// arm pointing at a bare ret without coro.end gets mangled into
+		// `unreachable` during splitting -- which silently deleted our
+		// mid-body suspends (the channel-blocking bug).
 		*suspend_bb = LLVMAppendBasicBlock(fn, "suspend");
 		*cleanup_bb = LLVMAppendBasicBlock(fn, "cleanup");
 		LLVMValueRef hdl0 = LLVMBuildCall2(
@@ -61,12 +67,14 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 			(LLVMValueRef[]){LLVMConstNull(LLVMTokenTypeInContext(ctx)),
 							 LLVMConstInt(LLVMInt1TypeInContext(ctx), 0, 0)},
 			2, "suspend");
+		// case 0 falls through to the initial body (below); case 1 (destroy)
+		// joins the shared exit too.
 		LLVMValueRef sw =
 			LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
 					LLVMAppendBasicBlock(fn, "resume"));
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
-					*cleanup_bb);
+					*suspend_bb);
 		return hdl0;
 	}
 
@@ -99,31 +107,52 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 						 LLVMConstInt(LLVMInt1TypeInContext(ctx), 0, 0)},
 		2, "suspend");
 
+	// Same clang contract as the elided path: the shared exit block holds
+	// coro.end(false); case 1 (destroy) funnels through it too.
 	*suspend_bb = LLVMAppendBasicBlock(fn, "suspend");
 	*cleanup_bb = LLVMAppendBasicBlock(fn, "cleanup");
 	LLVMValueRef sw = LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
 				LLVMAppendBasicBlock(fn, "resume"));
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
-				*cleanup_bb);
+				*suspend_bb);
 	return hdl;
 }
 
-// Shared epilogue: final suspend + coro.end + branch to the suspend block.
+// Shared epilogue: final suspend, then the coro.end-bearing exit block.
+// Clang contract (verified against -Xclang -disable-llvm-passes output):
+// the final suspend's case-0 arm and every mid-body switch's default arm
+// converge on ONE block that calls llvm.coro.end(false) -- coro-split
+// rewrites exactly those blocks per-funclet. `cleanup_bb` (case 1 /
+// destroy path) funnels through the same exit.
 void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
 					  LLVMBasicBlockRef suspend_bb) {
 	if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
-		// Final suspend. Both switch cases target cleanup; emit the
-		// unconditional branch directly so the pipeline gets a cleaner CFG.
-		(void)LLVMBuildCall2(
+		// Final suspend: case 1 -> shared exit; case 0 is impossible
+		// (nobody resumes a finished frame) but clang still routes it to
+		// the exit, so we do too.
+		LLVMValueRef fin = LLVMBuildCall2(
 			c->builder, c->coro_suspend_type, c->coro_suspend,
 			(LLVMValueRef[]){
 				LLVMConstNull(LLVMTokenTypeInContext(c->context)),
 				LLVMConstInt(LLVMInt1TypeInContext(c->context), 1, 0)},
 			2, "final");
-		LLVMBuildBr(c->builder, cleanup_bb);
+		LLVMValueRef fsw =
+			LLVMBuildSwitch(c->builder, fin, suspend_bb, 2);
+		LLVMAddCase(fsw,
+					LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
+					suspend_bb);
+		LLVMAddCase(fsw,
+					LLVMConstInt(LLVMInt8TypeInContext(c->context), 1, 0),
+					cleanup_bb);
+	} else if (LLVMGetBasicBlockParent(LLVMGetInsertBlock(c->builder)) ==
+			   NULL) {
+		return;
 	}
 	LLVMPositionBuilderAtEnd(c->builder, cleanup_bb);
+	LLVMBuildBr(c->builder, suspend_bb);
+
+	LLVMPositionBuilderAtEnd(c->builder, suspend_bb);
 	LLVMBuildCall2(
 		c->builder, c->coro_end_type, c->coro_end,
 		(LLVMValueRef[]){LLVMConstNull(LLVMPointerType(
@@ -131,7 +160,13 @@ void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
 						 LLVMConstInt(LLVMInt1TypeInContext(c->context), 0, 0),
 						 LLVMConstNull(LLVMTokenTypeInContext(c->context))},
 		3, "");
-	LLVMBuildBr(c->builder, suspend_bb);
+	// The original function returns the handle from here; in .resume/
+	// .destroy funclets coro-split rewrites this very instruction.
+	if (LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(
+			c->current_func))) == LLVMVoidTypeKind)
+		LLVMBuildRetVoid(c->builder);
+	else
+		LLVMBuildRet(c->builder, c->current_coro_hdl);
 }
 
 // brew { ... } -- anonymous coroutine task. Compiles the body into a fresh
@@ -299,11 +334,11 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
 			bb = LLVMGetNextBasicBlock(bb);
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 	}
-	c->scope_stack = NULL;
+	// Globals stay visible inside the task; locals of the spawner do not
+	// (their allocas belong to another function).
+	c->scope_stack = c->global_scope;
 	codegen_stmt(c, n->data.brew.body);
 	finish_coro_body(c, cleanup_bb, suspend_bb);
-	LLVMPositionBuilderAtEnd(c->builder, suspend_bb);
-	LLVMBuildRet(c->builder, hdl);
 
 	LLVMPositionBuilderAtEnd(c->builder, old_block);
 	c->current_func = old_func;

@@ -234,6 +234,12 @@ Token lexer_next(Lexer *l) {
 				advance(l);
 				return make_token(l, TOK_LEQ, "<=");
 			}
+			// `<-` channel receive (IDEAS 3). Send is `ch <- v`, which is
+			// IDENT followed by this same token.
+			if (peek(l) == '-') {
+				advance(l);
+				return make_token(l, TOK_RECV, "<-");
+			}
 			return make_token(l, TOK_LANGLE, "<");
 		}
 		if (c == '>') {

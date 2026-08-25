@@ -1,0 +1,14 @@
+basic 42
+pipe 0 1 2 done 99
+recv 42
+fa 10
+empty-ok
+got-a 100
+got-b 200
+counts 1 1
+out 1
+out 3
+out 5
+out 7
+cnt 2 cap 3
+after 7 left 1

@@ -103,6 +103,10 @@ typedef struct {
 	LLVMValueRef current_promise_ptr;
 
 	Scope *scope_stack;
+	// Head of the scope chain at FILE level (globals only). Coroutine
+	// bodies start from this snapshot so tasks can read globals without
+	// inheriting the spawning function's locals.
+	Scope *global_scope;
 	int lambda_counter;
 
 	// filter/dregs handler stack (top = innermost active catch).

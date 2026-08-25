@@ -1,0 +1,51 @@
+import stdc;
+
+// Pipeline benchmark: src -> s1 -> s2 -> drain over three capacity-64 rings.
+// Stages are brew{} coroutines that block on full/empty rings; the main task
+// polls the last ring with select{} and resumes stages from the default arm
+// when nothing is ready -- the canonical cooperative fan-in pattern.
+
+chan<i64> c2 = make_chan(1);
+chan<i64> c3 = make_chan(1);
+chan<i64> c4 = make_chan(1);
+
+const i64 N = 2000000;
+
+fn i64 step(i64 v) {
+    return (v * 3 + 1) ^ 9223372036854775808;
+}
+
+fn i32 main() {
+    let t1 = brew {
+        for (i64 i = 0; i < N; i += 1) { c2 <- step(i); }
+        drop(0);
+    };
+    let t2 = brew {
+        i64 sent = 0;
+        while (sent < N) {
+            i64 v = <-c2;
+            c3 <- step(v);
+            sent += 1;
+        }
+        drop(0);
+    };
+    let t3 = brew {
+        i64 fwd = 0;
+        while (fwd < N) {
+            i64 v = <-c3;
+            c4 <- step(v);
+            fwd += 1;
+        }
+        drop(0);
+    };
+    u64 sum = 0;
+    i64 got = 0;
+    while (got < N) {
+        select {
+            case v = <-c4: { sum += ((u64)v); got += 1; }
+            default: { sip(t1); sip(t2); sip(t3); }
+        }
+    }
+    printf("sum=%llu\n", sum);
+    return 0;
+}

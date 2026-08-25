@@ -27,7 +27,8 @@ typedef enum {
 	TYPE_ALIAS,
 	TYPE_PTR,
 	TYPE_AMP,
-	TYPE_SLICE
+	TYPE_SLICE,
+	TYPE_CHAN
 } TypeKind;
 
 typedef struct Type {
@@ -87,6 +88,9 @@ typedef enum {
 	NODE_EXTERN_FN,
 	NODE_ASM,
 	NODE_UNCHECKED_BLOCK,
+	NODE_SEND,
+	NODE_RECV,
+	NODE_SELECT,
 	NODE_SIZEOF,
 	NODE_CAST,
 	NODE_IMPORT,
@@ -253,6 +257,23 @@ struct ASTNode {
 			char *name;
 			Type *target_type;
 		} alias;
+		struct {
+			ASTNode *chan;
+			ASTNode *value;
+		} send;
+		struct {
+			ASTNode *chan;
+		} recv;
+		struct {
+			struct SelectCase {
+				ASTNode *var_decl; // NODE_VAR_DECL binding the received value (may be NULL)
+				ASTNode *chan;     // channel to receive from
+				ASTNode *body;
+				struct SelectCase *next;
+			} *cases;   // first ready wins; round-robin poll
+			int has_default;
+			ASTNode *default_body;
+		} select_stmt;
 		struct {
 			struct ASTNode *expr;
 		} deref;

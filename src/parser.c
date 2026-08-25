@@ -143,10 +143,18 @@ static int is_likely_cast(Parser *p) {
 	// (var)
 	if (t1.type == TOK_IDENTIFIER) {
 		Token t2 = lexer_next(&temp);
-		// If followed by ')' or '*', it's likely a type (Cast)
-		// If followed by '+', '-', etc., it's a variable (Grouping)
-		if (t2.type == TOK_RPAREN || t2.type == TOK_STAR) {
+		// If followed by ')' it's likely a type cast: (User).
+		// If followed by '*' AND another identifier/')' it's a pointer
+		// cast: (User*) -- `(v * 3)` has an INT literal after the star,
+		// which can only be multiplication.
+		if (t2.type == TOK_RPAREN) {
 			return 1;
+		}
+		if (t2.type == TOK_STAR) {
+			Token t3 = lexer_next(&temp);
+			// `(User*)`: the star closes the paren. `(v * 3)`: an operand
+			// follows the star, so it's multiplication.
+			return t3.type == TOK_RPAREN;
 		}
 	}
 	return 0;
@@ -245,6 +253,17 @@ static Type *parse_type(Parser *p) {
 		ch->inner = NULL;
 		t->kind = TYPE_SLICE;
 		t->inner = ch;
+	} else if (tok == TOK_IDENTIFIER && strcmp(p->cur.text, "chan") == 0 &&
+			   lexer_peek(p->lexer).type == TOK_LANGLE) {
+		// chan<T>: a buffered channel over T (IDEAS 3). Cooperative
+		// single-thread semantics: blocking ops yield via drop{}.
+		advance(p); // 'chan'
+		advance(p); // '<'
+		Type *elem = parse_type(p);
+		consume(p, TOK_RANGLE, "Expected '>' after channel element type");
+		t->kind = TYPE_CHAN;
+		t->inner = elem;
+		return t;
 	} else if (tok == TOK_IDENTIFIER) {
 		t->kind = TYPE_STRUCT;
 		t->name = p->cur.text;
@@ -354,6 +373,16 @@ static Type *unify_types(Parser *p, Type *a, Type *b) {
 
 // 2. Implement parse_unary
 static ASTNode *parse_unary(Parser *p) {
+	// Prefix channel receive: `<-ch` yields the next element (IDEAS 3).
+	if (p->cur.type == TOK_RECV) {
+		advance(p);
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_RECV;
+		n->data.recv.chan = parse_unary(p);
+		Type *ct = n->data.recv.chan->data_type;
+		n->data_type = (ct && ct->inner) ? ct->inner : NULL;
+		return n;
+	}
 	if (p->cur.type == TOK_STAR) {
 		advance(p); // Eat '*'
 		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
@@ -636,6 +665,20 @@ static ASTNode *parse_struct_literal(Parser *p) {
 	}
 	consume(p, TOK_RBRACE, "Expected '}'");
 	n->data.struct_lit.items = head;
+	return n;
+}
+
+// Prefix channel receive: `<-ch` yields the next element.
+static ASTNode *parse_recv(Parser *p) {
+	consume(p, TOK_RECV, "<-");
+	ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+	n->type = NODE_RECV;
+	n->data.recv.chan = parse_unary(p);
+	if (!n->data_type) {
+		// Stamp from the channel's element type when the operand names one.
+		Type *ct = n->data.recv.chan->data_type;
+		n->data_type = ct ? ct->inner : NULL;
+	}
 	return n;
 }
 
@@ -1308,6 +1351,16 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			tok_prec = 5;
 		if (p->cur.type == TOK_TILDE_EQ)
 			tok_prec = 2;
+		if (p->cur.type == TOK_RECV && lhs) {
+			// `ch <- v` channel send: the RECV token in operator position
+			// after an expression is the send arrow.
+			advance(p);
+			ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+			n->type = NODE_SEND;
+			n->data.send.chan = lhs;
+			n->data.send.value = parse_expr(p);
+			return n;
+		}
 		if (p->cur.type == TOK_QUESTION)
 			tok_prec = 1; // ternary: lowest, checked below
 		if (tok_prec < expr_prec)
@@ -1486,6 +1539,10 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		Token next = lexer_peek(p->lexer);
 		if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR)
 			is_c_style_decl = 1;
+		if (p->cur.type == TOK_IDENTIFIER &&
+			strcmp(p->cur.text, "chan") == 0 &&
+			next.type == TOK_LANGLE)
+			is_c_style_decl = 1;
 	}
 
 	if (p->cur.type == TOK_IDENTIFIER &&
@@ -1595,6 +1652,11 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			}
 		}
 
+		// A builtin constructor inherits the DECLARED type when its own
+		// inference can't know it (`chan<i32> ch = make_chan(4)`).
+		if (type && !is_orbit && init && init->type == NODE_CALL &&
+			!init->data_type)
+			init->data_type = type;
 		// FIX: Type Inference
 		if (!type) {
 			if (init && init->data_type) {
@@ -1814,6 +1876,99 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		drop->data.drop.val = parse_expr(p);
 		consume(p, TOK_SEMICOLON, ";");
 		return drop;
+	}
+	if (p->cur.type == TOK_IDENTIFIER &&
+		strcmp(p->cur.text, "select") == 0 &&
+		lexer_peek(p->lexer).type == TOK_LBRACE) {
+		// select { case v = <- ch: ... ... default: ... } (IDEAS 3).
+		// Polls each channel in order; first ready case runs. With no
+		// ready case and no default, yields (drop{}) and re-polls --
+		// cooperative blocking, zero atomics on the single thread.
+		advance(p); // 'select' (contextual keyword)
+		consume(p, TOK_LBRACE, "{");
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_SELECT;
+		struct SelectCase *head = NULL, **tail = &head;
+		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			if (p->cur.type == TOK_DEFAULT) {
+				advance(p);
+				consume(p, TOK_COLON, ":");
+				n->data.select_stmt.has_default = 1;
+				n->data.select_stmt.default_body =
+					parse_block(p);
+				continue;
+			}
+			int case_is_kw = p->cur.type == TOK_CASE ||
+							 (p->cur.type == TOK_IDENTIFIER &&
+							  strcmp(p->cur.text, "case") == 0);
+			if (!case_is_kw) {
+				report_error(p,
+							 "Expected 'case' or 'default' in select");
+				break;
+			}
+			advance(p); // 'case'
+			char *var_name = NULL;
+			Type *var_t = NULL;
+			if (p->cur.type == TOK_IDENTIFIER &&
+				strcmp(p->cur.text, "default") != 0) {
+				var_name = p->cur.text;
+				advance(p);
+			} else {
+				report_error(p, "Expected variable name in select case");
+			}
+			// `v = <- ch` or `v := <- ch`
+			if (p->cur.type == TOK_COLON_ASSIGN) {
+				advance(p);
+			} else if (p->cur.type == TOK_ASSIGN) {
+				advance(p);
+			} else {
+				report_error(p, "Expected '=' in select case");
+			}
+			consume(p, TOK_RECV, "Expected '<-' in select case");
+			ASTNode *chan_expr = parse_expr(p);
+			consume(p, TOK_COLON, ":");
+			// Bare channel names arrive untyped here (globals are not in
+			// p->decls); resolve against the symbol table so codegen's
+			// chan<T> assertion holds. Same fallback NODE_RECV uses.
+			if (!chan_expr->data_type &&
+				chan_expr->type == NODE_VAR_REF) {
+				for (int di = 0; di < p->decl_count; di++) {
+					if (strcmp(p->decls[di].name,
+							   chan_expr->data.var_ref.name) == 0 &&
+						p->decls[di].node->data_type) {
+						chan_expr->data_type =
+							p->decls[di].node->data_type;
+						break;
+					}
+				}
+			}
+			struct SelectCase *cs =
+				arena_alloc(p->arena, sizeof(struct SelectCase));
+			cs->chan = chan_expr;
+			cs->body = parse_block(p);
+			cs->next = NULL;
+			// Bind the received value as a fresh const-like decl.
+			if (var_name) {
+				Type *ct =
+					chan_expr->data_type ? chan_expr->data_type->inner
+										 : NULL;
+				ASTNode *vd =
+					arena_alloc(p->arena, sizeof(ASTNode));
+				vd->type = NODE_VAR_DECL;
+				vd->data.var_decl.name = var_name;
+				vd->data_type = ct;
+				var_t = ct;
+				cs->var_decl = vd;
+			} else {
+				cs->var_decl = NULL;
+			}
+			(void)var_t;
+			*tail = cs;
+			tail = &cs->next;
+		}
+		consume(p, TOK_RBRACE, "}");
+		n->data.select_stmt.cases = head;
+		return n;
 	}
 	if (p->cur.type == TOK_FILTER) {
 		advance(p);
@@ -2399,6 +2554,10 @@ parse_soa_struct:
 				Token next = lexer_peek(p->lexer);
 				if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR ||
 					next.type == TOK_LBRACKET)
+					is_global_decl = 1;
+				if (p->cur.type == TOK_IDENTIFIER &&
+					strcmp(p->cur.text, "chan") == 0 &&
+					next.type == TOK_LANGLE)
 					is_global_decl = 1;
 			}
 

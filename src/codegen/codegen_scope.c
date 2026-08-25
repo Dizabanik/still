@@ -177,6 +177,35 @@ int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
 // requested type. Only called after global_init_is_constant() returned true.
 LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 									LLVMTypeRef dst, Type *dst_ast) {
+	// String literal as a str/[]u8 view initializer (`const str s = "...";`):
+	// const_eval_expr has no string case (returns NULL), so handle the view
+	// BEFORE that call -- a constant {ptr,len} pair over the literal bytes
+	// (kept NUL-terminated so C-variadic decay keeps working). Without this
+	// the global silently became zeroinitializer -- a null view that
+	// segfaulted on first .data access.
+	if (n->type == NODE_STRING_LIT && dst_ast &&
+		dst_ast->kind == TYPE_SLICE &&
+		LLVMGetTypeKind(dst) == LLVMStructTypeKind) {
+		size_t blen = strlen(n->data.str_lit.s_val);
+		LLVMValueRef data = LLVMConstStringInContext(
+			c->context, n->data.str_lit.s_val, (unsigned)blen + 1, 0);
+		LLVMValueRef arr_t = LLVMTypeOf(data); // sized by ConstString rules
+		LLVMValueRef str_g =
+			LLVMAddGlobal(c->module, arr_t, ".gstrview");
+		LLVMSetInitializer(str_g, data);
+		LLVMSetGlobalConstant(str_g, 1);
+		LLVMValueRef p0 = LLVMConstInBoundsGEP2(
+			arr_t, str_g, (LLVMValueRef[]){LLVMConstInt(
+							   LLVMInt32TypeInContext(c->context), 0, 0)},
+			1);
+		p0 = LLVMConstBitCast(
+			p0, LLVMPointerType(LLVMInt8TypeInContext(c->context), 0));
+		LLVMValueRef len_v =
+			LLVMConstInt(LLVMInt64TypeInContext(c->context),
+						 (unsigned long long)blen, 0);
+		return LLVMConstNamedStruct(dst, (LLVMValueRef[]){p0, len_v}, 2);
+	}
+
 	LLVMValueRef v = const_eval_expr(c, n, dst);
 	if (!v)
 		return LLVMConstNull(dst);
@@ -198,6 +227,7 @@ LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 		LLVMSetAlignment(str_g, 1);
 		return str_g;
 	}
+
 
 	// Integer literal -> FP destination (e.g. `f64 x = 5;`): the folder
 	// emits i32 for int literals regardless of the destination kind.
@@ -408,7 +438,7 @@ static Type *deref_value_type(KawaCompiler *c, ASTNode *n) {
 //
 // The body uses only portable libc: snprintf into a stack buffer, then
 // write(2) to fd 2 -- avoids FILE*/stderr plumbing that differs per libc.
-static LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
+LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 	if (c->trap_fn)
 		return c->trap_fn;
 	LLVMContextRef ctx = c->context;
@@ -615,6 +645,25 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				Scope *sv = scope_find(
 					c, n->data.member_access.object->data.var_ref.name);
 				vt = (sv && sv->node) ? sv->node->data_type : NULL;
+				if (vt && vt->kind == TYPE_CHAN) {
+					// Channel introspection: .buf/.cap/.head/.count map
+					// straight onto ring-record fields.
+					int slot2 =
+						strcmp(n->data.member_access.member, "buf") == 0
+							? 0
+						: strcmp(n->data.member_access.member, "cap") == 0
+							? 1
+						: strcmp(n->data.member_access.member, "head") == 0
+							? 2
+							: 3;
+					LLVMTypeRef cllt = get_llvm_type(c, vt);
+					LLVMValueRef fld2 = LLVMBuildStructGEP2(
+						c->builder, cllt, sv->val, slot2, "chan_fld");
+					if (out_type)
+						*out_type = LLVMStructGetTypeAtIndex(
+							cllt, (unsigned)slot2);
+					return fld2;
+				}
 				if (vt && vt->kind == TYPE_SLICE)
 					pair_addr = sv->val;
 				else

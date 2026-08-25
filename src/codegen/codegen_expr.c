@@ -159,6 +159,42 @@ static LLVMValueRef resolve_callee(KawaCompiler *c, ASTNode *callee, char *out,
 	return LLVMGetNamedFunction(c->module, out);
 }
 
+// --- Channel helpers (IDEAS 3) ---------------------------------------
+// The ring buffer is cooperative-only: a blocked op re-suspends the
+// enclosing coroutine via drop{}-style yields. No atomics, no locks --
+// on the ready path an op is one load, one store, two counter bumps.
+
+static LLVMValueRef chan_field_ptr(KawaCompiler *c, LLVMTypeRef chan_t,
+								   LLVMValueRef chan_addr, int field,
+								   const char *name) {
+	return LLVMBuildStructGEP2(c->builder, chan_t, chan_addr, field, name);
+}
+
+static void chan_yield(KawaCompiler *c) {
+	LLVMContextRef ctx = c->context;
+	if (!c->in_coroutine || !c->current_coro_hdl)
+		return;
+	LLVMValueRef save_token =
+		LLVMBuildCall2(c->builder, c->coro_save_type, c->coro_save,
+					   &c->current_coro_hdl, 1, "save");
+	LLVMValueRef suspend = LLVMBuildCall2(
+		c->builder, c->coro_suspend_type, c->coro_suspend,
+		(LLVMValueRef[]){save_token,
+						 LLVMConstInt(LLVMInt1TypeInContext(c->context),
+									  0, 0)},
+		2, "yield");
+	LLVMBasicBlockRef resume_bb =
+		LLVMAppendBasicBlock(c->current_func, "chan_resume");
+	LLVMValueRef sw =
+		LLVMBuildSwitch(c->builder, suspend, c->coro_suspend_block, 2);
+	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
+				resume_bb);
+	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 1, 0),
+				c->coro_cleanup_block);
+	LLVMPositionBuilderAtEnd(c->builder, resume_bb);
+}
+
+
 LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	if (!n)
 		return LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0);
@@ -440,6 +476,74 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 					return sat;
 			}
 			// fall through: user-defined qadd or mismatched types.
+		}
+		if (!fn && strcmp(func_name, "make_chan") == 0) {
+			// make_chan(cap): allocate the ring buffer and fill the
+			// {buf, cap, head, count} record. The element type comes from
+			// the assignment context (chan<T>). Ring byte size is derived
+			// from a null-GEP -- no target data needed at compile time.
+			Type *chan_t = n->data_type;
+			if (!chan_t || chan_t->kind != TYPE_CHAN) {
+				timbr_err("make_chan requires a chan<T> context\n");
+				exit(1);
+			}
+			LLVMContextRef ctx = c->context;
+			LLVMTypeRef ct = get_llvm_type(c, chan_t);
+			LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
+			LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+			LLVMTypeRef i8ptr =
+				LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+
+			long long cap = 64; // default capacity
+			if (n->data.call.args &&
+				n->data.call.args->type == NODE_LITERAL)
+				cap = n->data.call.args->data.literal.i64_val;
+
+			LLVMTypeRef malloc_t =
+				LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_t}, 1, 0);
+			LLVMValueRef malloc_f =
+				LLVMGetNamedFunction(c->module, "malloc");
+			if (!malloc_f)
+				malloc_f = LLVMAddFunction(c->module, "malloc", malloc_t);
+
+			// sizeof(elem) = ptrtoint(gep null[1]).
+			LLVMValueRef null_elem_ptr =
+				LLVMConstNull(LLVMPointerType(elem_t, 0));
+			LLVMValueRef one_gep = LLVMBuildGEP2(
+				c->builder, elem_t, null_elem_ptr,
+				(LLVMValueRef[]){LLVMConstInt(i64_t, 1, 0)}, 1,
+				"elem_sz_probe");
+			LLVMValueRef elem_sz =
+				LLVMBuildPtrToInt(c->builder, one_gep, i64_t, "elem_sz");
+			LLVMValueRef ring_bytes = LLVMBuildMul(
+				c->builder, elem_sz,
+				LLVMConstInt(i64_t, (unsigned long long)cap, 0),
+				"ring_bytes");
+
+			LLVMValueRef buf_v = LLVMBuildCall2(c->builder, malloc_t,
+												malloc_f, &ring_bytes, 1,
+												"chan_ring");
+
+			LLVMValueRef alloca =
+				create_entry_block_alloca(c, ct, "chan_new");
+			LLVMTypeRef buf_fld_t = LLVMPointerType(elem_t, 0);
+			LLVMBuildStore(
+				c->builder,
+				LLVMBuildPointerCast(c->builder, buf_v, buf_fld_t,
+									 "ring_cast"),
+				LLVMBuildStructGEP2(c->builder, ct, alloca, 0, ""));
+			LLVMBuildStore(c->builder,
+						   LLVMConstInt(i64_t,
+										(unsigned long long)cap, 0),
+						   LLVMBuildStructGEP2(c->builder, ct, alloca, 1,
+											   ""));
+			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, 0, 0),
+						   LLVMBuildStructGEP2(c->builder, ct, alloca, 2,
+											   ""));
+			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, 0, 0),
+						   LLVMBuildStructGEP2(c->builder, ct, alloca, 3,
+											   ""));
+			return LLVMBuildLoad2(c->builder, ct, alloca, "chan_val");
 		}
 		if (!fn && (strcmp(func_name, "sum") == 0 ||
 					strcmp(func_name, "max") == 0 ||
@@ -1140,6 +1244,231 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		return set_load;
 	}
 
+
+	case NODE_SEND: {
+		// ch <- v: if the ring is full, yield and re-poll; else store at
+		// slot (head+count) % cap and bump count. Ready path: 1 load,
+		// 1 store, 1 add, 1 wrap.
+		LLVMContextRef ctx = c->context;
+		Type *chan_t = n->data.send.chan->data_type;
+		if (!chan_t && n->data.send.chan->type == NODE_VAR_REF) {
+			Scope *sc = scope_find(c,
+								   n->data.send.chan->data.var_ref.name);
+			chan_t = (sc && sc->node) ? sc->node->data_type : NULL;
+			n->data.send.chan->data_type = chan_t;
+		}
+		if (!chan_t || chan_t->kind != TYPE_CHAN) {
+			timbr_err("send requires a chan<T>\n");
+			exit(1);
+		}
+		LLVMTypeRef ct = get_llvm_type(c, chan_t);
+		LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+
+		LLVMValueRef chan_addr =
+			get_address(c, n->data.send.chan, NULL);
+
+		LLVMValueRef cnt_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 3, "cnt_p");
+		LLVMValueRef cap_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 1, "cap_p");
+		LLVMValueRef head_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "head_p");
+		LLVMValueRef buf_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "buf_p");
+
+		LLVMValueRef val = codegen_expr(c, n->data.send.value);
+		val = coerce_value(c, val, n->data.send.value->data_type, elem_t,
+						   chan_t->inner);
+
+		// check_bb is a true loop header: every coroutine resume re-enters
+		// it, so capacity is re-read fresh after each suspension -- no
+		// volatiles needed, the CFG carries the ordering.
+		LLVMBasicBlockRef check_bb =
+			LLVMAppendBasicBlock(c->current_func, "send_check");
+		LLVMBasicBlockRef retry_bb =
+			LLVMAppendBasicBlock(c->current_func, "send_full");
+		LLVMBasicBlockRef do_send_bb =
+			LLVMAppendBasicBlock(c->current_func, "send_put");
+		LLVMBasicBlockRef done_bb =
+			LLVMAppendBasicBlock(c->current_func, "send_done");
+
+		LLVMBuildBr(c->builder, check_bb);
+		LLVMPositionBuilderAtEnd(c->builder, check_bb);
+		LLVMValueRef cur_cnt =
+			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt");
+		LLVMValueRef cur_cap =
+			LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap");
+		LLVMValueRef full =
+			LLVMBuildICmp(c->builder, LLVMIntUGE, cur_cnt, cur_cap,
+						  "is_full");
+		set_branch_weights(c, LLVMBuildCondBr(c->builder, full, retry_bb,
+											  do_send_bb),
+						   1, 99);
+
+		// Full: cooperative block -- suspend; resumption loops back to
+		// re-poll rather than falling into the store.
+		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
+		if (c->in_coroutine && c->current_coro_hdl) {
+			chan_yield(c);
+			LLVMBuildBr(c->builder, check_bb);
+		} else {
+			// Outside any coroutine there is nothing to yield to: a full
+			// ring here is a program bug. Trap like a bounds failure.
+			LLVMValueRef msg = LLVMBuildGlobalStringPtr(
+				c->builder, "send on full channel", "trap_msg");
+			LLVMValueRef file_v = LLVMBuildGlobalStringPtr(
+				c->builder,
+				c->source_filename ? c->source_filename : "?",
+				"trap_file");
+			LLVMValueRef targs[3] = {
+				msg, file_v,
+				LLVMConstInt(LLVMInt32TypeInContext(ctx),
+							 n->line > 0 ? n->line : 0, 1)};
+			LLVMValueRef tf = get_or_declare_trap_fn(c);
+			LLVMBuildCall2(c->builder,
+						   LLVMGlobalGetValueType(tf), tf, targs, 3,
+						   "");
+			LLVMBuildUnreachable(c->builder);
+		}
+
+		LLVMPositionBuilderAtEnd(c->builder, do_send_bb);
+		cur_cnt = LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt2");
+		cur_cap = LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap2");
+		LLVMValueRef head =
+			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
+		LLVMValueRef buf =
+			LLVMBuildLoad2(c->builder,
+						   LLVMPointerType(elem_t, 0), buf_p, "ring");
+		LLVMValueRef end = LLVMBuildAdd(c->builder, head, cur_cnt,
+										"end");
+		// Wrap without a branch when the buffer size is a power of two;
+		// the general case uses urem.
+		LLVMValueRef slot_idx =
+			LLVMBuildURem(c->builder, end, cur_cap, "slot");
+		LLVMValueRef slot =
+			LLVMBuildGEP2(c->builder, elem_t, buf, &slot_idx, 1,
+						  "slot_p");
+		LLVMBuildStore(c->builder, val, slot);
+		LLVMBuildStore(c->builder,
+					   LLVMBuildNUWAdd(c->builder, cur_cnt,
+									   LLVMConstInt(i64_t, 1, 0),
+									   "cnt_inc"),
+					   cnt_p);
+		LLVMBuildBr(c->builder, done_bb);
+		LLVMPositionBuilderAtEnd(c->builder, done_bb);
+		return val;
+	}
+
+	case NODE_RECV: {
+		// <-ch: if empty, yield and re-poll; else load head, advance it
+		// modulo cap, decrement count.
+		LLVMContextRef ctx = c->context;
+		Type *chan_t = n->data.recv.chan->data_type;
+		if (!chan_t && n->data.recv.chan->type == NODE_VAR_REF) {
+			Scope *sc = scope_find(c,
+								   n->data.recv.chan->data.var_ref.name);
+			chan_t = (sc && sc->node) ? sc->node->data_type : NULL;
+			n->data.recv.chan->data_type = chan_t;
+			if (chan_t && chan_t->inner)
+				n->data_type = chan_t->inner;
+		}
+		if (!chan_t || chan_t->kind != TYPE_CHAN) {
+			timbr_err("receive requires a chan<T>\n");
+			exit(1);
+		}
+		LLVMTypeRef ct = get_llvm_type(c, chan_t);
+		LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+
+		LLVMValueRef chan_addr =
+			get_address(c, n->data.recv.chan, NULL);
+
+		LLVMValueRef cnt_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 3, "rcnt_p");
+		LLVMValueRef cap_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 1, "rcap_p");
+		LLVMValueRef head_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "rhead_p");
+		LLVMValueRef buf_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "rbuf_p");
+
+		// Same loop-header discipline as send: resume re-enters the check
+		// with freshly loaded count/head, never a stale snapshot.
+		LLVMBasicBlockRef check_bb =
+			LLVMAppendBasicBlock(c->current_func, "recv_check");
+		LLVMBasicBlockRef retry_bb =
+			LLVMAppendBasicBlock(c->current_func, "recv_empty");
+		LLVMBasicBlockRef do_recv_bb =
+			LLVMAppendBasicBlock(c->current_func, "recv_get");
+		LLVMBasicBlockRef done_bb =
+			LLVMAppendBasicBlock(c->current_func, "recv_done");
+
+		LLVMBuildBr(c->builder, check_bb);
+		LLVMPositionBuilderAtEnd(c->builder, check_bb);
+		LLVMValueRef cur_cnt =
+			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt");
+		set_branch_weights(
+			c,
+			LLVMBuildCondBr(c->builder,
+							LLVMBuildICmp(c->builder, LLVMIntEQ, cur_cnt,
+										  LLVMConstInt(i64_t, 0, 0),
+										  "is_empty"),
+							retry_bb, do_recv_bb),
+			1, 99);
+
+		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
+		if (c->in_coroutine && c->current_coro_hdl) {
+			chan_yield(c);
+			LLVMBuildBr(c->builder, check_bb);
+		} else {
+			// Same as send: nothing to schedule us -- trap.
+			LLVMValueRef msg2 = LLVMBuildGlobalStringPtr(
+				c->builder, "receive on empty channel", "trap_msg");
+			LLVMValueRef file_v2 = LLVMBuildGlobalStringPtr(
+				c->builder,
+				c->source_filename ? c->source_filename : "?",
+				"trap_file");
+			LLVMValueRef targs2[3] = {
+				msg2, file_v2,
+				LLVMConstInt(LLVMInt32TypeInContext(ctx),
+							 n->line > 0 ? n->line : 0, 1)};
+			LLVMValueRef tf2 = get_or_declare_trap_fn(c);
+			LLVMBuildCall2(c->builder,
+						   LLVMGlobalGetValueType(tf2), tf2, targs2, 3,
+						   "");
+			LLVMBuildUnreachable(c->builder);
+		}
+
+		LLVMPositionBuilderAtEnd(c->builder, do_recv_bb);
+		LLVMValueRef head =
+			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
+		LLVMValueRef buf =
+			LLVMBuildLoad2(c->builder, LLVMPointerType(elem_t, 0), buf_p,
+						   "ring");
+		LLVMValueRef slot =
+			LLVMBuildGEP2(c->builder, elem_t, buf, &head, 1, "slot_p");
+		LLVMValueRef out = LLVMBuildLoad2(c->builder, elem_t, slot,
+										  "recv_val");
+		LLVMValueRef cap_v =
+			LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap");
+		LLVMValueRef new_head = LLVMBuildNUWAdd(
+			c->builder, head, LLVMConstInt(i64_t, 1, 0), "head1");
+		new_head = LLVMBuildURem(c->builder, new_head, cap_v,
+								 "head_wrap");
+		LLVMBuildStore(c->builder, new_head, head_p);
+		LLVMValueRef cnt_now =
+			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt3");
+		LLVMBuildStore(
+			c->builder,
+			LLVMBuildNSWSub(c->builder, cnt_now,
+							LLVMConstInt(i64_t, 1, 0), "cnt_dec"),
+			cnt_p);
+		LLVMBuildBr(c->builder, done_bb);
+		LLVMPositionBuilderAtEnd(c->builder, done_bb);
+		return out;
+	}
+
 	case NODE_SIP: {
 		LLVMValueRef hdl = codegen_expr(c, n->data.sip.handle);
 		LLVMValueRef is_done = LLVMBuildCall2(c->builder, c->coro_done_type,
@@ -1819,6 +2148,22 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 	int r_signed = n->data.bin_op.right->data_type
 					   ? type_is_signed(c, n->data.bin_op.right->data_type)
 					   : 0;
+
+	// A bare integer literal defaults to i32 (signed); when it is paired
+	// with an unsigned operand of at least its width, the operation follows
+	// the unsigned side -- `u32 h * 16777619` must wrap like C's
+	// `uint32_t * int`, not take the signed no-wrap fast path (nsw makes
+	// the deliberate wrap poison and the optimizer mangles the result).
+	if ((l_signed != r_signed) &&
+		LLVMGetTypeKind(l_ty) == LLVMIntegerTypeKind &&
+		LLVMGetTypeKind(r_ty) == LLVMIntegerTypeKind) {
+		unsigned lw = LLVMGetIntTypeWidth(l_ty);
+		unsigned rw = LLVMGetIntTypeWidth(r_ty);
+		if (l_signed && !r_signed && rw >= lw)
+			l_signed = 0; // literal vs unsigned var: go unsigned
+		else if (!l_signed && r_signed && lw >= rw)
+			r_signed = 0;
+	}
 
 	if (LLVMGetTypeKind(l_ty) == LLVMIntegerTypeKind &&
 		LLVMGetTypeKind(r_ty) == LLVMIntegerTypeKind && l_ty != r_ty) {

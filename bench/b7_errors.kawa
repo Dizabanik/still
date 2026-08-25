@@ -1,0 +1,40 @@
+import stdc;
+
+// Typed errors on a hot validation path (IDEAS 3): each record runs through
+// a filter{} body that presses a ParseErr payload on rejection. The success
+// path pays only the fall-through; the error path is one store + branch.
+
+struct ParseErr {
+    i32 code;
+    i32 pos;
+}
+
+const i64 N = 200000000;
+
+fn i32 main() {
+    i64 ok_count = 0;
+    i32 acc = 0;
+    for (i64 i = 0; i < N; i += 1) {
+        u32 x = ((u32)(i * 2654435761));
+        filter {
+            if ((x % 7) == 3) {
+                ParseErr e;
+                e.code = 1;          // bad checksum
+                e.pos = ((i32)(x % 1000));
+                press err = e;
+            }
+            if ((x & 0xFF) == 0xFF) {
+                ParseErr e2;
+                e2.code = 2;         // sentinel byte
+                e2.pos = ((i32)(x >> 8));
+                press err = e2;
+            }
+            acc += ((i32)x);
+            ok_count += 1;
+        } dregs (err: ParseErr) {
+            acc -= err.code * err.pos;
+        }
+    }
+    printf("ok=%d acc=%d\n", ((i32)ok_count), acc);
+    return 0;
+}

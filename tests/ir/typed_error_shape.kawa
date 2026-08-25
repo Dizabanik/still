@@ -18,5 +18,5 @@ fn i32 main() {
 // CHECK: %filter.err = alloca %ParseErr
 // CHECK-NOT: invoke
 // CHECK-NOT: landingpad
-// CHECK: store volatile %ParseErr
+// CHECK: store %ParseErr
 // CHECK: br label %dregs

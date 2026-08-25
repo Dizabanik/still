@@ -162,7 +162,8 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 		codegen_stmt(c, cur->data.func.body);
 		finish_coro_body(c, cleanup_bb, suspend_bb);
-		LLVMPositionBuilderAtEnd(c->builder, suspend_bb);
+		// finish_coro_body now terminates the shared exit itself (ret hdl
+		// after coro.end); nothing left to emit on that block.
 
 		LLVMMetadataRef md_str = LLVMMDStringInContext2(ctx, "drip", 4);
 		LLVMMetadataRef md_args[] = {md_str};

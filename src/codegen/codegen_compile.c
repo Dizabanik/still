@@ -173,6 +173,10 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			codegen_global_decl(c, scanner, &pending_inits);
 	}
 
+	// Snapshot the file-level scope (globals) so coroutine bodies can
+	// reference them without seeing the spawning function's locals.
+	c->global_scope = c->scope_stack;
+
 	// Generic detection (IDEAS 2.2): a fn whose return or param type
 	// mentions `T` (a single-uppercase-letter "struct" type) is generic.
 	// Such fns are registered here and instantiated per call site with a

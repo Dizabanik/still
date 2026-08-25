@@ -1,0 +1,101 @@
+import stdc;
+
+// Channels (IDEAS 3): ring-buffer chan<T> with cooperative blocking.
+// Sends/receives that cannot proceed suspend the enclosing coroutine;
+// outside a coroutine they trap. select polls channels in declaration
+// order; default runs when nothing is ready.
+
+chan<i32> pipe = make_chan(1);
+chan<i32> fa = make_chan(2);
+chan<i32> fb = make_chan(2);
+// tasks close over globals only (no closures), so pipeline stages use
+// file-scope channels:
+chan<i32> mid = make_chan(4);
+chan<i32> out = make_chan(4);
+
+fn i32 main() {
+    // 1. basic send/receive through a capacity-1 ring
+    let t0 = brew { pipe <- 42; drop(1); };
+    sip(t0);
+    i32 v = <-pipe;
+    printf("basic %d\n", v);
+
+    // 2. blocking send: producer stalls on full ring until main drains
+    let t1 = brew {
+        pipe <- 0;
+        pipe <- 1;
+        pipe <- 2;
+        drop(99);
+    };
+    sip(t1); i32 a = <-pipe;
+    sip(t1); i32 b = <-pipe;
+    sip(t1); i32 c = <-pipe;
+    i32 fin = sip(t1);
+    printf("pipe %d %d %d done %d\n", a, b, c, fin);
+
+    // 3. blocking receive: consumer waits for the producer
+    let t2 = brew {
+        i32 x = <-pipe;
+        drop(x + 5);
+    };
+    pipe <- 37;
+    sip(t2);
+    i32 got = sip(t2);
+    printf("recv %d\n", got);
+
+    // 4. select with ready case + default on empty
+    fa <- 10;
+    select {
+        case p = <-fa: { printf("fa %d\n", p); }
+        default: { printf("unreachable\n"); }
+    }
+    select {
+        case q = <-fb: { printf("fb %d\n", q); }
+        default: { printf("empty-ok\n"); }
+    }
+
+    // 5. select across two channels fed by two tasks
+    let pa = brew { fa <- 100; drop(1); };
+    let pb = brew { fb <- 200; drop(2); };
+    i32 na = 0; i32 nb = 0;
+    while (na < 1 || nb < 1) {
+        select {
+            case x = <-fa: { na = 1; printf("got-a %d\n", x); }
+            case y = <-fb: { nb = 1; printf("got-b %d\n", y); }
+            default: { sip(pa); sip(pb); }
+        }
+    }
+    printf("counts %d %d\n", na, nb);
+
+    // 6. pipeline: two stages hand off through rings (global chans above)
+    let prod = brew {
+        i32 i = 0;
+        while (i < 4) { mid <- i * 2; i = i + 1; }
+        drop(0);
+    };
+    sip(prod);
+    let stage = brew {
+        i32 j = 0;
+        while (j < 4) {
+            i32 w = <-mid;
+            out <- w + 1;
+            j = j + 1;
+        }
+        drop(0);
+    };
+    sip(stage);
+    i32 k = 0;
+    while (k < 4) {
+        i32 r = <-out;
+        printf("out %d\n", r);
+        k = k + 1;
+    }
+
+    // 7. channel introspection: count/cap fields after traffic
+    chan<i32> m = make_chan(3);
+    m <- 7;
+    m <- 8;
+    printf("cnt %d cap %d\n", m.count, m.cap);
+    i32 z = <-m;
+    printf("after %d left %d\n", z, m.count);
+}

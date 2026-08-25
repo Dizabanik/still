@@ -99,6 +99,7 @@ typedef enum {
 	TOK_BANG,	 // ! (logical not)
 	TOK_PERCENT, // % (modulo)
 	TOK_QUESTION, // ? (ternary)
+	TOK_RECV,	 // <- (channel receive / send operator half)
 	TOK_IN,		 // 'in' for loops
 	TOK_ISEQ,	 // ==
 	TOK_NOTEQ,	 // !=

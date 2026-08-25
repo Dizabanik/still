@@ -89,6 +89,10 @@ LLVMValueRef kawa_build_sat_op(KawaCompiler *c, const char *op,
 							   Type *elem_ast, LLVMValueRef l,
 							   LLVMValueRef r);
 
+// Lazily-defined trap (bounds checks etc.); declared here for channel
+// blocking-failure traps in codegen_expr.
+LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c);
+
 // --- codegen_metadata.c ---
 void init_metadata(KawaCompiler *c);
 void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type);
