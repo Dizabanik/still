@@ -474,6 +474,10 @@ Token lexer_next(Lexer *l) {
 				type = TOK_LET;
 			else if (strcmp(text, "const") == 0)
 				type = TOK_CONST;
+			else if (strcmp(text, "extern") == 0)
+				type = TOK_EXTERN;
+			else if (strcmp(text, "asm") == 0)
+				type = TOK_ASM;
 			else if (strcmp(text, "mut") == 0)
 				type = TOK_MUT;
 			else if (strcmp(text, "enum") == 0)

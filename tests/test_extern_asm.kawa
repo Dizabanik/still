@@ -1,0 +1,21 @@
+// extern "c" fn declarations (IDEAS 2.8): exact C prototypes linked from
+// libc without header translation. Inline asm blocks as a side-effecting
+// barrier.
+import stdc;
+
+extern "c" fn f64 sqrt(f64 x);
+extern "c" fn i32 abs(i32 n);
+extern "c" fn i64 labs(i64 n);
+extern "c" fn i32 printf(char* fmt, ...);
+
+fn i32 main() {
+    printf("sqrt=%.4f\n", sqrt(2.0));
+    printf("labs=%lld abs=%d\n", labs(-50), abs(-7));
+    asm {
+        "nop"
+        "nop"
+    }
+    asm { "nop" }
+    printf("asm ok\n");
+    return 0;
+}

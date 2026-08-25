@@ -1,0 +1,57 @@
+// IDEAS section 2 speed features: comptime calls (2.1), generics (2.2),
+// unchecked blocks (2.3), coro heap elision (2.6), SoA layout (2.7),
+// extern "c" + asm (2.8).
+import stdc;
+
+// --- 2.1 comptime: pure fns run at compile time ---
+pure fn i64 fib(i64 n) {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+const F10 = comptime fib(10);
+const SQ = comptime fib(7) + fib(5);
+
+// --- 2.2 generics: T is monomorphized per call site ---
+fn T max_of(T a, T b) {
+    if (a > b) { return a; }
+    return b;
+}
+
+// --- 2.7 SoA: ps[i].f rewrites to ps.f[i] ---
+#[soa] struct Particles {
+    [4]f32 x;
+    [4]f32 y;
+}
+
+extern "c" fn f64 sqrt(f64 x);
+
+fn i32 main() {
+    printf("fib=%lld sq=%lld\n", ((i64)F10), ((i64)SQ));
+
+    let a = max_of(3, 9);
+    let b = max_of(1.5f32, 2.5f32);
+    printf("max=%d %.1f\n", ((i32)a), ((f64)b));
+
+    Particles ps;
+    for (let i = 0; i < 4; i += 1) {
+        ps.x[i] = ((f32)i);
+        ps.y[i] = 10.0f32;
+    }
+    // Both spellings hit the same per-field storage:
+    ps[0].x = ps[0].x + ps[0].y; // rewrite -> ps.x[0]
+    let v = ps[0].x + ps[2].y;
+    printf("soa=%.1f\n", ((f64)v));
+
+    // unchecked: in-bounds loop compiles without checks even at --debug
+    let sum = 0;
+    unchecked {
+        for (let i = 0; i < 4; i += 1) { sum += ((i32)ps.x[i]); }
+    }
+    printf("sum=%d\n", ((i32)sum));
+
+    printf("sqrt=%.2f\n", sqrt(16.0));
+    asm {
+        "nop"
+    }
+    return 0;
+}

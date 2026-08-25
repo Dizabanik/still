@@ -14,13 +14,17 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	switch (n->type) {
 
 	case NODE_CALL:
+	case NODE_SIP: // `sip(h);` as a statement: run it for the resume side effect
 	case NODE_SET_POUR:
 		codegen_expr(c, n);
 		return;
 
 	case NODE_BLOCK: {
+		ASTNode *saved_list = c->cur_stmt_list;
+		c->cur_stmt_list = n->data.block.stmts;
 		for (ASTNode *s = n->data.block.stmts; s; s = s->next)
 			codegen_stmt(c, s);
+		c->cur_stmt_list = saved_list;
 		return;
 	}
 
@@ -74,7 +78,17 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				}
 			}
 			if (!handled_slice_view) {
+			// Brew binding: let the coro emitter see this decl + the
+			// statement list so it can prove the handle never escapes
+			// and put the frame on the stack.
+			ASTNode *saved_brew_decl = c->cur_brew_decl;
+			c->cur_brew_decl =
+				(n->data.var_decl.init->type == NODE_BREW ||
+				 n->data.var_decl.init->type == NODE_CAST)
+					? n
+					: NULL;
 			init_val = codegen_expr(c, n->data.var_decl.init);
+			c->cur_brew_decl = saved_brew_decl;
 			// Bare var refs carry no parser-side type; stamp from their
 			// declaration so shape-aware coercions (array -> slice) fire.
 			if (!n->data.var_decl.init->data_type &&
@@ -666,6 +680,29 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		return;
 	}
 
+	case NODE_UNCHECKED_BLOCK:
+		// No bounds checks inside, even at --debug. The depth counter
+		// makes nesting work for free; every check site asks
+		// `c->unchecked_depth || !c->debug_build`.
+		c->unchecked_depth++;
+		if (n->data.block.stmts)
+			codegen_stmt(c, n->data.block.stmts);
+		c->unchecked_depth--;
+		return;
+
+	case NODE_ASM: {
+		const char *cons =
+			n->data.asm_block.constraints ? n->data.asm_block.constraints : "";
+		LLVMTypeRef asm_t = LLVMFunctionType(
+			LLVMVoidTypeInContext(c->context), NULL, 0, 0);
+		LLVMValueRef asm_val = LLVMGetInlineAsm(
+			asm_t, n->data.asm_block.asm_template,
+			strlen(n->data.asm_block.asm_template), cons, strlen(cons),
+			/*hasSideEffects*/ 1, /*isAlignStack*/ 0,
+			LLVMInlineAsmDialectATT, /*CanThrow*/ 0);
+		LLVMBuildCall2(c->builder, asm_t, asm_val, NULL, 0, "");
+		return;
+	}
 	default:
 		break;
 	}

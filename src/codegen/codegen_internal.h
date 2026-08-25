@@ -58,6 +58,11 @@ static inline int is_fp_kind(LLVMTypeKind k) {
 		   k == LLVMFloatTypeKind || k == LLVMDoubleTypeKind;
 }
 
+// Shared integer folder (codegen_scope.c; used by comptime too). Returns 1
+// and writes *out on success. Wrap/UB semantics match build_int_binop.
+int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
+				   int lhs_signed, int rhs_signed, unsigned long long *out);
+
 // --- codegen_intrinsics.c (built-in reductions) ---
 // Emits `internal <acc> @kawa.<op>(ptr data, i64 len[, ptr d2, i64 len2])`
 // with a canonical vectorizer-perfect reduction loop. op is one of
@@ -141,6 +146,15 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n);
 LLVMValueRef build_coro_frame(KawaCompiler *c, LLVMValueRef fn,
 							  int promise_index, LLVMBasicBlockRef *cleanup_bb,
 							  LLVMBasicBlockRef *suspend_bb);
+
+// Same, with heap elision: when use_stack_frame is set the coroutine frame
+// is allocated in the caller's stack (exact size via llvm.coro.size) and no
+// malloc path exists in the emitted code.
+LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
+								 int promise_index,
+								 LLVMBasicBlockRef *cleanup_bb,
+								 LLVMBasicBlockRef *suspend_bb,
+								 int use_stack_frame);
 void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
 					  LLVMBasicBlockRef suspend_bb);
 

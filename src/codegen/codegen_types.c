@@ -105,9 +105,15 @@ static int kind_is_signed_int(TypeKind k) {
 }
 
 int type_is_signed(KawaCompiler *c, Type *t) {
-	(void)c;
 	if (!t)
 		return 0;
+	// Inside an instantiated generic, sign comes from the concrete type.
+	if (c->generic_instantiating && t->kind == TYPE_STRUCT && t->name) {
+		for (int gi = 0; gi < c->generic_param_count; gi++) {
+			if (strcmp(c->generic_param_names[gi], t->name) == 0)
+				return type_is_signed(c, c->generic_param_types[gi]);
+		}
+	}
 	return kind_is_signed_int(t->kind);
 }
 
@@ -211,6 +217,14 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		}
 
 	case TYPE_STRUCT: {
+		// Generic instantiation (IDEAS 2.2): a bare type-param reference
+		// resolves through the active instantiation map.
+		if (c->generic_instantiating && t->name) {
+			for (int gi = 0; gi < c->generic_param_count; gi++) {
+				if (strcmp(c->generic_param_names[gi], t->name) == 0)
+					return get_llvm_type(c, c->generic_param_types[gi]);
+			}
+		}
 		// Follow alias chains first: `alias Bar = Foo` means a value of
 		// declared type Bar is laid out exactly like Foo.
 		Type *alias_target = resolve_alias_type(c, t->name);

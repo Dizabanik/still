@@ -11,6 +11,8 @@ typedef enum {
 	TOK_FN,
 	TOK_LET,
 	TOK_CONST,
+	TOK_EXTERN,
+	TOK_ASM,
 	TOK_ORBIT,
 	TOK_BREW,
 	TOK_SIP,

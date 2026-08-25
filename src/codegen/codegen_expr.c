@@ -223,6 +223,142 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef fn = resolve_callee(c, n->data.call.callee, func_name,
 										 sizeof(func_name));
 
+		// Generic instantiation (IDEAS 2.2). A call naming a registered
+		// generic fn monomorphizes it for the concrete argument types:
+		// the mangled instance (name__T0_T1) is codegen'd on first use and
+		// cached in the module -- subsequent calls hit the same symbol.
+		if (!fn) {
+			for (int gfi = 0; gfi < c->generic_fn_count; gfi++) {
+				ASTNode *gfn = c->generic_fns[gfi];
+				if (strcmp(gfn->data.func.name, func_name) != 0)
+					continue;
+				// Collect concrete arg types (scope-stamp bare refs).
+				Type *concrete[8];
+				int ci = 0;
+				int ok = 1;
+				for (ASTNode *a = n->data.call.args; a; a = a->next, ci++) {
+					Type *at = a->data_type;
+					if (!at && a->type == NODE_VAR_REF) {
+						Scope *sv = scope_find(c, a->data.var_ref.name);
+						if (sv && sv->node && sv->node->data_type)
+							at = sv->node->data_type;
+					}
+					if (!at || ci >= 8) {
+						ok = 0;
+						break;
+					}
+					concrete[ci] = at;
+				}
+				if (!ok)
+					break; // untyped args: fall through to error path
+				char mangled[192];
+				int mo = snprintf(mangled, sizeof(mangled), "%s",
+								  func_name);
+				for (int mi = 0; mi < ci; mi++) {
+					const char *tn = "T";
+					switch (concrete[mi]->kind) {
+					case TYPE_I8: tn = "i8"; break;
+					case TYPE_U8: tn = "u8"; break;
+					case TYPE_I16: tn = "i16"; break;
+					case TYPE_U16: tn = "u16"; break;
+					case TYPE_I32: tn = "i32"; break;
+					case TYPE_U32: tn = "u32"; break;
+					case TYPE_I64: tn = "i64"; break;
+					case TYPE_U64: tn = "u64"; break;
+					case TYPE_F16: tn = "f16"; break;
+					case TYPE_BF16: tn = "bf16"; break;
+					case TYPE_F32: tn = "f32"; break;
+					case TYPE_F64: tn = "f64"; break;
+					default: tn = concrete[mi]->name ? concrete[mi]->name : "?";
+					}
+					mo += snprintf(mangled + mo,
+								   (unsigned)(sizeof(mangled) - mo),
+								   "__%s", tn);
+				}
+				if (LLVMGetNamedFunction(c->module, mangled)) {
+					fn = LLVMGetNamedFunction(c->module, mangled);
+					break;
+				}
+				// Bind params -> concrete types, then emit the instance.
+				c->generic_param_count = 0;
+				ASTNode *gp = gfn->data.func.args;
+				int gpi = 0;
+				for (ASTNode *a2 = n->data.call.args; a2 && gp;
+					 a2 = a2->next, gp = gp->next) {
+					Type *pt = gp->data_type;
+					while (pt && (pt->kind == TYPE_ARRAY ||
+								  pt->kind == TYPE_SLICE ||
+								  pt->kind == TYPE_PTR))
+						pt = pt->inner;
+					if (pt && pt->kind == TYPE_STRUCT && pt->name &&
+						strlen(pt->name) == 1 && pt->name[0] == 'T') {
+						c->generic_param_names[gpi] =
+							pt->name; // always "T" today
+						c->generic_param_types[gpi] = concrete[gpi];
+						gpi++;
+					}
+				}
+				c->generic_param_count = gpi;
+				c->generic_instantiating = 1;
+				// Emit directly under the mangled name so distinct
+				// specializations never collide on the plain symbol.
+				// Save/restore the caller's emission state: the instance's
+				// body leaves the builder parked in its own function.
+				LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
+				LLVMValueRef saved_fn2 = c->current_func;
+				LLVMTypeRef saved_rt2 = c->current_ret_type;
+				Scope *saved_scope = c->scope_stack;
+				// Drop any caller debug location first: the instance's body
+				// sets locations scoped to ITS subprogram, and a call we
+				// emit afterwards must not inherit that scope.
+				LLVMSetCurrentDebugLocation2(c->builder,
+											 (LLVMMetadataRef)NULL);
+				char *saved_name = gfn->data.func.name;
+				gfn->data.func.name = arena_strdup(c->arena, mangled);
+				codegen_func_decl(c, gfn, NULL);
+				gfn->data.func.name = saved_name;
+				c->generic_param_count = 0;
+				c->generic_instantiating = 0;
+				LLVMPositionBuilderAtEnd(c->builder, saved_bb);
+				c->current_func = saved_fn2;
+				c->current_ret_type = saved_rt2;
+				c->scope_stack = saved_scope;
+				// n->line can be 0 (postfix nodes aren't stamped); fall
+				// back to the enclosing function's entry line so the
+				// re-anchor always lands in THIS subprogram's scope.
+				kawa_di_set_location(c,
+									 n->line > 0 ? n->line : 1);
+				fn = LLVMGetNamedFunction(c->module, mangled);
+				if (!fn) {
+					timbr_err("Generic instantiation failed: %s\n",
+							  mangled);
+					exit(1);
+				}
+				// Rewrite this call site to the specialization permanently.
+				n->data.call.callee->type = NODE_VAR_REF;
+				n->data.call.callee->data.var_ref.name =
+					arena_strdup(c->arena, mangled);
+				// Give the call its concrete return type so `let x =
+				// generic(...)` infers correctly (the parser skipped
+				// generics when building its signature table).
+				if (gfn->data.func.ret_type && !n->data_type) {
+					Type *rt = gfn->data.func.ret_type;
+					if (rt->kind == TYPE_STRUCT && rt->name &&
+						strlen(rt->name) == 1) {
+						// Bare T: clone with the first param's concrete
+						// type so later uses don't need the map.
+						Type *conc =
+							arena_alloc(c->arena, sizeof(Type));
+						*conc = *concrete[0];
+						n->data_type = conc;
+					} else {
+						n->data_type = rt;
+					}
+				}
+				break;
+			}
+		}
+
 		// Built-in reductions (sum/max/min/dot) and saturating narrow-int
 		// ops (qadd/qsub/qmul) intercept before ordinary function
 		// resolution. Reductions need array/slice args of a numeric element
@@ -922,6 +1058,22 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_BREW:
 		return codegen_brew(c, n);
+
+	case NODE_ASM: {
+		// Inline asm as a side-effecting barrier expression. No operand
+		// plumbing in v1: the template runs verbatim (AT&T dialect).
+		LLVMTypeRef asm_t = LLVMFunctionType(
+			LLVMVoidTypeInContext(c->context), NULL, 0, 0);
+		const char *cons =
+			n->data.asm_block.constraints ? n->data.asm_block.constraints : "";
+		LLVMValueRef asm_val = LLVMGetInlineAsm(
+			asm_t, n->data.asm_block.asm_template,
+			strlen(n->data.asm_block.asm_template), cons, strlen(cons),
+			/*hasSideEffects*/ 1, /*isAlignStack*/ 0,
+			LLVMInlineAsmDialectATT, /*CanThrow*/ 0);
+		LLVMBuildCall2(c->builder, asm_t, asm_val, NULL, 0, "");
+		return LLVMConstNull(LLVMInt32TypeInContext(c->context));
+	}
 
 	default:
 		break;

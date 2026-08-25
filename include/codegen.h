@@ -46,6 +46,22 @@ typedef struct {
 	// Debug build: emit runtime checks (bounds traps). Release builds pay
 	// literally nothing -- no check instructions are generated at all.
 	int debug_build;
+	// >0 while emitting an `unchecked { ... }` block: bounds checks are
+	// suppressed regardless of debug_build. Nested blocks just count.
+	int unchecked_depth;
+	// Statement list currently being emitted (for brew escape analysis).
+	struct ASTNode *cur_stmt_list;
+	// While emitting `let h = brew {...}`: the decl node, for escape analysis.
+	struct ASTNode *cur_brew_decl;
+	// Generics (IDEAS 2.2): declared type parameters of the generic fn
+	// currently being instantiated ("T" -> concrete Type*), plus the
+	// registry of generic fn ASTs awaiting instantiation.
+	char *generic_param_names[8];
+	Type *generic_param_types[8];
+	int generic_param_count;
+	int generic_instantiating;
+	struct ASTNode *generic_fns[64];
+	int generic_fn_count;
 
 	// Optimization level from -O0..-O3 (default 2). Selects the pass
 	// pipeline in kawa_optimize_and_write; -O3 adds aggressive vectorize
@@ -56,6 +72,7 @@ typedef struct {
 	// main. Collected during the program walk, runner synthesized after.
 	int test_mode;
 	ASTNode *test_fns[256];
+	struct ASTNode *program_root; // for comptime fn lookup
 	int test_fn_count;
 
 	// Lazily-declared noreturn trap: kawa_trap(msg, file, line).
@@ -158,6 +175,11 @@ void kawa_set_debug(KawaCompiler *c, int debug);
 // Source filename used in trap diagnostics.
 void kawa_set_source_file(KawaCompiler *c, const char *filename);
 void kawa_compile(KawaCompiler *c, ASTNode *root);
+// Comptime: evaluate `n` as an integer constant, interpreting calls to pure
+// functions with the tree-walking evaluator (recursion-guarded). Returns an
+// LLVMConstantRef of the requested width or NULL when not foldable.
+LLVMValueRef kawa_comptime_eval(KawaCompiler *c, ASTNode *n,
+								unsigned result_width, int *out_signed);
 void kawa_optimize_and_write(KawaCompiler *c, const char *filename);
 
 #endif

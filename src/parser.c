@@ -64,6 +64,8 @@ static void synchronize(Parser *p) {
 		case TOK_FN:
 		case TOK_LET:
 		case TOK_CONST:
+		case TOK_EXTERN:
+		case TOK_ASM:
 		case TOK_STRUCT:
 		case TOK_IMPL:
 		case TOK_IF:
@@ -86,6 +88,7 @@ void parser_init(Parser *p, Lexer *l, Arena *a) {
 	p->panic_mode = 0;
 	p->decl_count = 0;
 	p->fn_sig_count = 0;
+	p->soa_count = 0;
 }
 
 static void advance(Parser *p) {
@@ -458,6 +461,19 @@ static void parse_enum(Parser *p, ASTNode ***tail);
 
 // Returns 1 if the upcoming '{ ... }' looks like a struct literal.
 // Returns 0 if it looks like a block code.
+// True when `name` resolves to a variable whose declared type is a
+// #[soa]-marked struct.
+static int is_soa_struct_var(Parser *p, const char *name) {
+	ASTNode *decl = find_decl(p, name);
+	if (!decl || !decl->data_type ||
+		decl->data_type->kind != TYPE_STRUCT || !decl->data_type->name)
+		return 0;
+	for (int i = 0; i < p->soa_count; i++)
+		if (strcmp(p->soa_structs[i], decl->data_type->name) == 0)
+			return 1;
+	return 0;
+}
+
 static int peek_is_struct_literal(Parser *p) {
 	Lexer temp = *p->lexer; // Clone lexer state to peek without consuming
 
@@ -714,6 +730,37 @@ static ASTNode *parse_primary(Parser *p) {
 			consume(p, TOK_RPAREN, "Expected ')'");
 			return expr;
 		}
+	} else if (p->cur.type == TOK_ASM) {
+		// asm { "instructions" : "constraints" }; -- inline asm, last
+		// resort. The template is emitted verbatim; `$N` refers to the
+		// operands in LLVM's syntax. v1 has no operand plumbing: the
+		// block is a side-effecting barrier.
+		advance(p);
+		n->type = NODE_ASM;
+		consume(p, TOK_LBRACE, "Expected '{' after asm");
+		if (p->cur.type != TOK_STRING_LIT)
+			report_error(p, "Expected instruction string");
+		char *tmpl = p->cur.text;
+		advance(p);
+		while (p->cur.type == TOK_STRING_LIT) {
+			// Adjacent string literals concatenate (multi-line asm).
+			size_t len = strlen(tmpl) + strlen(p->cur.text) + 2;
+			char *joined = arena_alloc(p->arena, len);
+			snprintf(joined, len, "%s\n%s", tmpl, p->cur.text);
+			tmpl = joined;
+			advance(p);
+		}
+		char *constraints = NULL;
+		if (p->cur.type == TOK_COLON) {
+			advance(p);
+			if (p->cur.type != TOK_STRING_LIT)
+				report_error(p, "Expected constraint string");
+			constraints = p->cur.text;
+			advance(p);
+		}
+		consume(p, TOK_RBRACE, "Expected '}' to close asm");
+		n->data.asm_block.asm_template = tmpl;
+		n->data.asm_block.constraints = constraints;
 	} else if (p->cur.type == TOK_BREW) {
 		advance(p);
 		n->type = NODE_BREW;
@@ -784,6 +831,29 @@ static ASTNode *parse_postfix(Parser *p) {
 	while (1) {
 		if (p->cur.type == TOK_DOT) {
 			advance(p);
+			// SoA rewrite (IDEAS 2.7): `ps[i].x` on a #[soa] struct value
+			// becomes `ps.x[i]` -- member access binds before indexing, so
+			// each field is its own contiguous array. Applied at parse time
+			// by rebuilding the node chain.
+			if (expr->type == NODE_INDEX &&
+				expr->data.index.object->type == NODE_VAR_REF &&
+				is_soa_struct_var(
+					p, expr->data.index.object->data.var_ref.name)) {
+				char *mname2 = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected member name");
+				ASTNode *member2 = arena_alloc(p->arena, sizeof(ASTNode));
+				member2->type = NODE_MEMBER_ACCESS;
+				member2->data.member_access.object =
+					expr->data.index.object;
+				member2->data.member_access.member = mname2;
+				ASTNode *index2 = arena_alloc(p->arena, sizeof(ASTNode));
+				index2->type = NODE_INDEX;
+				index2->line = expr->line;
+				index2->data.index.object = member2;
+				index2->data.index.index = expr->data.index.index;
+				expr = index2;
+				continue;
+			}
 			ASTNode *member = arena_alloc(p->arena, sizeof(ASTNode));
 			member->type = NODE_MEMBER_ACCESS;
 			member->data.member_access.object = expr;
@@ -974,7 +1044,18 @@ static ASTNode *parse_postfix(Parser *p) {
 				if (nm) {
 					for (int si = p->fn_sig_count - 1; si >= 0; si--) {
 						if (strcmp(p->fn_sigs[si].name, nm) == 0) {
-							call->data_type = p->fn_sigs[si].ret;
+							// Generic template: concrete return type is the
+							// first argument's type (single-T rule).
+							if (p->fn_sigs[si].ret->kind == TYPE_STRUCT &&
+								p->fn_sigs[si].ret->name &&
+								strlen(p->fn_sigs[si].ret->name) == 1) {
+								call->data_type =
+									call->data.call.args
+										? call->data.call.args->data_type
+										: NULL;
+							} else {
+								call->data_type = p->fn_sigs[si].ret;
+							}
 							break;
 						}
 					}
@@ -1190,6 +1271,65 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			is_c_style_decl = 1;
 	}
 
+	if (p->cur.type == TOK_IDENTIFIER &&
+		strcmp(p->cur.text, "unchecked") == 0 &&
+		lexer_peek(p->lexer).type == TOK_LBRACE) {
+		// unchecked { ... } (IDEAS 2.3): no bounds checks are generated
+		// inside, even in debug builds. Contextual keyword -- user code
+		// can still name a variable `unchecked`.
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		n->type = NODE_UNCHECKED_BLOCK;
+		advance(p);
+		consume(p, TOK_LBRACE, "Expected '{' after unchecked");
+		n->data.block.stmts = NULL;
+		if (p->cur.type != TOK_RBRACE) {
+			// Reuse parse_block's loop via a synthetic block body.
+			ASTNode *body = arena_alloc(p->arena, sizeof(ASTNode));
+			body->type = NODE_BLOCK;
+			body->data.block.stmts = NULL;
+			ASTNode **tail = &body->data.block.stmts;
+			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+				*tail = parse_statement(p);
+				if (*tail)
+					tail = &(*tail)->next;
+			}
+			n->data.block.stmts = body;
+		}
+		consume(p, TOK_RBRACE, "Expected '}' to close unchecked");
+		return n;
+	}
+	if (p->cur.type == TOK_ASM) {
+		// Statement-level asm: `asm { "..." : "..." }` with no trailing
+		// ';' required (block form, like IDEAS 2.8 shows). The expression
+		// branch in parse_unary still covers asm in value position.
+		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
+		advance(p);
+		n->type = NODE_ASM;
+		consume(p, TOK_LBRACE, "Expected '{' after asm");
+		if (p->cur.type != TOK_STRING_LIT)
+			report_error(p, "Expected instruction string");
+		char *tmpl = p->cur.text;
+		advance(p);
+		while (p->cur.type == TOK_STRING_LIT) {
+			size_t len = strlen(tmpl) + strlen(p->cur.text) + 2;
+			char *joined = arena_alloc(p->arena, len);
+			snprintf(joined, len, "%s\n%s", tmpl, p->cur.text);
+			tmpl = joined;
+			advance(p);
+		}
+		char *constraints = NULL;
+		if (p->cur.type == TOK_COLON) {
+			advance(p);
+			if (p->cur.type != TOK_STRING_LIT)
+				report_error(p, "Expected constraint string");
+			constraints = p->cur.text;
+			advance(p);
+		}
+		consume(p, TOK_RBRACE, "Expected '}' to close asm");
+		n->data.asm_block.asm_template = tmpl;
+		n->data.asm_block.constraints = constraints;
+		return n;
+	}
 	if (p->cur.type == TOK_LET || p->cur.type == TOK_CONST ||
 		p->cur.type == TOK_ORBIT || is_c_style_decl) {
 		int is_orbit = (p->cur.type == TOK_ORBIT);
@@ -1226,6 +1366,14 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		} else {
 			if (p->cur.type == TOK_ASSIGN) {
 				advance(p);
+				// Optional `comptime` marker (IDEAS 2.1): documents that
+				// the initializer must fold. `const X = comptime fib(10);`
+				// The marker is advisory -- any const expr that folds,
+				// does -- but it makes intent explicit like Zig's.
+				if (p->cur.type == TOK_IDENTIFIER &&
+					strcmp(p->cur.text, "comptime") == 0 &&
+					lexer_peek(p->lexer).type != TOK_COLON_ASSIGN)
+					advance(p);
 				init = parse_expr(p);
 			}
 		}
@@ -1234,6 +1382,12 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		if (!type) {
 			if (init && init->data_type) {
 				type = init->data_type; // Infer from expression
+			} else if (init && init->type == NODE_CALL && is_const) {
+				// Comptime call: the parser has no return-type table entry
+				// for pure fns called at comptime... actually fn_sigs covers
+				// it; fall through to u32 only when unknown.
+				type = arena_alloc(p->arena, sizeof(Type));
+				type->kind = TYPE_I64;
 			} else {
 				type = arena_alloc(p->arena, sizeof(Type));
 				type->kind = TYPE_U32; // Fallback
@@ -1656,6 +1810,8 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	consume(p, TOK_RPAREN, "Expected ')'");
 	// Record the signature BEFORE parsing the body so recursive
 	// `let x = name(...)` calls inside infer the declared return type.
+	// Generic templates (return type is a bare `T`) are excluded: their
+	// concrete type only exists per instantiation.
 	if (p->fn_sig_count < 128 && ret_type) {
 		p->fn_sigs[p->fn_sig_count].name = func_name;
 		p->fn_sigs[p->fn_sig_count].ret = ret_type;
@@ -1777,9 +1933,108 @@ ASTNode *parse_program(Parser *p) {
 
 		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE ||
 			p->cur.type == TOK_ATTRIBUTE) {
-			parse_function(p, &tail, NULL);
-		} else if (p->cur.type == TOK_STRUCT) {
+			// #[soa] belongs to a struct declaration, not a function.
+			int leading_soa = 0;
+			if (p->cur.type == TOK_ATTRIBUTE &&
+				strcmp(p->cur.text, "soa") == 0) {
+				Lexer la = *p->lexer;
+				Token nt = lexer_next(&la);
+				if (nt.type == TOK_STRUCT)
+					leading_soa = 1;
+			}
+			if (!leading_soa)
+				parse_function(p, &tail, NULL);
+			else
+				goto parse_soa_struct;
+		} else if (p->cur.type == TOK_EXTERN) {
+			// extern "c" fn ret name(args...);  -- a C symbol declaration.
+			// No body is parsed or emitted; the linker resolves it. Exact
+			// prototypes matter (a wrong one is UB), so the declared types
+			// flow straight into the LLVM function type.
 			advance(p);
+			char *cc = NULL;
+			if (p->cur.type == TOK_STRING_LIT) {
+				cc = p->cur.text;
+				advance(p);
+			}
+			consume(p, TOK_FN, "Expected 'fn' after extern");
+
+			Type *ret_type = NULL;
+			if (is_type_token(p->cur.type)) {
+				Token next = lexer_peek(p->lexer);
+				if (next.type == TOK_IDENTIFIER)
+					ret_type = parse_type(p);
+			}
+			char *fn_name = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected function name");
+			consume(p, TOK_LPAREN, "Expected '('");
+
+			ASTNode *args_head = NULL;
+			ASTNode **args_tail = &args_head;
+			int is_variadic = 0;
+			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				if (p->cur.type == TOK_DOT) {
+					// `...` lexes as three DOT tokens.
+					is_variadic = 1;
+					while (p->cur.type == TOK_DOT)
+						advance(p);
+					break;
+				}
+				Type *arg_type = NULL;
+				char *arg_name = NULL;
+				if (is_type_token(p->cur.type)) {
+					// C-style: `f64 x` -- type first.
+					arg_type = parse_type(p);
+					arg_name = p->cur.text;
+					consume(p, TOK_IDENTIFIER, "Arg name");
+				} else {
+					// Kawa-style: `x: f64`.
+					arg_name = p->cur.text;
+					consume(p, TOK_IDENTIFIER, "Arg name");
+					consume(p, TOK_COLON, ":");
+					arg_type = parse_type(p);
+				}
+
+				ASTNode *arg = arena_alloc(p->arena, sizeof(ASTNode));
+				arg->type = NODE_VAR_DECL;
+				arg->data.var_decl.name = arg_name;
+				arg->data_type = arg_type;
+				*args_tail = arg;
+				args_tail = &arg->next;
+				if (p->cur.type == TOK_COMMA)
+					advance(p);
+				else
+					break;
+			}
+			consume(p, TOK_RPAREN, "Expected ')'");
+			consume(p, TOK_SEMICOLON,
+					"Expected ';' after extern declaration (no body)");
+
+			ASTNode *node = arena_alloc(p->arena, sizeof(ASTNode));
+			node->type = NODE_EXTERN_FN;
+			node->data.extern_fn.name = fn_name;
+			node->data.extern_fn.ret_type = ret_type;
+			node->data.extern_fn.args = args_head;
+			node->data.extern_fn.is_variadic = is_variadic;
+			(void)cc; // v1: only the C ABI exists; kept for future ABIs
+			*tail = node;
+			tail = &node->next;
+
+			// Register the signature for let-inference too.
+			if (p->fn_sig_count < 128 && ret_type) {
+				p->fn_sigs[p->fn_sig_count].name = fn_name;
+				p->fn_sigs[p->fn_sig_count].ret = ret_type;
+				p->fn_sig_count++;
+			}
+		} else if (p->cur.type == TOK_STRUCT) {
+parse_soa_struct:
+			int soa_attr = 0;
+			while (p->cur.type == TOK_ATTRIBUTE) {
+				if (strcmp(p->cur.text, "soa") == 0)
+					soa_attr = 1;
+				advance(p);
+			}
+			consume(p, TOK_STRUCT, "Expected 'struct'");
 			ASTNode *st = arena_alloc(p->arena, sizeof(ASTNode));
 			st->type = NODE_STRUCT_DECL;
 			st->data.struct_decl.name = p->cur.text;
@@ -1804,6 +2059,9 @@ ASTNode *parse_program(Parser *p) {
 			}
 			consume(p, TOK_RBRACE, "}");
 			st->data.struct_decl.fields = fields_head;
+			st->data.struct_decl.is_soa = soa_attr;
+			if (soa_attr && p->soa_count < 64)
+				p->soa_structs[p->soa_count++] = st->data.struct_decl.name;
 
 			*tail = st;
 			tail = &st->next;

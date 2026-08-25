@@ -121,6 +121,7 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 }
 
 void kawa_compile(KawaCompiler *c, ASTNode *root) {
+	c->program_root = root; // comptime fn lookup
 	ASTNode *cur = root->next;
 
 	// Pass 1: Forward-declare named structs + register aliases. Aliases are
@@ -172,8 +173,78 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			codegen_global_decl(c, scanner, &pending_inits);
 	}
 
+	// Generic detection (IDEAS 2.2): a fn whose return or param type
+	// mentions `T` (a single-uppercase-letter "struct" type) is generic.
+	// Such fns are registered here and instantiated per call site with a
+	// mangled name -- no IR is emitted for the template itself.
+	for (ASTNode *g = cur; g; g = g->next) {
+		if (g->type != NODE_FUNC_DECL || c->generic_fn_count >= 64)
+			continue;
+		Type *sig[32];
+		int sn = 0;
+		if (g->data.func.ret_type && sn < 32)
+			sig[sn++] = g->data.func.ret_type;
+		for (ASTNode *a = g->data.func.args; a && sn < 32; a = a->next)
+			if (a->data_type)
+				sig[sn++] = a->data_type;
+		int is_generic = 0;
+		for (int ti = 0; ti < sn && !is_generic; ti++) {
+			Type *ty = sig[ti];
+			while (ty &&
+				   (ty->kind == TYPE_ARRAY || ty->kind == TYPE_SLICE ||
+					ty->kind == TYPE_PTR))
+				ty = ty->inner;
+			if (ty && ty->kind == TYPE_STRUCT && ty->name &&
+				strlen(ty->name) == 1 && ty->name[0] == 'T')
+				is_generic = 1;
+		}
+		if (is_generic)
+			c->generic_fns[c->generic_fn_count++] = g;
+	}
+
 	while (cur) {
+		if (cur->type == NODE_EXTERN_FN) {
+			// Declare the C symbol with its exact prototype. External
+			// linkage, no body: the linker resolves it from any library
+			// on the link line -- no header translation needed.
+			LLVMTypeRef ret_t = LLVMInt32TypeInContext(c->context);
+			if (cur->data.extern_fn.ret_type)
+				ret_t = get_llvm_type(c, cur->data.extern_fn.ret_type);
+			int argc = 0;
+			for (ASTNode *a = cur->data.extern_fn.args; a; a = a->next)
+				argc++;
+			LLVMTypeRef *params =
+				arena_alloc(c->arena, sizeof(LLVMTypeRef) * (argc > 0 ? argc : 1));
+			int pi = 0;
+			for (ASTNode *a = cur->data.extern_fn.args; a; a = a->next)
+				params[pi++] = get_llvm_type(c, a->data_type);
+			LLVMTypeRef fn_t =
+				LLVMFunctionType(ret_t, params, (unsigned)argc,
+								 (int)cur->data.extern_fn.is_variadic);
+			LLVMValueRef fn =
+				LLVMAddFunction(c->module, cur->data.extern_fn.name, fn_t);
+			// A declared-but-never-called extern costs nothing; marking
+			// nounwind lets the optimizer treat calls as leaf ops.
+			const char *nw = "nounwind";
+			LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
+									LLVMCreateEnumAttribute(
+										c->context,
+										LLVMGetEnumAttributeKindForName(
+											nw, strlen(nw)),
+										0));
+			cur = cur->next;
+			continue;
+		}
 		if (cur->type == NODE_FUNC_DECL) {
+			// Generic fn: registered earlier, instantiated at call sites.
+			int skip_generic = 0;
+			for (int gi3 = 0; gi3 < c->generic_fn_count; gi3++)
+				if (c->generic_fns[gi3] == cur)
+					skip_generic = 1;
+			if (skip_generic) {
+				cur = cur->next;
+				continue;
+			}
 			if (cur->data.func.is_test &&
 				c->test_fn_count < 256)
 				c->test_fns[c->test_fn_count++] = cur;

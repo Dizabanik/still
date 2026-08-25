@@ -103,6 +103,10 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 			if (!global_init_is_constant(c, it->value))
 				return 0;
 		return 1;
+	case NODE_CALL:
+		// Comptime-callable when the evaluator can run it (pure fn over
+		// integer constants). The eval itself is the authority.
+		return kawa_comptime_eval(c, n, 64, NULL) != NULL;
 	default:
 		(void)c;
 		return 0;
@@ -138,7 +142,7 @@ static LLVMValueRef const_int_as(KawaCompiler *c, LLVMValueRef v,
 // either way; division follows build_int_binop(): signed only when BOTH
 // sides are signed. Division/modulo by zero leaves the op unfolded rather
 // than crashing the compiler.
-static int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
+int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
 						  int lhs_signed, int rhs_signed,
 						  unsigned long long *out) {
 	int div_signed = lhs_signed && rhs_signed;
@@ -310,6 +314,15 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 			fields[i] = LLVMConstNull(LLVMStructGetTypeAtIndex(s_type, i));
 		return LLVMConstNamedStruct(s_type, fields, fc);
 	}
+	case NODE_CALL: {
+		// Comptime (IDEAS 2.1): a call the tree-walking evaluator can run
+		// (pure fn over integer constants) folds right here -- no IR is
+		// generated for the callee when every use folds away.
+		LLVMValueRef folded = kawa_comptime_eval(c, n, 64, NULL);
+		if (folded)
+			return folded;
+		return NULL;
+	}
 	default:
 		return NULL;
 	}
@@ -478,7 +491,9 @@ static LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 static void emit_bounds_check(KawaCompiler *c, LLVMValueRef idx_i64,
 							  long long array_len, const char *file,
 							  int line) {
-	if (!c->debug_build)
+	// Policy (IDEAS 2.3): checks in debug builds only -- unless an
+	// `unchecked { }` block suppresses them at any opt level.
+	if (!c->debug_build || c->unchecked_depth > 0)
 		return;
 	LLVMContextRef ctx = c->context;
 	LLVMValueRef len_const =
@@ -669,9 +684,10 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			idx = coerce_value(c, idx, n->data.index.index->data_type,
 							   i64_t, &idx64t);
 
-			if (c->debug_build) {
+			if (c->debug_build && c->unchecked_depth == 0) {
 				// Dynamic-length twin of emit_bounds_check: trap when
-				// idx >= slice.len. Release never reaches this branch.
+				// idx >= slice.len. Release never reaches this branch,
+				// and `unchecked {}` suppresses it everywhere.
 				LLVMValueRef len_p = LLVMBuildStructGEP2(
 					c->builder, slice_t, s_slice->val, 1,
 					"slice_len_ptr");
@@ -748,6 +764,19 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				LLVMTypeRef ptr_t = LLVMPointerType(elem, 0);
 				base =
 					LLVMBuildLoad2(c->builder, ptr_t, base, "idx_base");
+			}
+		} else if (obj->type == NODE_MEMBER_ACCESS) {
+			// `ps.x[i]`: resolve the FIELD'S ADDRESS (a GEP into the
+			// struct) and index from there. Loading the whole array value
+			// first would leave a non-pointer GEP base.
+			LLVMTypeRef fld_ty = NULL;
+			LLVMValueRef fld_addr =
+				get_address(c, obj, &fld_ty);
+			if (fld_addr && LLVMGetTypeKind(fld_ty) == LLVMArrayTypeKind) {
+				elem = LLVMGetElementType(fld_ty);
+				base = fld_addr; // arrays index directly, like allocas
+			} else {
+				base = value_of_lvalue(c, obj);
 			}
 		} else {
 			// Complex base: resolve its address, then load if it's a
@@ -896,8 +925,13 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 		if (dw < sw)
 			return LLVMBuildTrunc(c->builder, v, dst, "trunc");
 		if (sw < dw) {
-			int signed_ext =
-				type_is_signed(c, src_ast) && type_is_signed(c, dst_ast);
+			// Widen by the SOURCE's own signedness. When the destination
+			// AST is unknown (extern params arrive as bare LLVM types),
+			// the source type is all we have -- and a negative i32 must
+			// sext even when heading into an untyped i64 slot.
+			int signed_ext = dst_ast ? (type_is_signed(c, src_ast) &&
+										type_is_signed(c, dst_ast))
+									 : type_is_signed(c, src_ast);
 			return signed_ext ? LLVMBuildSExt(c->builder, v, dst, "sext")
 							  : LLVMBuildZExt(c->builder, v, dst, "zext");
 		}

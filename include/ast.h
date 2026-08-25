@@ -84,6 +84,9 @@ typedef enum {
 	NODE_FILTER,
 	NODE_PRESS,
 	NODE_ALIAS,
+	NODE_EXTERN_FN,
+	NODE_ASM,
+	NODE_UNCHECKED_BLOCK,
 	NODE_SIZEOF,
 	NODE_CAST,
 	NODE_IMPORT,
@@ -132,6 +135,7 @@ struct ASTNode {
 		struct {
 			char *name;
 			ASTNode *fields;
+			int is_soa; // #[soa]: fields stored as parallel arrays
 		} struct_decl;
 		struct {
 			char *name;
@@ -254,6 +258,17 @@ struct ASTNode {
 		struct {
 			char *lib_name;
 		} import;
+		struct {
+			char *name;       // extern fn name (the C symbol)
+			Type *ret_type;   // declared return type
+			ASTNode *args;    // NODE_VAR_DECL chain: name + data_type
+			int is_variadic;
+		} extern_fn;
+		struct {
+			char *asm_template;   // instruction string(s)
+			char *constraints;    // LLVM inline asm constraints, may be NULL
+			ASTNode *outputs;     // unused v1 (r constraint form later)
+		} asm_block;
 		struct {
 			ASTNode *expr;
 		} ret_stmt;

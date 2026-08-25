@@ -26,6 +26,12 @@ typedef struct {
 		Type *ret;
 	} fn_sigs[128];
 	int fn_sig_count;
+
+	// Names of `#[soa]` structs (IDEAS 2.7): indexing a value of such a
+	// struct type rewrites member access to per-field array access
+	// (ps[i].x -> ps.x[i]), turning AoS-style code into SoA memory layout.
+	char *soa_structs[64];
+	int soa_count;
 } Parser;
 
 void parser_init(Parser *p, Lexer *l, Arena *a);
