@@ -207,9 +207,55 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		exit(1);
 	}
 
-	case NODE_STRING_LIT:
-		return LLVMBuildGlobalStringPtr(c->builder, n->data.str_lit.s_val,
-										"str");
+	case NODE_STRING_LIT: {
+		// str = {ptr,len} view (IDEAS 3). The constant global keeps the
+		// trailing NUL so decaying to char* at C boundaries stays valid;
+		// the view's len excludes it. Both fields are constants, so a
+		// literal costs nothing at runtime -- same as C, plus O(1) length.
+		LLVMContextRef ctx = c->context;
+		Type u8t = {0};
+		u8t.kind = TYPE_U8;
+		size_t slen = strlen(n->data.str_lit.s_val);
+		static int str_lit_counter = 0;
+		char gname[32];
+		snprintf(gname, sizeof(gname), ".strlit.%d", str_lit_counter++);
+		char *init = arena_alloc(c->arena, slen + 2);
+		memcpy(init, n->data.str_lit.s_val, slen);
+		init[slen] = '\0';
+		init[slen + 1] = '\0';
+		// NUL-terminated storage: the view's len excludes the terminator,
+		// but decaying to char* at C boundaries stays valid. The global's
+		// type is derived FROM the constant -- LLVMConstStringInContext
+		// sizes by its own strlen rules (the Len arg only matters for
+		// embedded NULs), so hand-computing the array type can mismatch.
+		LLVMValueRef cstr_init =
+			LLVMConstStringInContext(c->context, init,
+									 (unsigned)(slen + 1),
+									 /*DontNullTerminate*/ 0);
+		LLVMTypeRef arr_t = LLVMTypeOf(cstr_init);
+		LLVMValueRef global = LLVMAddGlobal(c->module, arr_t, gname);
+		LLVMSetGlobalConstant(global, 1);
+		LLVMSetLinkage(global, LLVMPrivateLinkage);
+		LLVMSetInitializer(global, cstr_init);
+		LLVMValueRef data = LLVMBuildGEP2(
+			c->builder, arr_t, global,
+			(LLVMValueRef[]){LLVMConstInt(LLVMInt64TypeInContext(ctx), 0, 0),
+							 LLVMConstInt(LLVMInt32TypeInContext(ctx), 0, 0)},
+			2, "str_data");
+		Type slice_t = {0};
+		slice_t.kind = TYPE_SLICE;
+		slice_t.inner = &u8t;
+		LLVMTypeRef view_t = get_llvm_type(c, &slice_t);
+		LLVMValueRef view = LLVMGetUndef(view_t);
+		view = LLVMBuildInsertValue(c->builder, view, data, 0,
+									"str_ins_data");
+		view = LLVMBuildInsertValue(
+			c->builder, view,
+			LLVMConstInt(LLVMInt64TypeInContext(ctx),
+						 (unsigned long long)slen, 0),
+			1, "str_ins_len");
+		return view;
+	}
 
 	case NODE_VAR_REF:
 	case NODE_MEMBER_ACCESS:
@@ -727,9 +773,73 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			if (i < param_count) {
 				LLVMTypeRef expected = param_types[i];
 
-				// Auto-spill: function expects a pointer (e.g. i8* self)
-				// but caller is passing a struct value. Spill to a local
-				// alloca and pass its address.
+				// Pointer parameter + lvalue argument: pass the ADDRESS of
+				// the original storage -- `q.birthday()` with
+				// `fn void birthday(P* p)` must mutate q itself. Loading
+				// the struct value first and spilling to a temporary would
+				// silently redirect every store into the temp.
+				if (LLVMGetTypeKind(expected) == LLVMPointerTypeKind &&
+					arg_node->type != NODE_LITERAL) {
+					int is_lvalue = arg_node->type == NODE_VAR_REF ||
+									arg_node->type == NODE_MEMBER_ACCESS ||
+									arg_node->type == NODE_INDEX ||
+									arg_node->type == NODE_DEREF;
+					// Slice-typed lvalues decay to their data pointer
+					// instead of passing the pair's address.
+					Type *lvt = arg_node->data_type;
+					if (!lvt && arg_node->type == NODE_VAR_REF) {
+						Scope *slv =
+							scope_find(c,
+									   arg_node->data.var_ref.name);
+						lvt = (slv && slv->node) ? slv->node->data_type
+												 : NULL;
+					}
+					if (lvt && lvt->kind == TYPE_SLICE)
+						is_lvalue = 0;
+					if (is_lvalue) {
+						LLVMTypeRef pointee = NULL;
+						LLVMValueRef addr =
+							get_address(c, arg_node, &pointee);
+						if (addr && pointee &&
+							LLVMGetTypeKind(pointee) ==
+								LLVMStructTypeKind) {
+							llvm_args[i] = addr;
+							arg_node = arg_node->next;
+							continue;
+						}
+					}
+				}
+				// Decay at C boundaries: a str/[]u8 view passed where a
+				// char* is expected contributes just its data pointer --
+				// the storage keeps the trailing NUL so libc stays happy.
+				if (!arg_node->data_type &&
+					arg_node->type == NODE_VAR_REF) {
+					Scope *svp =
+						scope_find(c, arg_node->data.var_ref.name);
+					arg_node->data_type =
+						(svp && svp->node) ? svp->node->data_type : NULL;
+				}
+				if (LLVMGetTypeKind(expected) == LLVMPointerTypeKind &&
+					LLVMGetTypeKind(LLVMTypeOf(val)) ==
+						LLVMStructTypeKind &&
+					arg_node->data_type &&
+					arg_node->data_type->kind == TYPE_SLICE &&
+					arg_node->data_type->inner &&
+					(arg_node->data_type->inner->kind == TYPE_U8 ||
+					 arg_node->data_type->inner->kind == TYPE_CHAR)) {
+					LLVMTypeRef want_ptr =
+						LLVMPointerType(LLVMInt8TypeInContext(
+							c->context), 0);
+					val = LLVMBuildExtractValue(c->builder, val, 0,
+												"str_decay");
+					val = coerce_value(c, val, NULL, want_ptr, NULL);
+					llvm_args[i] = val;
+					arg_node = arg_node->next;
+					continue;
+				}
+				// Auto-spill: function expects a pointer but caller is
+				// passing an rvalue struct (e.g. f(&tmp) shape). Spill to
+				// a local alloca and pass its address.
 				if (LLVMGetTypeKind(expected) == LLVMPointerTypeKind &&
 					LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMStructTypeKind) {
 					LLVMValueRef temp_alloc = create_entry_block_alloca(
@@ -744,6 +854,26 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				// SIGN-extend (%d of an i16 -600 printed 64936 when zext).
 				LLVMTypeRef vt = LLVMTypeOf(val);
 				LLVMTypeKind k = LLVMGetTypeKind(vt);
+				// A str view decays to its char* in a vararg slot
+				// (printf("%s\n", s)); the storage keeps the NUL.
+				if (!arg_node->data_type &&
+					arg_node->type == NODE_VAR_REF) {
+					Scope *sva =
+						scope_find(c, arg_node->data.var_ref.name);
+					arg_node->data_type =
+						(sva && sva->node) ? sva->node->data_type : NULL;
+				}
+				if (k == LLVMStructTypeKind && arg_node->data_type &&
+					arg_node->data_type->kind == TYPE_SLICE &&
+					arg_node->data_type->inner &&
+					(arg_node->data_type->inner->kind == TYPE_U8 ||
+					 arg_node->data_type->inner->kind == TYPE_CHAR)) {
+					val = LLVMBuildExtractValue(c->builder, val, 0,
+												"str_decay_va");
+					llvm_args[i] = val;
+					arg_node = arg_node->next;
+					continue;
+				}
 				if (k == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(vt) < 32) {
 					int va_s =
 						arg_node->data_type
@@ -861,8 +991,11 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMBuildBr(c->builder, merge_bb);
 
 		LLVMPositionBuilderAtEnd(c->builder, merge_bb);
-		if (LLVMGetTypeKind(LLVMTypeOf(tv)) == LLVMStructTypeKind ||
-			LLVMTypeOf(tv) != LLVMTypeOf(ev)) {
+		// Matching struct-typed arms (str views, slices) are fine: LLVM
+		// phis carry first-class aggregates. Mismatched shapes stay an
+		// error.
+		int arms_ok = LLVMTypeOf(tv) == LLVMTypeOf(ev);
+		if (!arms_ok) {
 			timbr_err("ternary arms must be scalars of matching type\n");
 			exit(1);
 		}
@@ -1317,9 +1450,74 @@ static int str_relational(KawaCompiler *c, ASTNode *side) {
 		Scope *sv = scope_find(c, side->data.var_ref.name);
 		t = sv ? sv->node->data_type : NULL;
 	}
-	if (!t || t->kind != TYPE_PTR || !t->inner)
+	if (!t || t->kind != TYPE_SLICE || !t->inner)
 		return 0;
-	return t->inner->kind == TYPE_CHAR;
+	return t->inner->kind == TYPE_U8;
+}
+
+static LLVMValueRef build_str_view_field(KawaCompiler *c,
+										 LLVMTypeRef view_t,
+										 LLVMValueRef view, int field) {
+	return LLVMBuildExtractValue(c->builder, view, (unsigned)field,
+								 field == 0 ? "str_d" : "str_l");
+}
+
+// Content comparison of two {ptr,len} views: memcmp over the shorter
+// length, ties broken by total length -- the same ordering strcmp gives
+// without scanning for terminators. Constant operands fold at -O2.
+static LLVMValueRef build_str_memcmp(KawaCompiler *c, LLVMTypeRef view_t,
+									 LLVMValueRef l, LLVMValueRef r) {
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i8ptr =
+		LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef i32_t = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef fn_t =
+		LLVMFunctionType(i32_t, (LLVMTypeRef[]){i8ptr, i8ptr, i64_t}, 3, 0);
+	LLVMValueRef fn = LLVMGetNamedFunction(c->module, "memcmp");
+	if (!fn)
+		fn = LLVMAddFunction(c->module, "memcmp", fn_t);
+	LLVMValueRef ld =
+		build_str_view_field(c, view_t, l, 0);
+	LLVMValueRef ll =
+		build_str_view_field(c, view_t, l, 1);
+	LLVMValueRef rd =
+		build_str_view_field(c, view_t, r, 0);
+	LLVMValueRef rl =
+		build_str_view_field(c, view_t, r, 1);
+	LLVMValueRef ll_lt =
+		LLVMBuildICmp(c->builder, LLVMIntULT, ll, rl, "ll_lt");
+	LLVMValueRef min_len =
+		LLVMBuildSelect(c->builder, ll_lt, ll, rl, "minlen");
+	LLVMValueRef args[3] = {ld, rd, min_len};
+	LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
+	(void)saved_bb;
+	LLVMValueRef cmp = LLVMBuildCall2(c->builder, fn_t, fn, args, 3,
+									  "str_bcmp");
+	// memcmp result sign: convert to the strcmp-style three-way value.
+	LLVMValueRef neg = LLVMBuildICmp(c->builder, LLVMIntSLT, cmp,
+									 LLVMConstInt(i32_t, 0, 0), "lt0");
+	LLVMValueRef pos = LLVMBuildICmp(c->builder, LLVMIntSGT, cmp,
+									 LLVMConstInt(i32_t, 0, 0), "gt0");
+	// Equal prefixes: the shorter string sorts first.
+	LLVMValueRef tie_neg =
+		LLVMBuildICmp(c->builder, LLVMIntSLT, ll, rl, "tie_neg");
+	LLVMValueRef tie_val =
+		LLVMBuildSelect(c->builder, tie_neg, LLVMConstInt(i32_t, -1, 1),
+						LLVMConstInt(i32_t, 1, 0), "tie_val");
+	LLVMValueRef tie_is_eq =
+		LLVMBuildICmp(c->builder, LLVMIntEQ, ll, rl, "tie_is_eq");
+	LLVMValueRef tie_result =
+		LLVMBuildSelect(c->builder, tie_is_eq, LLVMConstInt(i32_t, 0, 0),
+						tie_val, "tie_result");
+	LLVMValueRef by_content =
+		LLVMBuildSelect(c->builder, neg, LLVMConstInt(i32_t, -1, 1),
+						LLVMBuildSelect(c->builder, pos,
+										LLVMConstInt(i32_t, 1, 0),
+										tie_result, "sel_pos"),
+						"sel_neg");
+	(void)i64_t;
+	return by_content;
 }
 
 // Re-home a 32-bit-or-untyped literal operand to a wider partner's width and
@@ -1387,7 +1585,19 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 	case TOK_REQ:
 		if (str_relational(c, n->data.bin_op.left) &&
 			str_relational(c, n->data.bin_op.right)) {
-			LLVMValueRef cmp = build_strcmp_call(c, l, r);
+			LLVMValueRef cmp;
+			if (LLVMGetTypeKind(LLVMTypeOf(l)) == LLVMStructTypeKind) {
+				// Fat {ptr,len} views: three-way content compare.
+				Type slice_t = {0};
+				slice_t.kind = TYPE_SLICE;
+				slice_t.inner = NULL;
+				slice_t.inner = arena_alloc(c->arena, sizeof(Type));
+				slice_t.inner->kind = TYPE_U8;
+				LLVMTypeRef view_t = get_llvm_type(c, &slice_t);
+				cmp = build_str_memcmp(c, view_t, l, r);
+			} else {
+				cmp = build_strcmp_call(c, l, r);
+			}
 			return LLVMBuildICmp(c->builder,
 								 op == TOK_ISEQ	 ? LLVMIntEQ
 								 : op == TOK_NOTEQ ? LLVMIntNE
@@ -1403,6 +1613,101 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		break;
 	default:
 		break;
+	}
+
+	// String concat (IDEAS 3): a + b allocates len_a+len_b+1 bytes, copies
+	// both views, and stores the NUL. One malloc, two memcpys -- no
+	// per-byte loops. (The + never runs when both operands are literals;
+	// the folder would have to constant-fold it first.)
+	{
+		Type *lt2 = n->data.bin_op.left->data_type;
+		Type *rt2 = n->data.bin_op.right->data_type;
+		if (!lt2 && n->data.bin_op.left->type == NODE_VAR_REF) {
+			Scope *s2 = scope_find(
+				c, n->data.bin_op.left->data.var_ref.name);
+			lt2 = (s2 && s2->node) ? s2->node->data_type : NULL;
+		}
+		if (!rt2 && n->data.bin_op.right->type == NODE_VAR_REF) {
+			Scope *s2 = scope_find(
+				c, n->data.bin_op.right->data.var_ref.name);
+			rt2 = (s2 && s2->node) ? s2->node->data_type : NULL;
+		}
+		if ((op == TOK_PLUS || op == TOK_PLUS_EQ) && lt2 && rt2 &&
+			lt2->kind == TYPE_SLICE && rt2->kind == TYPE_SLICE &&
+			lt2->inner &&
+			(lt2->inner->kind == TYPE_U8 || lt2->inner->kind == TYPE_CHAR) &&
+			rt2->inner &&
+			(rt2->inner->kind == TYPE_U8 || rt2->inner->kind == TYPE_CHAR)) {
+			LLVMContextRef ctx = c->context;
+			LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+			LLVMTypeRef i8ptr =
+				LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+			Type u8t2 = {0};
+			u8t2.kind = TYPE_U8;
+			Type slice_t2 = {0};
+			slice_t2.kind = TYPE_SLICE;
+			slice_t2.inner = &u8t2;
+			LLVMTypeRef view_t = get_llvm_type(c, &slice_t2);
+
+			LLVMValueRef ld =
+				LLVMBuildExtractValue(c->builder, l, 0, "a_d");
+			LLVMValueRef ll =
+				LLVMBuildExtractValue(c->builder, l, 1, "a_l");
+			LLVMValueRef rd =
+				LLVMBuildExtractValue(c->builder, r, 0, "b_d");
+			LLVMValueRef rl =
+				LLVMBuildExtractValue(c->builder, r, 1, "b_l");
+			LLVMValueRef total = LLVMBuildAdd(c->builder, ll, rl, "str_n");
+			// total+1 for the NUL.
+			LLVMValueRef alloc_n = LLVMBuildAdd(
+				c->builder, total, LLVMConstInt(i64_t, 1, 0), "str_cap");
+			LLVMTypeRef malloc_t = LLVMFunctionType(
+				i8ptr, (LLVMTypeRef[]){i64_t}, 1, 0);
+			LLVMValueRef malloc_f = LLVMGetNamedFunction(c->module,
+														 "malloc");
+			if (!malloc_f)
+				malloc_f = LLVMAddFunction(c->module, "malloc", malloc_t);
+			LLVMValueRef buf = LLVMBuildCall2(c->builder, malloc_t,
+											  malloc_f, &alloc_n, 1,
+											  "str_buf");
+
+			// libc memcpy: same machine code as the intrinsic once the
+			// optimizer recognizes the libfunc (lowered inline).
+			LLVMTypeRef memcpy_t = LLVMFunctionType(
+				i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64_t}, 3, 0);
+			LLVMValueRef memcpy_f =
+				LLVMGetNamedFunction(c->module, "memcpy");
+			if (!memcpy_f || LLVMGetTypeKind(LLVMGlobalGetValueType(
+								 memcpy_f)) != LLVMFunctionTypeKind ||
+				LLVMCountParamTypes(LLVMGlobalGetValueType(memcpy_f)) != 3)
+				memcpy_f = LLVMAddFunction(c->module, "memcpy",
+										   memcpy_t);
+
+			LLVMValueRef mc1_args[3] = {buf, ld, ll};
+			LLVMBuildCall2(c->builder, memcpy_t, memcpy_f, mc1_args, 3,
+						   "");
+			// Second copy destination: buf + ll (GEP on the raw pointer).
+			LLVMValueRef tail_dst = LLVMBuildGEP2(
+				c->builder, LLVMInt8TypeInContext(ctx), buf, &ll, 1,
+				"str_tail");
+			LLVMValueRef mc2_args[3] = {tail_dst, rd, rl};
+			LLVMBuildCall2(c->builder, memcpy_t, memcpy_f, mc2_args, 3,
+						   "");
+			// NUL terminator at buf[total].
+			LLVMValueRef nul_dst = LLVMBuildGEP2(
+				c->builder, LLVMInt8TypeInContext(ctx), buf, &total, 1,
+				"str_nul_slot");
+			LLVMBuildStore(c->builder,
+						   LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
+						   nul_dst);
+
+			LLVMValueRef view = LLVMGetUndef(view_t);
+			view = LLVMBuildInsertValue(c->builder, view, buf, 0,
+										"cat_ins_data");
+			view = LLVMBuildInsertValue(c->builder, view, total, 1,
+										"cat_ins_len");
+			return view;
+		}
 	}
 
 	int l_is_fp = is_fp_kind(LLVMGetTypeKind(l_ty));

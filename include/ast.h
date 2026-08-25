@@ -243,6 +243,7 @@ struct ASTNode {
 			ASTNode *try_block;
 			char *err_var;
 			ASTNode *catch_block;
+			Type *err_type; // payload type (`dregs (e: ParseErr)`); NULL = i32
 		} filter;
 		struct {
 			char *name;

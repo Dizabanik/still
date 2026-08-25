@@ -18,12 +18,15 @@ typedef struct {
 	} decls[256];
 	int decl_count;
 
-	// Function signatures seen so far (name -> declared return type).
-	// Lets a `let x = f(...)` infer the call's type at parse time; NULL
-	// ret entries (void/unknown) fall back to the old behavior.
+	// Function signatures seen so far (name -> declared return type +
+	// parameter count). Lets a `let x = f(...)` infer the call's type at
+	// parse time; NULL ret entries (void/unknown) fall back to the old
+	// behavior. nparams drives method-call receiver injection: inject iff
+	// params == explicit args + 1.
 	struct {
 		char *name;
 		Type *ret;
+		int nparams;
 	} fn_sigs[128];
 	int fn_sig_count;
 
@@ -32,6 +35,15 @@ typedef struct {
 	// (ps[i].x -> ps.x[i]), turning AoS-style code into SoA memory layout.
 	char *soa_structs[64];
 	int soa_count;
+
+	// Declared struct names: `ParseErr { .code = 1 }` in expression position
+	// is a struct literal when ParseErr names one of these. Without the
+	// registry, `{` after an identifier has no way to know it's not a block.
+	// nodes[i] is the NODE_STRUCT_DECL, kept for embedding promotion
+	// (IDEAS 3): method lookup falls back through embedded fields.
+	char *struct_names[64];
+	ASTNode *struct_nodes[64];
+	int struct_name_count;
 } Parser;
 
 void parser_init(Parser *p, Lexer *l, Arena *a);

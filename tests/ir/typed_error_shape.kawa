@@ -1,0 +1,22 @@
+// Typed error payloads (IDEAS 3): the dregs slot is the payload struct,
+// `press` is one store + one branch. No landingpad, no invoke, no unwinding
+// -- nounwind survives everywhere.
+struct ParseErr {
+    i32 code;
+    i32 line;
+}
+fn i32 main() {
+    filter {
+        ParseErr p = { .code = 7, .line = 3 };
+        press e = p;
+    } dregs (e: ParseErr) {
+        stdc.printf("%d\n", e.code);
+    }
+    return 0;
+}
+// OPT: 0
+// CHECK: %filter.err = alloca %ParseErr
+// CHECK-NOT: invoke
+// CHECK-NOT: landingpad
+// CHECK: store volatile %ParseErr
+// CHECK: br label %dregs

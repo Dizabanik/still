@@ -22,11 +22,12 @@ fn int main() {
     }
 
     // Runtime-built string: content comparison must not depend on address.
-    let buf = (str)stdc.malloc(16);
-    stdc.strcpy(buf, "apple");
-    if (a == buf) {
+    // A concat builds a fresh buffer; the result compares by CONTENT.
+    let joined = a + " pie";
+    if (joined == "apple pie") {
         stdc.printf("runtime eq\n");
     }
+    stdc.printf("joined=%s len=%lld\n", joined.data, joined.len);
 
     stdc.printf("%s\n", "tab:\tx");
     stdc.printf("%s\n", "hex:\x41\x42");

@@ -48,6 +48,19 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name);
 LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 						   const char *field_name);
+// Struct-embedding promotion (IDEAS 3): locate `field` inside a direct
+// embedded-struct field of `struct_type`. Returns 1 and fills both indices
+// on success.
+int try_promoted_field(KawaCompiler *c, LLVMTypeRef struct_type,
+					   const char *field, int *out_mid, int *out_field);
+// Direct-field existence check (promotion never shadows these).
+int has_direct_field(KawaCompiler *c, LLVMTypeRef struct_type,
+					 const char *field);
+// Name of the field at `index` in `struct_type`.
+const char *sd_field_name(KawaCompiler *c, LLVMTypeRef struct_type,
+						  int index);
+// Registry lookup exposed for method promotion (codegen_expr).
+StructDef *find_struct_def_pub(KawaCompiler *c, LLVMTypeRef struct_type);
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t);
 int type_is_signed(KawaCompiler *c, Type *t);
 

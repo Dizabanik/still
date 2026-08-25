@@ -1,0 +1,96 @@
+#!/usr/bin/env kawa run
+// Struct embedding (IDEAS 3): Go-style composition. Embedded fields promote
+// to the outer struct at zero cost -- one constant-offset GEP per hop, which
+// the optimizer folds into a single displacement. Methods promote through
+// impl lookup; direct fields/methods win collisions (Go's depth rule).
+
+struct Person {
+    char* name;
+    u8 age;
+}
+impl Person {
+    fn u32 describe(Person p) {
+        return ((u32)p.age) * 100 + 1;
+    }
+    fn void birthday(Person* p) {
+        p->age = p->age + 1;
+    }
+}
+
+struct Employee {
+    Person;      // embedded: e.name / e.age / e.describe() all promote
+    u32 badge;
+}
+
+// Multi-level chain: Outer -> Mid -> Inner
+struct Inner {
+    i32 deep;
+}
+impl Inner {
+    fn i32 get(Inner* s) {
+        return s->deep;
+    }
+}
+struct Mid {
+    Inner;
+    i32 tag;
+}
+struct Outer {
+    Mid;
+    char* label;
+}
+
+// Collision rule: direct fields and methods shadow promoted ones.
+struct Base {
+    i32 value;
+}
+impl Base {
+    fn i32 who(Base b) {
+        return 1;
+    }
+}
+struct Derived {
+    Base;
+    i32 value;
+}
+impl Derived {
+    fn i32 who(Derived d) {
+        return 2;
+    }
+}
+
+fn i32 main() {
+    // 1. Field promotion both directions (read and write).
+    Employee e = { .badge = 7 };
+    e.name = "alice";
+    e.age = 34;
+    printf("1: %s age=%u badge=%u\n", e.name, ((u32)e.age), e.badge);
+
+    // 2. Method promotion, value receiver.
+    printf("2: describe=%u\n", e.describe());
+
+    // 3. Method promotion, pointer receiver (mutates through the embed).
+    e.birthday();
+    printf("3: age=%u\n", ((u32)e.age));
+
+    // 4. The embedded path still works explicitly.
+    e.Person.age = 20;
+    printf("4: explicit=%u\n", ((u32)e.Person.age));
+
+    // 5. Multi-level field + method promotion.
+    Outer o = { .label = "L" };
+    o.deep = 41;
+    o.tag = 9;
+    printf("5: deep=%d tag=%d get=%d\n", o.deep, o.tag, o.get());
+
+    // 6. Collision: direct wins on fields AND methods.
+    Derived d = { .value = 5 };
+    d.Base.value = 77;
+    printf("6: d.value=%d base=%d who=%d basewho=%d\n",
+           d.value, d.Base.value, d.who(), d.Base.who());
+
+    // 7. Promotion inside expressions and nested calls (zero copies).
+    Employee e2 = { .badge = 1 };
+    e2.age = 10;
+    printf("7: sum=%u\n", e.age + e2.age + e.badge);
+}

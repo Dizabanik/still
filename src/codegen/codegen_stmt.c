@@ -580,10 +580,16 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		// filter { ... } dregs (err) { ... }: try body with an explicit
 		// error slot. `press` stores into the slot and jumps to catch_bb.
 		// No unwinding -- press is a plain branch, so nounwind survives.
+		// The slot carries the declared payload type (`dregs (e: ParseErr)`);
+		// a typeless dregs keeps the legacy i32 slot.
 		LLVMContextRef ctx = c->context;
+		Type *payload = n->data.filter.err_type;
+		LLVMTypeRef slot_t =
+			payload ? get_llvm_type(c, payload)
+					: LLVMInt32TypeInContext(ctx);
 		FilterFrame frame;
-		frame.err_slot = create_entry_block_alloca(
-			c, LLVMInt32TypeInContext(ctx), "filter.err");
+		frame.err_slot = create_entry_block_alloca(c, slot_t, "filter.err");
+		frame.err_type = payload;
 		frame.catch_bb = LLVMAppendBasicBlock(c->current_func, "dregs");
 
 		FilterFrame *saved_filters = c->filter_stack;
@@ -611,8 +617,19 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMPositionBuilderAtEnd(c->builder, frame.catch_bb);
 		// Bind err_var to the SLOT (scope entries hold addresses; loads
 		// happen at use sites).
-		scope_push(c, n->data.filter.err_var, frame.err_slot,
-				   LLVMInt32TypeInContext(ctx), NULL);
+		{
+			ASTNode *bind = arena_alloc(c->arena, sizeof(ASTNode));
+			bind->type = NODE_VAR_DECL;
+			bind->data.var_decl.name = n->data.filter.err_var;
+			bind->data_type = payload;
+			if (!bind->data_type) {
+				bind->data_type =
+					arena_alloc(c->arena, sizeof(Type));
+				bind->data_type->kind = TYPE_I32;
+			}
+			scope_push(c, n->data.filter.err_var, frame.err_slot, slot_t,
+					   bind);
+		}
 		codegen_stmt(c, n->data.filter.catch_block);
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 			LLVMBuildBr(c->builder, merge_bb);
@@ -626,10 +643,20 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			exit(1);
 		}
 		FilterFrame *target = c->filter_stack;
+		LLVMContextRef ctx = c->context;
+		Type *dst_ast = target->err_type;
+		LLVMTypeRef slot_t =
+			dst_ast ? get_llvm_type(c, dst_ast)
+					: LLVMInt32TypeInContext(ctx);
+		// A struct literal pressed straight at a typed handler inherits the
+		// payload type (same propagation the var-decl path does) so its
+		// field layout resolves.
+		if (n->data.press.target->type == NODE_STRUCT_LITERAL &&
+			!n->data.press.target->data_type)
+			n->data.press.target->data_type = dst_ast;
 		LLVMValueRef val = codegen_expr(c, n->data.press.target);
-		LLVMTypeRef i32_t = LLVMInt32TypeInContext(c->context);
-		val = coerce_value(c, val, n->data.press.target->data_type, i32_t,
-						   NULL);
+		val = coerce_value(c, val, n->data.press.target->data_type, slot_t,
+						   dst_ast);
 		LLVMValueRef store = LLVMBuildStore(c->builder, val, target->err_slot);
 		LLVMSetVolatile(store, 1);
 		// Defers registered between the active filter and this press run

@@ -51,6 +51,100 @@ static StructDef *find_struct_def(KawaCompiler *c, LLVMTypeRef struct_type) {
 	return NULL;
 }
 
+StructDef *find_struct_def_pub(KawaCompiler *c, LLVMTypeRef struct_type) {
+	return find_struct_def(c, struct_type);
+}
+
+// Struct-embedding promotion (IDEAS 3): ONE hop. When `field` names no
+// direct field of `struct_type`, find the first direct embedded-struct
+// field whose own surface declares it. *out_mid gets the embedded field's
+// index, *out_field the member's index inside it. Direct fields always win
+// (callers check first); shallowest embedded match wins (Go's depth rule).
+int try_promoted_field(KawaCompiler *c, LLVMTypeRef struct_type,
+					   const char *field, int *out_mid, int *out_field);
+
+static int promoted_one_hop(KawaCompiler *c, LLVMTypeRef struct_type,
+							const char *field, int *out_mid,
+							int *out_field) {
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd)
+		return 0;
+	for (int i = 0; i < sd->field_count; i++) {
+		if (LLVMGetTypeKind(sd->fields[i].type) != LLVMStructTypeKind)
+			continue;
+		StructDef *inner_sd = find_struct_def(c, sd->fields[i].type);
+		if (!inner_sd)
+			continue;
+		for (int j = 0; j < inner_sd->field_count; j++) {
+			if (strcmp(inner_sd->fields[j].name, field) == 0) {
+				*out_mid = i;
+				*out_field = j;
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
+						 const char *field, int *out_mid, int *out_field,
+						 int depth);
+
+// One hop at this level: direct surface of any direct embedded struct.
+// Shallowest-first search over the whole embed tree. Returns the FIRST HOP
+// (this level's embedded field index); the access site loops, re-resolving
+// from the new container until the member is direct there.
+static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
+						 const char *field, int *out_mid, int *out_field,
+						 int depth) {
+	if (depth > 16)
+		return 0;
+	if (promoted_one_hop(c, struct_type, field, out_mid, out_field))
+		return 1;
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd)
+		return 0;
+	for (int i = 0; i < sd->field_count; i++) {
+		if (LLVMGetTypeKind(sd->fields[i].type) != LLVMStructTypeKind)
+			continue;
+		int m2, f2;
+		if (promoted_deep(c, sd->fields[i].type, field, &m2, &f2,
+						  depth + 1)) {
+			*out_mid = i;
+			*out_field = -1; // signal: descend, not done
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int try_promoted_field(KawaCompiler *c, LLVMTypeRef struct_type,
+					   const char *field, int *out_mid, int *out_field) {
+	return promoted_deep(c, struct_type, field, out_mid, out_field, 0);
+}
+
+// True when `struct_type` has a direct field named `field`. Promotion never
+// shadows real members.
+int has_direct_field(KawaCompiler *c, LLVMTypeRef struct_type,
+					 const char *field) {
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd)
+		return 0;
+	for (int i = 0; i < sd->field_count; i++)
+		if (strcmp(sd->fields[i].name, field) == 0)
+			return 1;
+	return 0;
+}
+
+// Name of the field at `index` in `struct_type`.
+const char *sd_field_name(KawaCompiler *c, LLVMTypeRef struct_type,
+						  int index) {
+	StructDef *sd = find_struct_def(c, struct_type);
+	if (!sd || index < 0 || index >= sd->field_count)
+		return "";
+	return sd->fields[index].name;
+}
+
 int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name) {
 	StructDef *sd = find_struct_def(c, struct_type);

@@ -522,6 +522,68 @@ static void emit_bounds_check(KawaCompiler *c, LLVMValueRef idx_i64,
 	LLVMPositionBuilderAtEnd(c->builder, cont_bb);
 }
 
+// Index into a COMPUTED slice value (`argv[0][i]`, `s.data[i]`): the pair
+// is already evaluated; extract data + len, bounds-check in debug builds,
+// and return the element address. Shared by get_address's NODE_INDEX.
+static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
+									 LLVMValueRef pair_val,
+									 LLVMTypeRef elem_t,
+									 LLVMTypeRef *out_type) {
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+	LLVMValueRef datap =
+		LLVMBuildExtractValue(c->builder, pair_val, 0, "slice_data");
+	LLVMValueRef slen =
+		LLVMBuildExtractValue(c->builder, pair_val, 1, "slice_len");
+
+	LLVMValueRef idx = codegen_expr(c, n->data.index.index);
+	if (!n->data.index.index->data_type &&
+		n->data.index.index->type == NODE_VAR_REF) {
+		Scope *sv2 = scope_find(
+			c, n->data.index.index->data.var_ref.name);
+		if (sv2 && sv2->node && sv2->node->data_type)
+			n->data.index.index->data_type = sv2->node->data_type;
+	}
+	Type idx64t = {0};
+	idx64t.kind = TYPE_I64;
+	idx = coerce_value(c, idx, n->data.index.index->data_type, i64_t,
+					   &idx64t);
+
+	if (c->debug_build && c->unchecked_depth == 0) {
+		LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx, slen,
+										"bounds_ok");
+		LLVMBasicBlockRef cont_bb =
+			LLVMAppendBasicBlock(c->current_func, "idx_in_bounds");
+		LLVMBasicBlockRef trap_bb =
+			LLVMAppendBasicBlock(c->current_func, "idx_oob");
+		LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
+
+		LLVMPositionBuilderAtEnd(c->builder, trap_bb);
+		LLVMValueRef msg = LLVMBuildGlobalStringPtr(
+			c->builder, "slice index out of bounds", "trap_msg");
+		LLVMValueRef file_v = LLVMBuildGlobalStringPtr(
+			c->builder, c->source_filename ? c->source_filename : "?",
+			"trap_file");
+		LLVMValueRef args[3] = {
+			msg, file_v,
+			LLVMConstInt(LLVMInt32TypeInContext(ctx),
+						 n->line > 0 ? n->line : 0, 1)};
+		LLVMBuildCall2(
+			c->builder,
+			LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
+			get_or_declare_trap_fn(c), args, 3, "");
+		LLVMBuildUnreachable(c->builder);
+
+		LLVMPositionBuilderAtEnd(c->builder, cont_bb);
+	}
+
+	LLVMValueRef addr = LLVMBuildGEP2(c->builder, elem_t, datap, &idx, 1,
+									  "elem_addr");
+	if (out_type)
+		*out_type = elem_t;
+	return addr;
+}
+
 LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 	switch (n->type) {
 	case NODE_VAR_REF: {
@@ -541,20 +603,66 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		// field slots 1 and 0 of the {data,len} pair -- no StructDef needed.
 		// On a fixed array, `.data` decays to &arr[0] and `.len` is the
 		// constant N.
-		if (n->data.member_access.object->type == NODE_VAR_REF &&
-			(strcmp(n->data.member_access.member, "len") == 0 ||
-			 strcmp(n->data.member_access.member, "data") == 0)) {
-			Scope *sv = scope_find(c,
-				n->data.member_access.object->data.var_ref.name);
-			Type *vt =
-				(sv && sv->node) ? sv->node->data_type : NULL;
-			if (vt && vt->kind == TYPE_SLICE) {
+		{
+			// Slice builtins on ANY slice-typed object: `.len` is field 1,
+			// `.data` is field 0. A bare var ref resolves through its scope
+			// entry (address of the pair); a computed slice value
+			// (`argv[0].len`, string literals) spills to an entry alloca so
+			// the lvalue contract holds -- O(2) promotes it away.
+			Type *vt = NULL;
+			LLVMValueRef pair_addr = NULL;
+			if (n->data.member_access.object->type == NODE_VAR_REF) {
+				Scope *sv = scope_find(
+					c, n->data.member_access.object->data.var_ref.name);
+				vt = (sv && sv->node) ? sv->node->data_type : NULL;
+				if (vt && vt->kind == TYPE_SLICE)
+					pair_addr = sv->val;
+				else
+					vt = NULL;
+			} else if (n->data.member_access.object->type ==
+					   NODE_INDEX) {
+				// Computed slices (`argv[0].len`): peel the index's element
+				// type from its base -- a ptr-to-slice indexes to a slice.
+				ASTNode *io = n->data.member_access.object;
+				Type *base_t = io->data.index.object->data_type;
+				if (!base_t &&
+					io->data.index.object->type == NODE_VAR_REF) {
+					Scope *sb = scope_find(
+						c,
+						io->data.index.object->data.var_ref.name);
+					base_t = (sb && sb->node) ? sb->node->data_type
+											  : NULL;
+				}
+				if (base_t && (base_t->kind == TYPE_PTR ||
+							   base_t->kind == TYPE_SLICE) &&
+					base_t->inner && base_t->inner->kind == TYPE_SLICE) {
+					vt = base_t->inner;
+					LLVMValueRef pair_val =
+						value_of_lvalue(c, io);
+					pair_addr = create_entry_block_alloca(
+						c, LLVMTypeOf(pair_val), "slice_pair_tmp");
+					LLVMBuildStore(c->builder, pair_val, pair_addr);
+				}
+			} else if (n->data.member_access.object->data_type &&
+					   n->data.member_access.object->data_type->kind ==
+						   TYPE_SLICE &&
+					   (strcmp(n->data.member_access.member, "len") == 0 ||
+						strcmp(n->data.member_access.member, "data") ==
+							0)) {
+				vt = n->data.member_access.object->data_type;
+				LLVMValueRef pair_val =
+					value_of_lvalue(c, n->data.member_access.object);
+				pair_addr = create_entry_block_alloca(
+					c, LLVMTypeOf(pair_val), "slice_pair_tmp");
+				LLVMBuildStore(c->builder, pair_val, pair_addr);
+			}
+			if (vt && pair_addr) {
 				int slot = strcmp(n->data.member_access.member, "len") == 0
 							   ? 1
 							   : 0;
 				LLVMTypeRef slice_t = get_llvm_type(c, vt);
 				LLVMValueRef fld = LLVMBuildStructGEP2(
-					c->builder, slice_t, sv->val, slot, "slice_fld");
+					c->builder, slice_t, pair_addr, slot, "slice_fld");
 				if (out_type) {
 					if (slot == 0) {
 						LLVMTypeRef elem =
@@ -567,7 +675,18 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				}
 				return fld;
 			}
-			if (vt && vt->kind == TYPE_ARRAY) {
+		}
+		{
+			Scope *sva2 = NULL;
+			Type *vta = n->data.member_access.object->data_type;
+			if (!vta && n->data.member_access.object->type == NODE_VAR_REF) {
+				sva2 = scope_find(
+					c, n->data.member_access.object->data.var_ref.name);
+				vta = (sva2 && sva2->node) ? sva2->node->data_type : NULL;
+			}
+			if (vta && vta->kind == TYPE_ARRAY &&
+				(strcmp(n->data.member_access.member, "len") == 0 ||
+				 strcmp(n->data.member_access.member, "data") == 0)) {
 				if (strcmp(n->data.member_access.member, "data") == 0) {
 					// An array has no pointer field: build one in an entry
 					// alloca holding &arr[0] so the lvalue contract holds
@@ -578,7 +697,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 						get_address(c,
 									n->data.member_access.object,
 									&ignored);
-					LLVMTypeRef elem = get_llvm_type(c, vt->inner);
+					LLVMTypeRef elem = get_llvm_type(c, vta->inner);
 					LLVMTypeRef ptr_t = LLVMPointerType(elem, 0);
 					LLVMValueRef data = LLVMBuildGEP2(
 						c->builder, elem, arr_addr,
@@ -603,7 +722,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 						c->builder,
 						LLVMConstInt(
 							LLVMInt64TypeInContext(c->context),
-							(unsigned long long)vt->array_len, 0),
+							(unsigned long long)vta->array_len, 0),
 						len_alloca);
 					if (out_type)
 						*out_type =
@@ -629,6 +748,29 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		if (LLVMGetTypeKind(struct_t) == LLVMPointerTypeKind)
 			struct_t = LLVMGetElementType(struct_t);
 
+		// Direct field first. Miss falls back to embedding promotion
+		// (IDEAS 3): `e.name` on `struct Employee { Person; u32 badge; }`
+		// resolves as e.Person.name -- one extra constant-offset GEP per
+		// hop, which the optimizer folds into a single displacement.
+		// The loop handles multi-level embeds (`o.Mid.Inner`-style).
+		int hops = 0;
+		while (!has_direct_field(c, struct_t,
+								 n->data.member_access.member)) {
+			int mid_idx = -1, inner_idx = -1;
+			(void)inner_idx;
+			if (!try_promoted_field(c, struct_t,
+									n->data.member_access.member,
+									&mid_idx, &inner_idx))
+				break;
+			LLVMValueRef mid_addr = LLVMBuildStructGEP2(
+				c->builder, struct_t, ptr, mid_idx, "emb_base");
+			ptr = mid_addr;
+			struct_t = LLVMStructGetTypeAtIndex(
+				struct_t, (unsigned)mid_idx);
+			hops++;
+			if (hops > 16)
+				break; // embedding cycles cannot exist in finite types
+		}
 		int idx = get_field_index(c, struct_t, n->data.member_access.member);
 		LLVMValueRef field_addr =
 			LLVMBuildStructGEP2(c->builder, struct_t, ptr, idx, "fld_addr");
@@ -646,6 +788,20 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			elem_type = get_llvm_type(c, n->data_type);
 
 		ASTNode *obj = n->data.index.object;
+		// Indexing a SLICE-typed expression (`argv[0][0]`): the data
+		// pointer is extracted from the pair and GEP-ed directly -- GEP
+		// through the pair value itself would be invalid IR.
+		if (obj->type != NODE_VAR_REF) {
+			Type *ot = obj->data_type;
+			if (!ot && obj->type == NODE_MEMBER_ACCESS)
+				ot = obj->data_type;
+			if (ot && ot->kind == TYPE_SLICE) {
+				LLVMValueRef pair_val = value_of_lvalue(c, obj);
+				return slice_index_addr(c, n, pair_val,
+										get_llvm_type(c, ot->inner),
+										out_type);
+			}
+		}
 		LLVMValueRef base;
 		LLVMTypeRef elem = elem_type;
 

@@ -26,7 +26,8 @@ typedef struct Scope {
 // press is an explicit control transfer, so nounwind survives everywhere.
 typedef struct FilterFrame {
 	LLVMBasicBlockRef catch_bb;
-	LLVMValueRef err_slot; // alloca'd i32 in the enclosing function
+	LLVMValueRef err_slot; // alloca in the enclosing function (payload type)
+	Type *err_type;		 // declared payload type; NULL = legacy i32
 	struct DeferFrame *defers_at_entry; // press runs only defers newer than this
 	struct FilterFrame *next;
 } FilterFrame;

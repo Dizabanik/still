@@ -89,6 +89,7 @@ void parser_init(Parser *p, Lexer *l, Arena *a) {
 	p->decl_count = 0;
 	p->fn_sig_count = 0;
 	p->soa_count = 0;
+	p->struct_name_count = 0;
 }
 
 static void advance(Parser *p) {
@@ -234,13 +235,15 @@ static Type *parse_type(Parser *p) {
 	else if (tok == TOK_F64)
 		t->kind = TYPE_F64;
 	else if (tok == TOK_STR) {
-		// `str` is a builtin: pointer to char (NUL-terminated, matching
-		// string literals). Falls through to the shared postfix handling
-		// below, so `str*` (char**, argv-style) and `str[4]` also work.
+		// `str` is a builtin: a fat {ptr,len} view over UTF-8 bytes
+		// (IDEAS 3) -- same layout as []u8. `.len`/`.data`, content
+		// comparison, concat and indexing are primitives on the view.
+		// Falls through to the shared postfix handling below, so
+		// `str*` (ptr-to-view) also works.
 		Type *ch = arena_alloc(p->arena, sizeof(Type));
-		ch->kind = TYPE_CHAR;
+		ch->kind = TYPE_U8;
 		ch->inner = NULL;
-		t->kind = TYPE_PTR;
+		t->kind = TYPE_SLICE;
 		t->inner = ch;
 	} else if (tok == TOK_IDENTIFIER) {
 		t->kind = TYPE_STRUCT;
@@ -474,6 +477,79 @@ static int is_soa_struct_var(Parser *p, const char *name) {
 	return 0;
 }
 
+// Struct embedding (IDEAS 3): find a direct field of struct `sname` whose
+// name is `field`. Returns the embedded FIELD's declaring node or NULL.
+static ASTNode *find_struct_field(Parser *p, const char *sname,
+								  const char *field);
+
+// Declared type of field `field` on struct `sname` (parse-time view of the
+// struct registry; NULL when either is unknown). Powers member-chain
+// receiver typing for method calls (`d.Base.who()`).
+static Type *find_field_type(Parser *p, Type *struct_t, const char *field) {
+	if (!struct_t || struct_t->kind != TYPE_STRUCT || !struct_t->name)
+		return NULL;
+	for (int si = 0; si < p->struct_name_count; si++) {
+		if (strcmp(p->struct_names[si], struct_t->name) != 0)
+			continue;
+		for (ASTNode *f = p->struct_nodes[si]->data.struct_decl.fields; f;
+			 f = f->next)
+			if (strcmp(f->data.var_decl.name, field) == 0)
+				return f->data_type;
+		break;
+	}
+	return NULL;
+}
+
+static int fn_sig_known(Parser *p, const char *name) {
+	for (int k = p->fn_sig_count - 1; k >= 0; k--)
+		if (strcmp(p->fn_sigs[k].name, name) == 0)
+			return 1;
+	return 0;
+}
+
+// Struct-embedding method promotion (IDEAS 3): when `outer` declares no
+// method `m`, search its direct embedded structs -- and theirs, depth-first
+// (shallowest wins, Go's rule). On success writes the declaring struct's
+// name into out_struct and the EMBEDDING FIELD PATH into out_path
+// ("Mid" or "Mid.Inner"); the caller rewrites the receiver to obj.<path>.
+static int promoted_method_lookup(Parser *p, const char *outer,
+								  const char *method, int depth,
+								  char *out_struct, size_t ssz,
+								  char *out_path, size_t psz) {
+	if (depth > 8)
+		return 0;
+	for (int si = 0; si < p->struct_name_count; si++) {
+		if (strcmp(p->struct_names[si], outer) != 0)
+			continue;
+		ASTNode *st = p->struct_nodes[si];
+		for (ASTNode *f = st->data.struct_decl.fields; f; f = f->next) {
+			if (!f->data_type || f->data_type->kind != TYPE_STRUCT ||
+				!f->data_type->name)
+				continue;
+			const char *ename = f->data_type->name;
+			char qual[256];
+			snprintf(qual, sizeof(qual), "%s__%s", ename, method);
+			if (fn_sig_known(p, qual)) {
+				snprintf(out_struct, ssz, "%s", ename);
+				snprintf(out_path, psz, "%s", f->data.var_decl.name);
+				return 1;
+			}
+			if (promoted_method_lookup(p, ename, method, depth + 1,
+									   out_struct, ssz, out_path + 0,
+									   psz)) {
+				// Prepend this hop: path becomes "<f>.<inner path>".
+				char tail[256];
+				snprintf(tail, sizeof(tail), "%s", out_path);
+				snprintf(out_path, psz, "%s.%s", f->data.var_decl.name,
+						 tail);
+				return 1;
+			}
+		}
+		break;
+	}
+	return 0;
+}
+
 static int peek_is_struct_literal(Parser *p) {
 	Lexer temp = *p->lexer; // Clone lexer state to peek without consuming
 
@@ -630,13 +706,15 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_STRING_LIT) {
 		n->type = NODE_STRING_LIT;
 		n->data.str_lit.s_val = p->cur.text;
-		// A string literal IS a str (ptr<char>). Without this, `let s =
-		// "x"` inferred u32 and s == other_str compared an i32 against a
-		// pointer.
+		// A string literal IS a str: a fat {ptr,len} view over the
+		// constant's bytes (IDEAS 3). The storage keeps a trailing NUL so
+		// decaying to char* at C boundaries stays valid. len/data members,
+		// content comparison, concat and indexing all come free with the
+		// slice representation.
 		Type *ch = arena_alloc(p->arena, sizeof(Type));
-		ch->kind = TYPE_CHAR;
+		ch->kind = TYPE_U8;
 		Type *st = arena_alloc(p->arena, sizeof(Type));
-		st->kind = TYPE_PTR;
+		st->kind = TYPE_SLICE;
 		st->inner = ch;
 		n->data_type = st;
 		advance(p);
@@ -829,6 +907,24 @@ static ASTNode *parse_primary(Parser *p) {
 static ASTNode *parse_postfix(Parser *p) {
 	ASTNode *expr = parse_primary(p);
 	while (1) {
+		// TypeName { ... } in expression position: a struct literal. The
+		// identifier must name a declared struct, so `if (x) { ... }`-style
+		// blocks after bare identifiers never reach here.
+		if (p->cur.type == TOK_LBRACE && expr->type == NODE_VAR_REF) {
+			int names_struct = 0;
+			for (int si = 0; si < p->struct_name_count; si++)
+				if (strcmp(p->struct_names[si],
+						   expr->data.var_ref.name) == 0)
+					names_struct = 1;
+			if (names_struct) {
+				Type *st_t = arena_alloc(p->arena, sizeof(Type));
+				st_t->kind = TYPE_STRUCT;
+				st_t->name = expr->data.var_ref.name;
+				ASTNode *lit = parse_struct_literal(p);
+				lit->data_type = st_t;
+				return lit;
+			}
+		}
 		if (p->cur.type == TOK_DOT) {
 			advance(p);
 			// SoA rewrite (IDEAS 2.7): `ps[i].x` on a #[soa] struct value
@@ -945,15 +1041,58 @@ static ASTNode *parse_postfix(Parser *p) {
 				self_obj = expr->data.member_access.object;
 				method_name = expr->data.member_access.member;
 
-				// Lookup the type of the object (e.g., look up 'k' to find
-				// 'User')
+				// Resolve the receiver's struct type. A bare var ref looks
+				// up its declaration; a member chain (`d.Base.who()`) walks
+				// each hop's declared field type; a deref peels one pointer.
+				Type *recv_t = NULL;
 				if (self_obj->type == NODE_VAR_REF) {
 					ASTNode *decl = find_decl(p, self_obj->data.var_ref.name);
-					if (decl && decl->data_type &&
-						decl->data_type->kind == TYPE_STRUCT) {
-						struct_name = decl->data_type->name;
-						is_method_call = 1;
+					recv_t = decl ? decl->data_type : NULL;
+				} else if (self_obj->type == NODE_MEMBER_ACCESS) {
+					// Walk the chain from the root, following declared
+					// field types (embedding paths included).
+					ASTNode *root = self_obj;
+					while (root->type == NODE_MEMBER_ACCESS)
+						root = root->data.member_access.object;
+					if (root->type == NODE_VAR_REF ||
+						root->type == NODE_DEREF) {
+						if (self_obj->data_type) {
+							recv_t = self_obj->data_type;
+						} else {
+							// Rebuild type by walking fields of the root's
+							// struct through each named hop.
+							ASTNode *chain[32];
+							int cn = 0;
+							for (ASTNode *h = self_obj;
+								 h && h->type == NODE_MEMBER_ACCESS &&
+									 cn < 32;
+								 h = h->data.member_access.object)
+								chain[cn++] = h;
+							ASTNode *rdecl =
+								root->type == NODE_VAR_REF
+									? find_decl(
+										  p,
+										  root->data.var_ref.name)
+									: NULL;
+							Type *cur_t =
+								rdecl ? rdecl->data_type : NULL;
+							if (cur_t && cur_t->kind == TYPE_PTR &&
+								cur_t->inner)
+								cur_t = cur_t->inner;
+							for (int hi = cn - 1; hi >= 0 && cur_t;
+								 hi--) {
+								const char *hop =
+									chain[hi]->data.member_access
+										.member;
+								Type *next_t =
+									find_field_type(p, cur_t, hop);
+								cur_t = next_t;
+							}
+							recv_t = cur_t;
+						}
 					}
+					if (recv_t && recv_t->kind == TYPE_PTR && recv_t->inner)
+						recv_t = recv_t->inner;
 				} else if (self_obj->type == NODE_DEREF) {
 					ASTNode *inner = self_obj->data.deref.expr;
 					if (inner->type == NODE_VAR_REF) {
@@ -962,10 +1101,13 @@ static ASTNode *parse_postfix(Parser *p) {
 							decl->data_type->kind == TYPE_PTR &&
 							decl->data_type->inner &&
 							decl->data_type->inner->kind == TYPE_STRUCT) {
-							struct_name = decl->data_type->inner->name;
-							is_method_call = 1;
+							recv_t = decl->data_type->inner;
 						}
 					}
+				}
+				if (recv_t && recv_t->kind == TYPE_STRUCT && recv_t->name) {
+					struct_name = recv_t->name;
+					is_method_call = 1;
 				}
 			}
 			// ---------------------------------------------
@@ -1017,13 +1159,82 @@ static ASTNode *parse_postfix(Parser *p) {
 				new_callee->data.var_ref.name = mangled;
 				call->data.call.callee = new_callee;
 
-				// 3. Inject 'self' (k) as the first argument
-				// We must create a COPY of the object node or reuse it safely
-				// to avoid double-free or AST cycle issues, though reusing ptr
-				// is usually fine here.
-				ASTNode *self_arg = self_obj;
-				self_arg->next = head;			 // Link old args after self
-				call->data.call.args = self_arg; // Self is now head
+				// 3. Receiver binding. Kawa methods declare the receiver
+				// explicitly (`fn u32 add(User a, User b)` called as
+				// `k.add(a, b)` binds k->a). Inject the receiver as the
+				// first argument ONLY when the declared parameter count is
+				// exactly one more than the explicit argument count --
+				// otherwise the explicit arguments already carry it (or
+				// ignore it), and injecting would shift every parameter.
+				int expl_args = 0;
+				for (ASTNode *a3 = head; a3; a3 = a3->next)
+					expl_args++;
+				int inject_self = 0;
+				for (int si2 = p->fn_sig_count - 1; si2 >= 0; si2--) {
+					if (strcmp(p->fn_sigs[si2].name, mangled) == 0) {
+						inject_self =
+							p->fn_sigs[si2].nparams == expl_args + 1;
+						break;
+					}
+				}
+				// Embedding promotion (IDEAS 3): `e.describe()` where
+				// describe lives on an EMBEDDED Person retargets to
+				// Person__describe with the receiver rewritten to
+				// e.Person. Parse-time rewrite -- codegen sees an ordinary
+				// method call, so the emitted code costs exactly what a
+				// hand-written e.Person.describe() would.
+				if (!inject_self) {
+					int outer_known = 0;
+					for (int k = p->fn_sig_count - 1; k >= 0; k--) {
+						if (strcmp(p->fn_sigs[k].name, mangled) == 0) {
+							outer_known = 1;
+							break;
+						}
+					}
+					if (!outer_known && struct_name) {
+						char decl_struct[128], path[256];
+						if (promoted_method_lookup(
+								p, struct_name, method_name, 0,
+								decl_struct, sizeof(decl_struct),
+								path, sizeof(path))) {
+							size_t qlen = strlen(decl_struct) +
+										  strlen(method_name) + 4;
+							char *qmangled =
+								arena_alloc(p->arena, qlen);
+							snprintf(qmangled, qlen, "%s__%s",
+									 decl_struct, method_name);
+							new_callee->data.var_ref.name = qmangled;
+							// Receiver: obj.<path> -- one MEMBER_ACCESS per
+							// hop, innermost last.
+							ASTNode *recv = self_obj;
+							char hop[128];
+							int off = 0;
+							while (sscanf(path + off, "%127[^.]", hop) == 1) {
+								ASTNode *ma = arena_alloc(
+									p->arena, sizeof(ASTNode));
+								ma->type = NODE_MEMBER_ACCESS;
+								ma->data.member_access.object = recv;
+								ma->data.member_access.member =
+									arena_strdup(p->arena, hop);
+								off += strlen(hop);
+								if (path[off] == '.')
+									off++;
+								recv = ma;
+							}
+							self_obj = recv;
+							// Receiver binds to the promoted method's
+							// declared parameter.
+							inject_self = 1;
+						}
+					}
+				}
+				if (inject_self) {
+					ASTNode *self_arg = self_obj;
+					self_arg->next = head;
+					call->data.call.args = self_arg;
+				} else {
+					call->data.call.args = head;
+				}
 			} else {
 				// Standard function call behavior
 				call->data.call.callee = expr;
@@ -1114,6 +1325,12 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			ternary->data.ternary.cond = lhs;
 			ternary->data.ternary.then_expr = then_expr;
 			ternary->data.ternary.else_expr = else_expr;
+			// The ternary's type is its arms' type (they must agree);
+			// without this, `let s = c ? "a" : "b"` inferred u32 and the
+			// {ptr,len} view failed every later coercion.
+			ternary->data_type = then_expr->data_type
+									 ? then_expr->data_type
+									 : else_expr->data_type;
 			lhs = ternary;
 			continue;
 		}
@@ -1607,6 +1824,12 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		consume(p, TOK_LPAREN, "(");
 		filt->data.filter.err_var = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Err var");
+		// Typed payload: `dregs (e: ParseErr)`. Optional -- a bare `(e)`
+		// keeps the legacy i32 slot so existing code is untouched.
+		if (p->cur.type == TOK_COLON) {
+			advance(p);
+			filt->data.filter.err_type = parse_type(p);
+		}
 		consume(p, TOK_RPAREN, ")");
 		filt->data.filter.catch_block = parse_block(p);
 		return filt;
@@ -1813,9 +2036,22 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	// Generic templates (return type is a bare `T`) are excluded: their
 	// concrete type only exists per instantiation.
 	if (p->fn_sig_count < 128 && ret_type) {
+		int np = 0;
+		for (ASTNode *a = args_head; a; a = a->next)
+			np++;
 		p->fn_sigs[p->fn_sig_count].name = func_name;
 		p->fn_sigs[p->fn_sig_count].ret = ret_type;
+		p->fn_sigs[p->fn_sig_count].nparams = np;
 		p->fn_sig_count++;
+	}
+	// Register parameters so member/index typing (`argv[0].len`) can see
+	// their declared types.
+	for (ASTNode *a = args_head; a; a = a->next) {
+		if (p->decl_count < 256) {
+			p->decls[p->decl_count].name = a->data.var_decl.name;
+			p->decls[p->decl_count].node = a;
+			p->decl_count++;
+		}
 	}
 	fn_node->data.func.body = parse_block(p);
 	**tail = fn_node;
@@ -2022,8 +2258,12 @@ ASTNode *parse_program(Parser *p) {
 
 			// Register the signature for let-inference too.
 			if (p->fn_sig_count < 128 && ret_type) {
+				int np2 = 0;
+				for (ASTNode *a2 = args_head; a2; a2 = a2->next)
+					np2++;
 				p->fn_sigs[p->fn_sig_count].name = fn_name;
 				p->fn_sigs[p->fn_sig_count].ret = ret_type;
+				p->fn_sigs[p->fn_sig_count].nparams = np2;
 				p->fn_sig_count++;
 			}
 		} else if (p->cur.type == TOK_STRUCT) {
@@ -2039,6 +2279,12 @@ parse_soa_struct:
 			st->type = NODE_STRUCT_DECL;
 			st->data.struct_decl.name = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Struct name");
+			if (p->struct_name_count < 64) {
+				p->struct_names[p->struct_name_count] =
+					st->data.struct_decl.name;
+				p->struct_nodes[p->struct_name_count] = st;
+				p->struct_name_count++;
+			}
 			consume(p, TOK_LBRACE, "{");
 
 			ASTNode *fields_head = NULL;
@@ -2046,6 +2292,21 @@ parse_soa_struct:
 
 			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 				Type *f_type = parse_type(p);
+				// Embedded struct (IDEAS 3): `struct Employee { Person; u32
+				// badge; }`. A type followed directly by ';' embeds it --
+				// Go-style composition. The field is stored under the
+				// struct's own name so field promotion can find it.
+				if (f_type->kind == TYPE_STRUCT && f_type->name &&
+					p->cur.type == TOK_SEMICOLON) {
+					consume(p, TOK_SEMICOLON, ";");
+					ASTNode *emb = arena_alloc(p->arena, sizeof(ASTNode));
+					emb->type = NODE_VAR_DECL;
+					emb->data.var_decl.name = f_type->name;
+					emb->data_type = f_type;
+					*fields_tail = emb;
+					fields_tail = &emb->next;
+					continue;
+				}
 				char *f_name = p->cur.text;
 				consume(p, TOK_IDENTIFIER, "Field name");
 				consume(p, TOK_SEMICOLON, ";");

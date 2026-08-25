@@ -20,16 +20,17 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	for (ASTNode *a = cur->data.func.args; a; a = a->next)
 		explicit_arg_cnt++;
 
-	int total_arg_cnt = explicit_arg_cnt + (implicit_self_struct ? 1 : 0);
+	// Methods declare their receiver explicitly as the first parameter
+	// (Kawa style), so there is no hidden self argument: the declared
+	// signature IS the ABI. implicit_self_struct only contributes the
+	// `Struct__` mangling prefix.
+	int total_arg_cnt = explicit_arg_cnt;
 
 	LLVMTypeRef *param_types =
 		arena_alloc(c->arena, sizeof(LLVMTypeRef) *
 								  (total_arg_cnt > 0 ? total_arg_cnt : 1));
 
 	int type_idx = 0;
-	if (implicit_self_struct)
-		param_types[type_idx++] = i8ptr;
-
 	for (ASTNode *a = cur->data.func.args; a; a = a->next)
 		param_types[type_idx++] = get_llvm_type(c, a->data_type);
 
@@ -108,9 +109,6 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// Spill each parameter to an entry-block alloca so mem2reg can promote
 	// it; parameters used exactly once never touch memory after O3.
 	int arg_idx = 0;
-
-	if (implicit_self_struct)
-		arg_idx++; // self pointer stays in its LLVM parameter slot
 
 	for (ASTNode *a = cur->data.func.args; a; a = a->next) {
 		LLVMValueRef p_val = LLVMGetParam(c->current_func, arg_idx++);

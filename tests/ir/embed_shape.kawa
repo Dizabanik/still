@@ -1,0 +1,24 @@
+// Struct embedding (IDEAS 3): promoted field access is ONE extra constant-
+// offset GEP per hop -- the optimizer folds it into a single displacement.
+// No copies, no helper calls.
+//
+// OPT: 0
+import stdc;
+
+struct Person {
+    char* name;
+    u8 age;
+}
+struct Employee {
+    Person;
+    u32 badge;
+}
+fn i32 main() {
+    Employee e = { .badge = 7 };
+    e.name = "ada";
+    printf("%s %d\n", e.name, ((i32)e.badge));
+    return 0;
+}
+
+// CHECK: %emb_base = getelementptr inbounds nuw %Employee, ptr %e, i32 0, i32 0
+// CHECK-NOT: call void @llvm.memcpy

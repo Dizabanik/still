@@ -1,0 +1,1 @@
+=== but expr- path: — expr=argv VAR_REF has no data_type either. So argv[0].data_type NULL → falls to generic member path → boom.

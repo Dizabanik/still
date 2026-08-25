@@ -1,0 +1,15 @@
+t1: parsing
+t1: code=3 line=17
+t1: done
+t2: ok path
+t3: inner code=7
+t3: outer try continues
+t4: legacy 42
+t5: io fd=9 fatal=1
+t5: outer try continues
+t5: rethrown as ParseErr 99
+t6: cleanup
+t6: caught code=11
+t7: runtime payload 123 10
+t8: u8 payload 200
+t8: f64 payload 0.5
