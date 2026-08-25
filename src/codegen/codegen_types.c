@@ -143,6 +143,12 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	case TYPE_U64:
 		t->is_signed = kind_is_signed_int(t->kind);
 		return LLVMInt64TypeInContext(c->context);
+	case TYPE_F16:
+		t->is_signed = 1; // IEEE float, signed-ness per op
+		return LLVMHalfTypeInContext(c->context);
+	case TYPE_BF16:
+		t->is_signed = 1;
+		return LLVMBFloatTypeInContext(c->context);
 	case TYPE_F32:
 		t->is_signed = 1; // IEEE float, signed-ness per op
 		return LLVMFloatTypeInContext(c->context);

@@ -1,0 +1,49 @@
+// Built-in reductions: sum/max/min/dot lower to internal canonical loops
+// (vectorizer-perfect), over arrays and slices of every numeric width.
+import stdc;
+
+fn f32 mean([]f32 xs) {
+    return sum(xs) / ((f32)xs.len);
+}
+
+fn i32 main() {
+    // Every integer width; sum widens to i64 (no mid-loop overflow).
+    [5]i8 bs = {1, 2, 3, 4, 5};
+    [5]i16 ss = {100, 200, 300, 400, 500};
+    [3]i64 ls = {1000000000, 2000000000, 3000000000};
+    printf("i8=%lld i16=%lld i64=%lld\n", sum(bs), sum(ss), sum(ls));
+
+    // max/min on unsigned elements return the element type.
+    [4]u8 us = {250, 3, 255, 7};
+    printf("umax=%u umin=%u\n", ((u32)max(us)), ((u32)min(us)));
+
+    // FP reductions accumulate in f64.
+    [4]f32 fs = {1.5f32, 2.5f32, 0.5f32, 3.5f32};
+    printf("fsum=%.2f fmax=%.2f fmin=%.2f\n", sum(fs), max(fs), min(fs));
+
+    // dot: elementwise multiply-accumulate; shorter length wins.
+    [3]f32 as = {1.0f32, 2.0f32, 3.0f32};
+    [3]f32 ws = {0.5f32, 0.5f32, 0.5f32};
+    printf("dot=%.2f\n", dot(as, ws));
+    [2]i32 p = {1, 2};
+    [3]i32 q = {10, 20, 30};
+    printf("idot=%lld\n", dot(p, q));
+
+    // Slice views flow through user functions unchanged.
+    []f32 view = as;
+    printf("mean=%.3f\n", mean(view));
+
+    // f16 reductions
+    [8]f16 hs = {1.0f16, 1.5f16, 2.0f16, 2.5f16,
+                 3.0f16, 3.5f16, 4.0f16, 4.5f16};
+    printf("hsum=%.1f hmax=%.1f\n", ((f32)sum(hs)), ((f32)max(hs)));
+
+    // Saturating narrow-int ops: clamp instead of wrap.
+    u8 a = 200;
+    u8 b = 100;
+    i8 cq = 120;
+    i8 dq = 10;
+    printf("qadd=%u qiadd=%d qmul=%u\n", ((u32)qadd(a, b)),
+           ((i32)qadd(cq, dq)), ((u32)qmul(((u8)20), ((u8)30))));
+    return 0;
+}

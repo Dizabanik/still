@@ -198,20 +198,18 @@ LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 	// Integer literal -> FP destination (e.g. `f64 x = 5;`): the folder
 	// emits i32 for int literals regardless of the destination kind.
 	if (n->type == NODE_LITERAL && n->data_type &&
+		n->data_type->kind != TYPE_F16 && n->data_type->kind != TYPE_BF16 &&
 		n->data_type->kind != TYPE_F32 && n->data_type->kind != TYPE_F64 &&
-		(LLVMGetTypeKind(dst) == LLVMFloatTypeKind ||
-		 LLVMGetTypeKind(dst) == LLVMDoubleTypeKind)) {
+		is_fp_kind(LLVMGetTypeKind(dst))) {
 		double d = init_is_signed(c, n) ? (double)LLVMConstIntGetSExtValue(v)
 										: (double)LLVMConstIntGetZExtValue(v);
 		return LLVMConstReal(dst, d);
 	}
-	// FP -> FP width change (f32 <-> f64): no ConstFPTrunc/Ext in this API,
-	// so round-trip through the double value and re-emit at `dst`.
-	if ((LLVMGetTypeKind(LLVMTypeOf(v)) == LLVMFloatTypeKind ||
-		 LLVMGetTypeKind(LLVMTypeOf(v)) == LLVMDoubleTypeKind) &&
-		(LLVMGetTypeKind(dst) == LLVMFloatTypeKind ||
-		 LLVMGetTypeKind(dst) == LLVMDoubleTypeKind) &&
-		LLVMTypeOf(v) != dst)
+	// FP -> FP width change (any of f16/bf16/f32 <-> f64): no
+	// ConstFPTrunc/Ext in this API, so round-trip through the double value
+	// and re-emit at `dst`.
+	if (is_fp_kind(LLVMGetTypeKind(LLVMTypeOf(v))) &&
+		is_fp_kind(LLVMGetTypeKind(dst)) && LLVMTypeOf(v) != dst)
 		return LLVMConstReal(
 			dst, LLVMConstRealGetDouble(v, &(LLVMBool){0}));
 
@@ -224,8 +222,10 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 									LLVMTypeRef dst) {
 	switch (n->type) {
 	case NODE_LITERAL:
-		if (n->data_type &&
-			(n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64))
+		if (n->data_type && (n->data_type->kind == TYPE_F16 ||
+							 n->data_type->kind == TYPE_BF16 ||
+							 n->data_type->kind == TYPE_F32 ||
+							 n->data_type->kind == TYPE_F64))
 			return LLVMConstReal(get_llvm_type(c, n->data_type),
 								 (double)n->data.literal.f_val);
 		// Match codegen_expr: emit at the literal's own typed width with
@@ -903,23 +903,35 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 		}
 		return v;
 	}
-	if (sk == LLVMIntegerTypeKind &&
-		(dk == LLVMFloatTypeKind || dk == LLVMDoubleTypeKind))
+	if (sk == LLVMIntegerTypeKind && is_fp_kind(dk))
 		return type_is_signed(c, src_ast)
 				   ? LLVMBuildSIToFP(c->builder, v, dst, "sitofp")
 				   : LLVMBuildUIToFP(c->builder, v, dst, "uitofp");
-	if ((sk == LLVMFloatTypeKind || sk == LLVMDoubleTypeKind) &&
-		dk == LLVMIntegerTypeKind)
+	if (is_fp_kind(sk) && dk == LLVMIntegerTypeKind)
 		return type_is_signed(c, dst_ast)
 				   ? LLVMBuildFPToSI(c->builder, v, dst, "fptosi")
 				   : LLVMBuildFPToUI(c->builder, v, dst, "fptoui");
-	if ((sk == LLVMFloatTypeKind || sk == LLVMDoubleTypeKind) &&
-		(dk == LLVMFloatTypeKind || dk == LLVMDoubleTypeKind))
-		return sk == dk
-				   ? v
-				   : (sk == LLVMFloatTypeKind
-						  ? LLVMBuildFPExt(c->builder, v, dst, "fpext")
-						  : LLVMBuildFPTrunc(c->builder, v, dst, "fptrunc"));
+	if (is_fp_kind(sk) && is_fp_kind(dk)) {
+		if (sk == dk)
+			return v;
+		// Width decides direction; equal widths of different encodings
+		// (f16 <-> bf16) go through f32 as the common meeting ground.
+		unsigned sw_ = sk == LLVMHalfTypeKind     ? 16
+					   : sk == LLVMBFloatTypeKind ? 16
+					   : sk == LLVMFloatTypeKind  ? 32
+												  : 64;
+		unsigned dw_ = dk == LLVMHalfTypeKind     ? 16
+					   : dk == LLVMBFloatTypeKind ? 16
+					   : dk == LLVMFloatTypeKind  ? 32
+												  : 64;
+		if (sw_ < dw_)
+			return LLVMBuildFPExt(c->builder, v, dst, "fpext");
+		if (sw_ > dw_)
+			return LLVMBuildFPTrunc(c->builder, v, dst, "fptrunc");
+		LLVMTypeRef f32_t = LLVMFloatTypeInContext(c->context);
+		LLVMValueRef up = LLVMBuildFPExt(c->builder, v, f32_t, "fpmeet");
+		return LLVMBuildFPTrunc(c->builder, up, dst, "fpnarrow");
+	}
 	if (sk == LLVMPointerTypeKind && dk == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "ptr_cast");
 	if (sk == LLVMArrayTypeKind && dk == LLVMStructTypeKind &&

@@ -1,0 +1,8 @@
+i8=15 i16=1500 i64=6000000000
+umax=255 umin=3
+fsum=8.00 fmax=3.50 fmin=0.50
+dot=3.00
+idot=50
+mean=2.000
+hsum=22.0 hmax=4.5
+qadd=255 qiadd=127 qmul=255

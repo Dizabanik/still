@@ -85,6 +85,7 @@ void parser_init(Parser *p, Lexer *l, Arena *a) {
 	p->had_error = 0;
 	p->panic_mode = 0;
 	p->decl_count = 0;
+	p->fn_sig_count = 0;
 }
 
 static void advance(Parser *p) {
@@ -203,6 +204,10 @@ static Type *parse_type(Parser *p) {
 		t->kind = TYPE_U32;
 	else if (tok == TOK_I32)
 		t->kind = TYPE_I32;
+	else if (tok == TOK_F16)
+		t->kind = TYPE_F16;
+	else if (tok == TOK_BF16)
+		t->kind = TYPE_BF16;
 	else if (tok == TOK_F32)
 		t->kind = TYPE_F32;
 	else if (tok == TOK_VOID)
@@ -322,6 +327,22 @@ static Type *unify_types(Parser *p, Type *a, Type *b) {
 			return ra > rb ? a : b;
 		return type_is_signed_k(a) ? a : b;
 	}
+	// Mixed FP widths: the result is the wider precision (f16+bf16 meet
+	// at f32, f32+f64 -> f64) -- mirrors the runtime promotion in
+	// codegen's binop path so parse-time and IR-time types agree.
+	int a_fp = (a->kind >= TYPE_F16 && a->kind <= TYPE_F64);
+	int b_fp = (b->kind >= TYPE_F16 && b->kind <= TYPE_F64);
+	if (a_fp && b_fp) {
+		static const int fp_rank[] = {
+			[TYPE_F16] = 1, [TYPE_BF16] = 1, [TYPE_F32] = 2, [TYPE_F64] = 3};
+		return fp_rank[a->kind] >= fp_rank[b->kind] ? a : b;
+	}
+	// Int mixed with FP: usual arithmetic conversions promote the int to
+	// the FP side (`2 * 1.5f32` is 3.0f32), same rule as C.
+	if (a_int && b_fp)
+		return b;
+	if (b_int && a_fp)
+		return a;
 	return a->kind == b->kind ? a : NULL;
 }
 
@@ -580,8 +601,15 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_FLOAT_LIT) {
 		n->type = NODE_LITERAL;
 		n->data_type = arena_alloc(p->arena, sizeof(Type));
-		n->data_type->kind = TYPE_F64; // FIX: Default to F64
-		n->data.literal.f_val = strtod(p->cur.text, NULL); // FIX: use strtod
+		// Suffix wins (1.5f32 is exactly f32); unsuffixed defaults to f64
+		// so plain numeric code keeps C's default precision.
+		switch (p->cur.float_suffix) {
+		case 1: n->data_type->kind = TYPE_F16; break;
+		case 2: n->data_type->kind = TYPE_F32; break;
+		case 4: n->data_type->kind = TYPE_BF16; break;
+		default: n->data_type->kind = TYPE_F64; break;
+		}
+		n->data.literal.f_val = strtod(p->cur.text, NULL);
 		advance(p);
 	} else if (p->cur.type == TOK_STRING_LIT) {
 		n->type = NODE_STRING_LIT;
@@ -930,6 +958,27 @@ static ASTNode *parse_postfix(Parser *p) {
 				// Standard function call behavior
 				call->data.call.callee = expr;
 				call->data.call.args = head;
+			}
+
+			// Stamp the call's type from the callee's declared return
+			// type, so `let x = f()` infers the real type (f32 stays f32)
+			// instead of falling back to u32 and truncating the value.
+			{
+				ASTNode *leaf = call->data.call.callee;
+				while (leaf && leaf->type == NODE_MEMBER_ACCESS)
+					leaf = leaf->data.member_access.object;
+				const char *nm =
+					(leaf && leaf->type == NODE_VAR_REF)
+						? leaf->data.var_ref.name
+						: NULL;
+				if (nm) {
+					for (int si = p->fn_sig_count - 1; si >= 0; si--) {
+						if (strcmp(p->fn_sigs[si].name, nm) == 0) {
+							call->data_type = p->fn_sigs[si].ret;
+							break;
+						}
+					}
+				}
 			}
 			// -----------------------------------------
 
@@ -1605,6 +1654,13 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	fn_node->data.func.args = args_head;
 
 	consume(p, TOK_RPAREN, "Expected ')'");
+	// Record the signature BEFORE parsing the body so recursive
+	// `let x = name(...)` calls inside infer the declared return type.
+	if (p->fn_sig_count < 128 && ret_type) {
+		p->fn_sigs[p->fn_sig_count].name = func_name;
+		p->fn_sigs[p->fn_sig_count].ret = ret_type;
+		p->fn_sig_count++;
+	}
 	fn_node->data.func.body = parse_block(p);
 	**tail = fn_node;
 	*tail = &fn_node->next;

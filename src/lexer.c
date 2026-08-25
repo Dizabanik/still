@@ -20,6 +20,8 @@ void lexer_init(Lexer *l, char *src, Arena *a, char *filename) {
 
 static inline char advance(Lexer *l) { return l->src[l->pos++]; }
 static inline char peek(Lexer *l) { return l->src[l->pos]; }
+static inline char peek2(Lexer *l) { return l->src[l->pos + 1]; }
+static inline char peek3(Lexer *l) { return l->src[l->pos + 2]; }
 static inline int is_at_end(Lexer *l) { return l->pos >= l->len; }
 
 // Hex digit value, or -1 if not a hex digit. Used by \xNN escapes.
@@ -34,7 +36,7 @@ static inline int hex_val(char ch) {
 }
 
 static Token make_token(Lexer *l, TokenType type, char *text) {
-	Token t;
+	Token t = {0};
 	t.type = type;
 	t.text = text;
 	t.line = l->line;
@@ -372,19 +374,85 @@ Token lexer_next(Lexer *l) {
 		}
 
 		if (isdigit(c)) {
+			// Decimal literals: '_' is a digit separator (1_000_000 --
+			// skipped entirely so strtod never sees it), '.' begins the
+			// fraction. A trailing suffix f16/bf16/f32/f64 types the
+			// literal explicitly (`1.5f32`, `5f32`).
 			char *start = &l->src[l->pos - 1];
-			size_t len = 1;
-			while (isdigit(peek(l)) || peek(l) == '.') {
+			int saw_fp = 0; // has fraction or exponent -> float literal
+			while (isdigit(peek(l)) || peek(l) == '_' || peek(l) == '.') {
+				if (peek(l) == '_') { // separator: consume, keep out of text
+					advance(l);
+					continue;
+				}
+				if (peek(l) == '.') {
+					// Second '.' ends the number: `1.f` member access and
+					// `arr[0].len` must lex as number-then-dot.
+					if (saw_fp)
+						break;
+					saw_fp = 1;
+				}
 				advance(l);
-				len++;
 			}
-			char *text = arena_alloc(l->arena, len + 1);
-			memcpy(text, start, len);
+			// Exponent: 1e10, 1.5e-3 -- no separators inside.
+			if (peek(l) == 'e' || peek(l) == 'E') {
+				size_t save_pos = l->pos;
+				advance(l); // 'e'
+				if (peek(l) == '+' || peek(l) == '-')
+					advance(l);
+				size_t digits_here = 0;
+				while (isdigit(peek(l))) {
+					advance(l);
+					digits_here++;
+				}
+				if (digits_here > 0) {
+					saw_fp = 1;
+				} else {
+					// `1e` with no exponent digits: rewind; `e` starts an
+					// identifier (hex-style naming like `1error` stays a
+					// syntax error at parse time, not a lexer one).
+					l->pos = save_pos;
+				}
+			}
+			// Compact into the token text: digits/dots only, separators
+			// dropped. Copy from [start, l->pos) so the suffix scan below
+			// sees the position after the number.
+			size_t raw_len = (size_t)(&l->src[l->pos] - start);
+			char *text = arena_alloc(l->arena, raw_len + 1);
+			size_t len = 0;
+			for (size_t i = 0; i < raw_len; i++) {
+				char ch = start[i];
+				if (ch == '_')
+					continue;
+				text[len++] = ch;
+			}
 			text[len] = '\0';
-			// Identify if float
-			if (strchr(text, '.'))
-				return make_token(l, TOK_FLOAT_LIT, text);
-			return make_token(l, TOK_INT_LIT, text);
+			TokenType tt = saw_fp ? TOK_FLOAT_LIT : TOK_INT_LIT;
+			// Float suffix: exact match of bf16 | f16 | f32 | f64 right
+			// after the number. Consumed into the token; the parser maps
+			// t.float_suffix to the literal's TypeKind.
+			int fkind = -1;
+			if (peek(l) == 'f' || (peek(l) == 'b' && peek2(l) == 'f')) {
+				if (peek(l) == 'b') {
+					if (l->src[l->pos + 2] == '1' && l->src[l->pos + 3] == '6')
+						fkind = 4; // bf16
+				} else if ((peek2(l) == '1' && peek3(l) == '6')) {
+					fkind = 1;
+				} else if ((peek2(l) == '3' && peek3(l) == '2')) {
+					fkind = 2;
+				} else if ((peek2(l) == '6' && peek3(l) == '4')) {
+					fkind = 3;
+				}
+				if (fkind > 0) {
+					size_t slen = (fkind == 4) ? 4 : 3;
+					for (size_t si = 0; si < slen; si++)
+						advance(l);
+					Token t = make_token(l, tt, text);
+					t.float_suffix = fkind;
+					return t;
+				}
+			}
+			return make_token(l, tt, text);
 		}
 
 		if (isalpha(c) || c == '$' || c == '_') {
@@ -496,6 +564,10 @@ Token lexer_next(Lexer *l) {
 				type = TOK_U32;
 			else if (strcmp(text, "u64") == 0)
 				type = TOK_U64;
+			else if (strcmp(text, "f16") == 0)
+				type = TOK_F16;
+			else if (strcmp(text, "bf16") == 0)
+				type = TOK_BF16;
 			else if (strcmp(text, "f32") == 0)
 				type = TOK_F32;
 			else if (strcmp(text, "f64") == 0)

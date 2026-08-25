@@ -54,6 +54,8 @@ typedef enum {
 	TOK_U16,
 	TOK_U32,
 	TOK_U64,
+	TOK_F16,
+	TOK_BF16,
 	TOK_F32,
 	TOK_F64,
 	// Literals
@@ -121,6 +123,9 @@ typedef struct {
 	size_t posA;
 	size_t pos;
 	size_t len;
+	// Float literal suffix: 0=none, 1=f16, 2=f32, 3=f64, 4=bf16.
+	// Set only on TOK_FLOAT_LIT / TOK_INT_LIT with an explicit suffix.
+	int float_suffix;
 } Token;
 
 typedef struct {

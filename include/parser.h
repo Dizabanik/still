@@ -17,6 +17,15 @@ typedef struct {
 		ASTNode *node;
 	} decls[256];
 	int decl_count;
+
+	// Function signatures seen so far (name -> declared return type).
+	// Lets a `let x = f(...)` infer the call's type at parse time; NULL
+	// ret entries (void/unknown) fall back to the old behavior.
+	struct {
+		char *name;
+		Type *ret;
+	} fn_sigs[128];
+	int fn_sig_count;
 } Parser;
 
 void parser_init(Parser *p, Lexer *l, Arena *a);

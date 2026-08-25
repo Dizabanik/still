@@ -1,0 +1,45 @@
+// Literal hygiene: digit separators, float suffixes, f16/bf16 dtypes,
+// exponents. Suffix wins over default typing; unsuffixed floats are f64.
+import stdc;
+
+fn i32 main() {
+    // Digit separators (ints and floats)
+    let big = 1_000_000;
+    let sep_f = 1_000.5;
+    printf("big=%d sep=%.2f\n", big, sep_f);
+
+    // Radix literals with separators
+    let hex = 0xFF_FF;
+    let bin = 0b1010_1010;
+    printf("hex=%d bin=%d\n", hex, bin);
+
+    // Float suffixes
+    f32 a = 1.5f32;
+    let c = 3.5f32;
+    printf("a=%.2f c=%.2f\n", a, c);
+
+    // Exponents
+    let e = 1e3;
+    let g = 2.5e-2;
+    printf("e=%.1f g=%.4f\n", e, g);
+
+    // f16 arithmetic: half precision end to end
+    f16 h = 1.5f16;
+    let h2 = h + 2.0f16;
+    printf("h=%.3f\n", ((f32)h2));
+
+    // bf16 round trip through f32
+    bf16 q = 1.25bf16;
+    printf("q=%.3f\n", ((f32)q));
+
+    // int -> f16 conversion
+    i32 n = 7;
+    f16 hn = ((f16)n);
+    printf("hn=%.1f\n", ((f32)hn));
+
+    // mixed precision promotion: f32 + f64 -> f64; int * f32 -> f32
+    let m = 1.5f32 + 0.25;
+    let ip = 2 * 1.5f32;
+    printf("m=%.4f ip=%.4f\n", m, ip);
+    return 0;
+}

@@ -106,6 +106,14 @@ static LLVMMetadataRef di_type(KawaCompiler *c, Type *t) {
 		size = 64;
 		dn = "u64";
 		break;
+	case TYPE_F16:
+		size = 16;
+		dn = "f16";
+		break;
+	case TYPE_BF16:
+		size = 16;
+		dn = "bf16";
+		break;
 	case TYPE_F32:
 		size = 32;
 		dn = "f32";
@@ -119,7 +127,8 @@ static LLVMMetadataRef di_type(KawaCompiler *c, Type *t) {
 	}
 
 	if (dn) {
-		unsigned enc = (t->kind == TYPE_F32 || t->kind == TYPE_F64)
+		unsigned enc = (t->kind == TYPE_F16 || t->kind == TYPE_BF16 ||
+						t->kind == TYPE_F32 || t->kind == TYPE_F64)
 						   ? 0x04 /* DW_ATE_float */
 						   : (t->kind == TYPE_BOOL ? 0x02 /* DW_ATE_boolean */
 												   : 0x05 /* DW_ATE_signed */);

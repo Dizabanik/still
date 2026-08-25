@@ -51,6 +51,26 @@ LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t);
 int type_is_signed(KawaCompiler *c, Type *t);
 
+// True for every floating-point kind (f16/bf16/f32/f64). Centralizes the
+// kind check so new FP widths can't miss a coercion/promotion site.
+static inline int is_fp_kind(LLVMTypeKind k) {
+	return k == LLVMHalfTypeKind || k == LLVMBFloatTypeKind ||
+		   k == LLVMFloatTypeKind || k == LLVMDoubleTypeKind;
+}
+
+// --- codegen_intrinsics.c (built-in reductions) ---
+// Emits `internal <acc> @kawa.<op>(ptr data, i64 len[, ptr d2, i64 len2])`
+// with a canonical vectorizer-perfect reduction loop. op is one of
+// "sum"/"max"/"min"/"dot"; arity 1 except dot=2.
+LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
+									Type *elem_ast, int arity);
+
+// Saturating qadd/qsub/qmul for i8/u8/i16/u16 -> llvm.*.sat call; NULL when
+// the type or op is out of scope (wider ints keep normal wrap semantics).
+LLVMValueRef kawa_build_sat_op(KawaCompiler *c, const char *op,
+							   Type *elem_ast, LLVMValueRef l,
+							   LLVMValueRef r);
+
 // --- codegen_metadata.c ---
 void init_metadata(KawaCompiler *c);
 void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type);

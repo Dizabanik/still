@@ -1,0 +1,26 @@
+import stdc;
+
+// ML-flavored reduction mix: int sum, fp dot, max -- the builtins' hot path.
+[262144]i32 xi;
+[131072]f32 xf;
+
+fn i32 main() {
+    for (i32 i = 0; i < 262144; i += 1) { xi[i] = i % 977; }
+    for (i32 i = 0; i < 131072; i += 1) {
+        f32 fv = ((f32)i);
+        xf[i] = fv * 0.001f32;
+    }
+    i64 total = 0;
+    for (i32 r = 0; r < 2000; r += 1) {
+        total += sum(xi);
+    }
+    f32 d = 0.0f32;
+    for (i32 r = 0; r < 4000; r += 1) {
+        d += ((f32)dot(xf, xf));
+    }
+    i32 mx = 0;
+    for (i32 r = 0; r < 1000; r += 1) {
+        mx += max(xi);
+    }
+    stdc.printf("t=%lld d=%.1f m=%d\n", total, ((f64)d), mx);
+}

@@ -166,8 +166,10 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	switch (n->type) {
 
 	case NODE_LITERAL: {
-		if (n->data_type &&
-			(n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64))
+		if (n->data_type && (n->data_type->kind == TYPE_F16 ||
+							 n->data_type->kind == TYPE_BF16 ||
+							 n->data_type->kind == TYPE_F32 ||
+							 n->data_type->kind == TYPE_F64))
 			return LLVMConstReal(get_llvm_type(c, n->data_type),
 								 (double)n->data.literal.f_val);
 		// Integer literals emit at their parser-assigned width (i32/u32/
@@ -220,6 +222,148 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		char func_name[256];
 		LLVMValueRef fn = resolve_callee(c, n->data.call.callee, func_name,
 										 sizeof(func_name));
+
+		// Built-in reductions (sum/max/min/dot) and saturating narrow-int
+		// ops (qadd/qsub/qmul) intercept before ordinary function
+		// resolution. Reductions need array/slice args of a numeric element
+		// type; sat ops take two narrow ints. Anything else falls through
+		// to normal resolution and the usual "undefined function" path.
+		if (!fn && (strcmp(func_name, "qadd") == 0 ||
+					strcmp(func_name, "qsub") == 0 ||
+					strcmp(func_name, "qmul") == 0)) {
+			int arity = 0;
+			for (ASTNode *a = n->data.call.args; a; a = a->next)
+				arity++;
+			if (arity == 2) {
+				ASTNode *la = n->data.call.args;
+				ASTNode *ra = la->next;
+				LLVMValueRef lv = codegen_expr(c, la);
+				LLVMValueRef rv = codegen_expr(c, ra);
+				Type *lt = la->data_type, *rt = ra->data_type;
+				if (!lt && la->type == NODE_VAR_REF) {
+					Scope *sv = scope_find(c, la->data.var_ref.name);
+					if (sv && sv->node && sv->node->data_type)
+						lt = sv->node->data_type;
+				}
+				if (!rt && ra->type == NODE_VAR_REF) {
+					Scope *sv = scope_find(c, ra->data.var_ref.name);
+					if (sv && sv->node && sv->node->data_type)
+						rt = sv->node->data_type;
+				}
+				// Both operands must be the SAME narrow type.
+				Type *et = (lt && rt && lt->kind == rt->kind) ? lt : NULL;
+				LLVMValueRef sat =
+					et ? kawa_build_sat_op(c, func_name, et, lv, rv) : NULL;
+				if (sat)
+					return sat;
+			}
+			// fall through: user-defined qadd or mismatched types.
+		}
+		if (!fn && (strcmp(func_name, "sum") == 0 ||
+					strcmp(func_name, "max") == 0 ||
+					strcmp(func_name, "min") == 0 ||
+					strcmp(func_name, "dot") == 0)) {
+			int arity = 0;
+			for (ASTNode *a = n->data.call.args; a; a = a->next)
+				arity++;
+			int want = (strcmp(func_name, "dot") == 0) ? 2 : 1;
+			if (arity == want) {
+				Type *coll = NULL;
+				LLVMValueRef views[2] = {NULL, NULL};
+				int ok = 1, ai = 0;
+				for (ASTNode *a = n->data.call.args; a; a = a->next, ai++) {
+					Type *at = a->data_type;
+					if (!at && a->type == NODE_VAR_REF) {
+						Scope *sv =
+							scope_find(c, a->data.var_ref.name);
+						if (sv && sv->node && sv->node->data_type)
+							at = sv->node->data_type;
+					}
+					if (!at || (at->kind != TYPE_ARRAY &&
+								at->kind != TYPE_SLICE)) {
+						ok = 0;
+						break;
+					}
+					if (!coll)
+						coll = at->inner ? at->inner : at;
+					else if (at->inner &&
+							 at->inner->kind != coll->kind)
+						ok = 0; // dot over mismatched element types
+					if (ok) {
+						// Build the {ptr,len} view. Arrays: GEP elem 0 of
+						// the ORIGINAL storage -- never spill a 1MB array
+						// per call. Slices: pass the pair value through.
+						LLVMTypeRef elem =
+							get_llvm_type(c, at->inner);
+						Type slice_t = {0};
+						slice_t.kind = TYPE_SLICE;
+						slice_t.inner = at->inner;
+						LLVMTypeRef slice_ll =
+							get_llvm_type(c, &slice_t);
+						if (at->kind == TYPE_ARRAY) {
+							Scope *sv0 = NULL;
+							if (a->type == NODE_VAR_REF)
+								sv0 = scope_find(
+									c, a->data.var_ref.name);
+							LLVMTypeRef addr_t = NULL;
+							LLVMValueRef addr =
+								sv0 ? sv0->val
+									: get_address(c, a, &addr_t);
+							LLVMValueRef data = LLVMBuildGEP2(
+								c->builder, elem, addr,
+								(LLVMValueRef[]){LLVMConstInt(
+									LLVMInt64TypeInContext(
+										c->context), 0, 0)},
+								1, "view_data");
+							LLVMValueRef view = LLVMGetUndef(slice_ll);
+							view = LLVMBuildInsertValue(
+								c->builder, view, data, 0,
+								"view_ins_data");
+							view = LLVMBuildInsertValue(
+								c->builder, view,
+								LLVMConstInt(
+									LLVMInt64TypeInContext(c->context),
+									(unsigned long long)at->array_len,
+									0),
+								1, "view_ins_len");
+							views[ai] = view;
+						} else {
+							// Slice arg: already a {ptr,i64} value.
+							views[ai] = value_of_lvalue(c, a);
+						}
+					}
+				}
+				if (ok && coll && coll->kind >= TYPE_I8 &&
+					coll->kind <= TYPE_F64) {
+					// Emit the specialized reduction, then extract data
+					// pointer + length from each view and call it.
+					//
+					// The emitter switches the builder into its own new
+					// function; remember where the CALLER was building so
+					// the call lands in the caller's block, not in the
+					// intrinsic's exit.
+					LLVMBasicBlockRef caller_bb =
+						LLVMGetInsertBlock(c->builder);
+					LLVMValueRef bfn = kawa_emit_reduction_fn(
+						c, func_name, coll, want);
+					LLVMPositionBuilderAtEnd(c->builder, caller_bb);
+					LLVMTypeRef bfn_t = LLVMGlobalGetValueType(bfn);
+					// extractvalue on a {ptr,i64} first-class value
+					// yields the fields directly -- no memory ops.
+					LLVMValueRef call_args[4] = {NULL, NULL, NULL, NULL};
+					for (int vi = 0; vi < want; vi++) {
+						call_args[vi * 2] = LLVMBuildExtractValue(
+							c->builder, views[vi], 0, "d");
+						call_args[vi * 2 + 1] = LLVMBuildExtractValue(
+							c->builder, views[vi], 1, "len");
+					}
+					return LLVMBuildCall2(c->builder, bfn_t, bfn,
+										  call_args, want * 2, "red");
+				}
+			}
+			// Wrong shape/type for a builtin: fall through to normal
+			// resolution so user-defined sum(x) etc still work.
+		}
 		if (!fn) {
 			if (strcmp(func_name, "printf") == 0) {
 				LLVMTypeRef args[] = {
@@ -484,7 +628,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 												   c->context),
 											   "vararg_prom");
 				}
-				else if (k == LLVMFloatTypeKind)
+				else if (is_fp_kind(k) && k != LLVMDoubleTypeKind)
 					val = LLVMBuildFPExt(c->builder, val,
 										 LLVMDoubleTypeInContext(c->context),
 										 "float_prom");
@@ -1109,10 +1253,8 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		break;
 	}
 
-	int l_is_fp = (LLVMGetTypeKind(l_ty) == LLVMFloatTypeKind ||
-				   LLVMGetTypeKind(l_ty) == LLVMDoubleTypeKind);
-	int r_is_fp = (LLVMGetTypeKind(r_ty) == LLVMFloatTypeKind ||
-				   LLVMGetTypeKind(r_ty) == LLVMDoubleTypeKind);
+	int l_is_fp = is_fp_kind(LLVMGetTypeKind(l_ty));
+	int r_is_fp = is_fp_kind(LLVMGetTypeKind(r_ty));
 
 	// Promote Int to Float/Double if mixed (respect source signedness).
 	if (l_is_fp && !r_is_fp) {
@@ -1127,20 +1269,34 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		l_ty = r_ty;
 	}
 
-	// Same-kind FP with different precision: promote float to double.
+	// Mixed FP precision: promote the narrower side up (f16/bf16/f32 all
+	// extend toward the widest operand). f16+bf16 meets at f32 -- bf16's
+	// 8-bit mantissa can represent every f16 value exactly.
 	if (l_is_fp && r_is_fp &&
 		LLVMGetTypeKind(l_ty) != LLVMGetTypeKind(LLVMTypeOf(r))) {
-		if (LLVMGetTypeKind(l_ty) == LLVMFloatTypeKind) {
-			l = LLVMBuildFPExt(c->builder, l,
-							   LLVMDoubleTypeInContext(c->context),
-							   "promote_l_dbl");
-			l_ty = LLVMTypeOf(l);
-		}
-		if (LLVMGetTypeKind(LLVMTypeOf(r)) == LLVMFloatTypeKind) {
-			r = LLVMBuildFPExt(c->builder, r,
-							   LLVMDoubleTypeInContext(c->context),
-							   "promote_r_dbl");
-		}
+		unsigned l_w = LLVMGetTypeKind(l_ty) == LLVMHalfTypeKind   ? 16
+					   : LLVMGetTypeKind(l_ty) == LLVMBFloatTypeKind ? 16
+																	 : LLVMGetTypeKind(l_ty) == LLVMFloatTypeKind ? 32
+																												  : 64;
+		unsigned r_w = LLVMGetTypeKind(LLVMTypeOf(r)) == LLVMHalfTypeKind
+						   ? 16
+					   : LLVMGetTypeKind(LLVMTypeOf(r)) == LLVMBFloatTypeKind
+						   ? 16
+					   : LLVMGetTypeKind(LLVMTypeOf(r)) == LLVMFloatTypeKind
+						   ? 32
+						   : 64;
+		LLVMTypeRef meet =
+			l_w >= r_w ? (l_w == 16 ? LLVMFloatTypeInContext(c->context)
+									: l_w == 32 ? LLVMFloatTypeInContext(c->context)
+												: LLVMDoubleTypeInContext(c->context))
+					   : (r_w == 16 ? LLVMFloatTypeInContext(c->context)
+									: r_w == 32 ? LLVMFloatTypeInContext(c->context)
+												: LLVMDoubleTypeInContext(c->context));
+		if (LLVMTypeOf(l) != meet)
+			l = LLVMBuildFPExt(c->builder, l, meet, "promote_l_fp");
+		if (LLVMTypeOf(r) != meet)
+			r = LLVMBuildFPExt(c->builder, r, meet, "promote_r_fp");
+		l_ty = meet;
 	}
 
 	if (l_is_fp) {
@@ -1255,6 +1411,9 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 	case TOK_STAR:
 	case TOK_SLASH:
 	case TOK_PERCENT: {
+		// Saturating forms (qadd/qsub/qmul) come in as function calls,
+		// not operators -- but a `q`-prefixed call on narrow types lowers
+		// to the sat intrinsics. Plain operators keep C wrap/UB rules.
 		LLVMValueRef res = build_int_binop(c, op, l, r, l_signed, r_signed);
 		if (res)
 			return res;

@@ -16,6 +16,8 @@ typedef enum {
 	TYPE_U16,
 	TYPE_U32,
 	TYPE_U64,
+	TYPE_F16,
+	TYPE_BF16,
 	TYPE_F32,
 	TYPE_F64,
 	TYPE_SET,
