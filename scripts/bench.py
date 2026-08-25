@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # Benchmark harness: builds each bench/*.kawa with the given kawac, times it
-# best-of-N against its C twin, and reports parity. Exit 1 when any Kawa build
-# regresses more than --tolerance beyond its C twin (CI-usable).
+# best-of-N against its C and Rust twins, and reports parity. Exit 1 when any
+# Kawa build regresses more than --tolerance beyond its C twin (CI-usable).
+#
+# Twins are discovered by prefix: b6_chan.kawa pairs with prebuilt executables
+# b6_c (C) and b6_rs (Rust). Missing twins are reported, not fatal.
 #
 # Usage: scripts/bench.py [--kawac PATH] [--runs N] [--tolerance PCT]
 
@@ -46,11 +49,15 @@ def main():
         if not src.endswith(".kawa"):
             continue
         name = src[: -len(".kawa")]
-        # The C twins are prebuilt executables named <prefix>_c (b1_c, b2_c).
+        # Prebuilt language twins live next to the sources as <prefix>_c /
+        # <prefix>_rs executables.
         prefix = name.split("_")[0]
         c_twin = os.path.join(bench_dir, prefix + "_c")
         if not os.access(c_twin, os.X_OK):
             c_twin = None
+        rs_twin = os.path.join(bench_dir, prefix + "_rs")
+        if not os.access(rs_twin, os.X_OK):
+            rs_twin = None
 
         exe = os.path.join(work, name)
         r = subprocess.run(
@@ -62,22 +69,34 @@ def main():
             continue
 
         kt = best_of([exe], args.runs, work)
+        ct = rt = None
+        pct = None
+        flag_parts = []
         if c_twin:
             ct = best_of([os.path.abspath(c_twin)], args.runs, bench_dir)
             pct = (kt - ct) / ct * 100.0
-            flag = "ok" if pct <= args.tolerance else "REGRESSION"
             if pct > args.tolerance:
+                flag_parts.append("REGRESSION vs C")
                 failures += 1
-            rows.append((name, kt, ct, pct, flag))
-        else:
-            rows.append((name, kt, None, None, "no C twin"))
+        if rs_twin:
+            rt = best_of([os.path.abspath(rs_twin)], args.runs, bench_dir)
 
-    print(f"{'benchmark':<16} {'kawa':>8} {'C':>8} {'delta':>8}  status")
-    for name, kt, ct, pct, flag in rows:
-        if ct is not None:
-            print(f"{name:<16} {kt:>7.3f}s {ct:>7.3f}s {pct:>+7.1f}%  {flag}")
+        if "REGRESSION vs C" in flag_parts:
+            flag = "REGRESSION"
+        elif pct is not None:
+            flag = "ok"
         else:
-            print(f"{name:<16} {kt:>7.3f}s {'--':>8} {'--':>8}  {flag}")
+            flag = "no C twin"
+        rows.append((name, kt, ct, rt, pct, flag))
+
+    hdr = f"{'benchmark':<16} {'kawa':>8} {'C':>8} {'rust':>8} {'vs C':>8}  status"
+    print(hdr)
+    print("-" * len(hdr))
+    for name, kt, ct, rt, pct, flag in rows:
+        cs = f"{ct:>7.3f}s" if ct is not None else f"{'--':>8}"
+        rs = f"{rt:>7.3f}s" if rt is not None else f"{'--':>8}"
+        ps = f"{pct:>+7.1f}%" if pct is not None else f"{'--':>8}"
+        print(f"{name:<16} {kt:>7.3f}s {cs} {rs} {ps}  {flag}")
 
     import shutil
     shutil.rmtree(work, ignore_errors=True)

@@ -2,6 +2,47 @@
 
 static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n);
 
+// True when evaluating the expression cannot produce side effects or trap:
+// literals, variable reads, member/index reads, pure operators over pure
+// operands, and calls to functions declared `pure fn` with pure arguments.
+// Used to decide whether a value may be (re)evaluated after a suspension
+// point -- e.g. a channel send that blocks must not re-run its operand.
+static int expr_is_pure(KawaCompiler *c, ASTNode *n) {
+	if (!n)
+		return 0;
+	switch (n->type) {
+	case NODE_LITERAL:
+	case NODE_STRING_LIT:
+	case NODE_VAR_REF:
+		return 1;
+	case NODE_BINARY_OP:
+		return expr_is_pure(c, n->data.bin_op.left) &&
+			   expr_is_pure(c, n->data.bin_op.right);
+	case NODE_CAST:
+		return expr_is_pure(c, n->data.cast.val);
+	case NODE_MEMBER_ACCESS:
+		// Slice/chan field reads are plain loads; safe to speculate.
+		return expr_is_pure(c, n->data.member_access.object);
+	case NODE_INDEX:
+		return expr_is_pure(c, n->data.index.object) &&
+			   expr_is_pure(c, n->data.index.index);
+	case NODE_CALL: {
+		if (n->data.call.callee->type != NODE_VAR_REF)
+			return 0;
+		for (ASTNode *s = c->program_root ? c->program_root->next : NULL;
+			 s; s = s->next)
+			if (s->type == NODE_FUNC_DECL &&
+				strcmp(s->data.func.name,
+					   n->data.call.callee->data.var_ref.name) == 0)
+				return s->data.func.is_pure &&
+					   expr_is_pure(c, n->data.call.args);
+		return 0;
+	}
+	default:
+		return 0;
+	}
+}
+
 void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node) {
 	if (!origin_node || !origin_node->dependents)
 		return;
@@ -479,9 +520,12 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		}
 		if (!fn && strcmp(func_name, "make_chan") == 0) {
 			// make_chan(cap): allocate the ring buffer and fill the
-			// {buf, cap, head, count} record. The element type comes from
-			// the assignment context (chan<T>). Ring byte size is derived
-			// from a null-GEP -- no target data needed at compile time.
+			// {buf, cap, head, count, mask} record. The element type comes
+			// from the assignment context (chan<T>). Ring byte size is
+			// derived from a null-GEP -- no target data needed at compile
+			// time. The allocation is rounded up to a power of two so
+			// send/recv index with `& mask` instead of `% cap`; cap stays
+			// the user-visible blocking threshold.
 			Type *chan_t = n->data_type;
 			if (!chan_t || chan_t->kind != TYPE_CHAN) {
 				timbr_err("make_chan requires a chan<T> context\n");
@@ -498,6 +542,14 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			if (n->data.call.args &&
 				n->data.call.args->type == NODE_LITERAL)
 				cap = n->data.call.args->data.literal.i64_val;
+			if (cap < 1)
+				cap = 1;
+
+			// alloc = next power of two >= cap.
+			long long alloc = 1;
+			while (alloc < cap)
+				alloc <<= 1;
+			unsigned long long mask = (unsigned long long)alloc - 1;
 
 			LLVMTypeRef malloc_t =
 				LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_t}, 1, 0);
@@ -517,7 +569,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				LLVMBuildPtrToInt(c->builder, one_gep, i64_t, "elem_sz");
 			LLVMValueRef ring_bytes = LLVMBuildMul(
 				c->builder, elem_sz,
-				LLVMConstInt(i64_t, (unsigned long long)cap, 0),
+				LLVMConstInt(i64_t, (unsigned long long)alloc, 0),
 				"ring_bytes");
 
 			LLVMValueRef buf_v = LLVMBuildCall2(c->builder, malloc_t,
@@ -542,6 +594,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 											   ""));
 			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, 0, 0),
 						   LLVMBuildStructGEP2(c->builder, ct, alloca, 3,
+											   ""));
+			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, mask, 0),
+						   LLVMBuildStructGEP2(c->builder, ct, alloca, 4,
 											   ""));
 			return LLVMBuildLoad2(c->builder, ct, alloca, "chan_val");
 		}
@@ -1247,8 +1302,8 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_SEND: {
 		// ch <- v: if the ring is full, yield and re-poll; else store at
-		// slot (head+count) % cap and bump count. Ready path: 1 load,
-		// 1 store, 1 add, 1 wrap.
+		// slot (head+count) & mask and bump count. Ready path: 1 load,
+		// 1 store, 1 add, 1 mask.
 		LLVMContextRef ctx = c->context;
 		Type *chan_t = n->data.send.chan->data_type;
 		if (!chan_t && n->data.send.chan->type == NODE_VAR_REF) {
@@ -1265,6 +1320,15 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
 		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
 
+		// Purity probe: when the sent expression is side-effect-free we
+		// evaluate it AFTER the capacity check passes, so its SSA value
+		// never spans a suspension point -- coro-split then keeps it in a
+		// register instead of spilling through the coroutine frame on every
+		// iteration of a send-heavy loop. Impure values (calls, chan ops,
+		// assignments) keep the evaluate-first order: blocking must not
+		// re-run their side effects.
+		int val_pure = expr_is_pure(c, n->data.send.value);
+
 		LLVMValueRef chan_addr =
 			get_address(c, n->data.send.chan, NULL);
 
@@ -1274,12 +1338,17 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 1, "cap_p");
 		LLVMValueRef head_p =
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "head_p");
+		LLVMValueRef mask_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 4, "mask_p");
 		LLVMValueRef buf_p =
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "buf_p");
 
-		LLVMValueRef val = codegen_expr(c, n->data.send.value);
-		val = coerce_value(c, val, n->data.send.value->data_type, elem_t,
-						   chan_t->inner);
+		LLVMValueRef val = NULL;
+		if (!val_pure) {
+			val = codegen_expr(c, n->data.send.value);
+			val = coerce_value(c, val, n->data.send.value->data_type,
+							   elem_t, chan_t->inner);
+		}
 
 		// check_bb is a true loop header: every coroutine resume re-enters
 		// it, so capacity is re-read fresh after each suspension -- no
@@ -1333,19 +1402,28 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		}
 
 		LLVMPositionBuilderAtEnd(c->builder, do_send_bb);
+		if (val_pure) {
+			// Post-check evaluation: no suspension separates this value
+			// from its store, so it lives entirely in registers.
+			val = codegen_expr(c, n->data.send.value);
+			val = coerce_value(c, val, n->data.send.value->data_type,
+							   elem_t, chan_t->inner);
+		}
 		cur_cnt = LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt2");
-		cur_cap = LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap2");
 		LLVMValueRef head =
 			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
+		LLVMValueRef mask_v =
+			LLVMBuildLoad2(c->builder, i64_t, mask_p, "mask");
 		LLVMValueRef buf =
 			LLVMBuildLoad2(c->builder,
 						   LLVMPointerType(elem_t, 0), buf_p, "ring");
+		// head is monotonic; the write slot is (head+count) & mask. Since
+		// count never exceeds cap <= alloc, unread slots are never
+		// overwritten -- FIFO holds with no wrap store on the send path.
 		LLVMValueRef end = LLVMBuildAdd(c->builder, head, cur_cnt,
 										"end");
-		// Wrap without a branch when the buffer size is a power of two;
-		// the general case uses urem.
-		LLVMValueRef slot_idx =
-			LLVMBuildURem(c->builder, end, cur_cap, "slot");
+		LLVMValueRef slot_idx = LLVMBuildAnd(c->builder, end, mask_v,
+											 "slot");
 		LLVMValueRef slot =
 			LLVMBuildGEP2(c->builder, elem_t, buf, &slot_idx, 1,
 						  "slot_p");
@@ -1386,10 +1464,10 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 		LLVMValueRef cnt_p =
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 3, "rcnt_p");
-		LLVMValueRef cap_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 1, "rcap_p");
 		LLVMValueRef head_p =
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "rhead_p");
+		LLVMValueRef mask_p =
+			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 4, "rmask_p");
 		LLVMValueRef buf_p =
 			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "rbuf_p");
 
@@ -1443,19 +1521,22 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMPositionBuilderAtEnd(c->builder, do_recv_bb);
 		LLVMValueRef head =
 			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
+		LLVMValueRef mask_v =
+			LLVMBuildLoad2(c->builder, i64_t, mask_p, "mask");
 		LLVMValueRef buf =
 			LLVMBuildLoad2(c->builder, LLVMPointerType(elem_t, 0), buf_p,
 						   "ring");
+		// Read slot is head & mask over the monotonic counter; the stored
+		// head just advances -- no division anywhere on the data path.
+		LLVMValueRef slot_idx = LLVMBuildAnd(c->builder, head, mask_v,
+											 "slot");
 		LLVMValueRef slot =
-			LLVMBuildGEP2(c->builder, elem_t, buf, &head, 1, "slot_p");
+			LLVMBuildGEP2(c->builder, elem_t, buf, &slot_idx, 1,
+						  "slot_p");
 		LLVMValueRef out = LLVMBuildLoad2(c->builder, elem_t, slot,
 										  "recv_val");
-		LLVMValueRef cap_v =
-			LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap");
 		LLVMValueRef new_head = LLVMBuildNUWAdd(
 			c->builder, head, LLVMConstInt(i64_t, 1, 0), "head1");
-		new_head = LLVMBuildURem(c->builder, new_head, cap_v,
-								 "head_wrap");
 		LLVMBuildStore(c->builder, new_head, head_p);
 		LLVMValueRef cnt_now =
 			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt3");

@@ -646,8 +646,9 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 					c, n->data.member_access.object->data.var_ref.name);
 				vt = (sv && sv->node) ? sv->node->data_type : NULL;
 				if (vt && vt->kind == TYPE_CHAN) {
-					// Channel introspection: .buf/.cap/.head/.count map
-					// straight onto ring-record fields.
+					// Channel introspection: .buf/.cap/.head/.count/.mask
+					// map straight onto ring-record fields. .head is the
+					// monotonic read cursor (never wraps).
 					int slot2 =
 						strcmp(n->data.member_access.member, "buf") == 0
 							? 0
@@ -655,7 +656,15 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 							? 1
 						: strcmp(n->data.member_access.member, "head") == 0
 							? 2
-							: 3;
+						: strcmp(n->data.member_access.member, "count") == 0
+							? 3
+						: strcmp(n->data.member_access.member, "mask") == 0
+							? 4
+							: -1;
+					if (slot2 < 0) {
+						timbr_err("unknown channel field\n");
+						exit(1);
+					}
 					LLVMTypeRef cllt = get_llvm_type(c, vt);
 					LLVMValueRef fld2 = LLVMBuildStructGEP2(
 						c->builder, cllt, sv->val, slot2, "chan_fld");

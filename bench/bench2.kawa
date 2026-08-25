@@ -23,5 +23,5 @@ fn i32 main() {
         total += h;
         r += 1;
     }
-    stdc.printf("%d\n", total);
+    stdc.printf("%llu\n", total);
 }

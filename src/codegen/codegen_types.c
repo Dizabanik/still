@@ -299,18 +299,21 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 
 	case TYPE_CHAN:
 		// chan<T> is a buffered ring: { T* buf, i64 cap, i64 head,
-		// i64 count }. Single-threaded cooperative semantics -- blocking
-		// ops spin on drop{} yields, so no atomics or locks exist in the
-		// generated code.
+		// i64 count, i64 mask }. `cap` is the user-visible capacity (the
+		// blocking threshold), `head` is a monotonic counter, and `mask`
+		// is alloc-1 where alloc is the power-of-two slot count actually
+		// allocated (>= cap) -- indexing is head & mask, never urem.
+		// Single-threaded cooperative semantics -- blocking ops yield via
+		// coro suspends, so no atomics or locks exist in the generated
+		// code.
 		t->is_signed = 0;
 		{
 			LLVMTypeRef elem = t->inner ? get_llvm_type(c, t->inner)
 										: LLVMInt8TypeInContext(c->context);
-			LLVMTypeRef fields[] = {
-				LLVMPointerType(elem, 0), LLVMInt64TypeInContext(c->context),
-				LLVMInt64TypeInContext(c->context),
-				LLVMInt64TypeInContext(c->context)};
-			return LLVMStructTypeInContext(c->context, fields, 4, 0);
+			LLVMTypeRef i64t = LLVMInt64TypeInContext(c->context);
+			LLVMTypeRef fields[] = {LLVMPointerType(elem, 0), i64t, i64t,
+									i64t, i64t};
+			return LLVMStructTypeInContext(c->context, fields, 5, 0);
 		}
 
 	case TYPE_SLICE:
