@@ -84,6 +84,14 @@ StructDef *find_struct_def_pub(KawaCompiler *c, LLVMTypeRef struct_type);
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t);
 int type_is_signed(KawaCompiler *c, Type *t);
 
+// --- function overloading (codegen_types.c) ---
+int kawa_types_same(Type *a, Type *b);
+void collect_overloads(KawaCompiler *c, ASTNode *root);
+int is_overloaded_name(KawaCompiler *c, const char *bare);
+const char *resolve_overload(KawaCompiler *c, ASTNode *call,
+							 const char *bare, ASTNode *args);
+int resolve_overload_arg_count(ASTNode *call);
+
 // True for every floating-point kind (f16/bf16/f32/f64). Centralizes the
 // kind check so new FP widths can't miss a coercion/promotion site.
 static inline int is_fp_kind(LLVMTypeKind k) {

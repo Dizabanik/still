@@ -98,6 +98,24 @@ typedef struct {
 	// Emit at most one unreachable-statement warning per function body.
 	int warned_unreachable;
 
+	// Function overloading: functions sharing a bare name (distinct param
+	// type lists) are emitted under `name__t1_t2` symbols; call sites
+	// resolve through the overload set by argument type. Single-name fns
+	// keep their plain symbol -- zero cost for non-overloaded code.
+	struct OverloadFn {
+		char *bare;     // declared name ("add")
+		char *mangled;  // emission symbol ("add__i32_i32")
+		ASTNode *decl;  // NODE_FUNC_DECL
+		Type **params;  // declared param types
+		int nparams;
+	} overload_fns[64];
+	int overload_fn_count;
+	// Bare names that belong to an overload set (>1 entry), for quick checks.
+	char *overload_names[32];
+	int overload_name_count;
+	// While emitting a specific overload, its index (for recursive calls).
+	int overloads_active;
+
 	// Arena shared with the parser. Owns all codegen-side heap-ish memory:
 	// Scope frames, StructDef/AliasDef nodes, duplicated names. Lifetime
 	// is the same as the compiler (typically program lifetime).

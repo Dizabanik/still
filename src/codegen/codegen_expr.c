@@ -483,6 +483,16 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			}
 		}
 
+		// Overload resolution (IDEAS 1.x): when the bare name belongs to an
+		// overload set, pick the declaration whose param types match the
+		// argument types exactly and retarget the call to its mangled symbol.
+		if (!fn && is_overloaded_name(c, func_name)) {
+			const char *mangled =
+				resolve_overload(c, n, func_name, n->data.call.args);
+			if (mangled)
+				fn = LLVMGetNamedFunction(c->module, mangled);
+		}
+
 		// Built-in reductions (sum/max/min/dot) and saturating narrow-int
 		// ops (qadd/qsub/qmul) intercept before ordinary function
 		// resolution. Reductions need array/slice args of a numeric element
@@ -790,6 +800,21 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				}
 			} else {
 				char *f_path = get_var_path(c, func_name);
+				// An overloaded name with no type-matching candidate gets
+				// its own diagnosis: the function exists, these arguments
+				// don't fit any of its signatures.
+				if (is_overloaded_name(c, func_name)) {
+					int n_overloads = 0;
+					for (int oi = 0; oi < c->overload_fn_count; oi++)
+						if (strcmp(c->overload_fns[oi].bare, func_name) == 0)
+							n_overloads++;
+					knerr(KAWA_E_TYPE, n, func_name,
+						  "no overload of `%s` matches %d argument(s) "
+						  "(%d declared)", f_path,
+						  resolve_overload_arg_count(n),
+						  n_overloads);
+					exit(1);
+				}
 				// Did-you-mean over every declared fn in the program.
 				const char *cands[129];
 				int nc = 0;

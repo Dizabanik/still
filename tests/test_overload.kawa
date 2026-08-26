@@ -1,0 +1,27 @@
+// Function overloading: same bare name, distinct parameter lists. Resolution
+// is by exact argument-type match at the call site.
+import stdc;
+
+fn i32 twice(i32 x) { return x * 2; }
+fn f64 twice(f64 x) { return x * 2.0; }
+fn i64 twice(i64 x) { return x * 2; }
+
+struct Meters { f64 v; }
+struct Feet { f64 v; }
+
+fn f64 to_km(Meters m) { return m.v / 1000.0; }
+fn f64 to_km(Feet f) { return f.v * 0.0003048; }
+
+fn i32 pick(i32 a, i32 b) { return a; }
+fn i32 pick(i32 a, f64 b) { return b == 0.0 ? a : (i32)b; }
+
+fn i32 main() {
+    stdc.printf("ti=%d tf=%.1f\n", twice(21), twice(1.25));
+    i64 big = 1000;
+    stdc.printf("tl=%lld\n", ((i64)twice(big)));
+    Meters m = { .v = 2000.0 };
+    Feet ft = { .v = 10000.0 };
+    stdc.printf("km_m=%.3f km_ft=%.4f\n", to_km(m), to_km(ft));
+    stdc.printf("pick=%d %d\n", pick(7, 0), pick(7, 9.9));
+    return 0;
+}

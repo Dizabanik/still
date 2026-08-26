@@ -53,6 +53,21 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			llvm_name = "kawa_main";
 	}
 
+	// Overloaded declarations emit under their mangled symbol so distinct
+	// signatures coexist in the module. `main` never participates.
+	int saved_overload_idx = c->overloads_active;
+	c->overloads_active = -1;
+	if (!is_user_main) {
+		for (int oi = 0; oi < c->overload_fn_count; oi++) {
+			if (c->overload_fns[oi].decl == cur &&
+				strcmp(c->overload_fns[oi].mangled, llvm_name) != 0) {
+				llvm_name = c->overload_fns[oi].mangled;
+				c->overloads_active = oi;
+				break;
+			}
+		}
+	}
+
 	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
 	c->current_ret_type = ret_t;
 
@@ -210,4 +225,5 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	c->defer_stack = saved_defers;
 	c->filter_stack = saved_filters;
+	c->overloads_active = saved_overload_idx;
 }

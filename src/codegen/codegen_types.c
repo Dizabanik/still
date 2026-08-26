@@ -376,3 +376,214 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		exit(1);
 	}
 }
+
+// --- Function overloading --------------------------------------------
+
+// Canonical name of a type for symbol mangling. Structs use their own
+// names; slices/arrays/pointers wrap the element name.
+static const char *mangle_type_name(KawaCompiler *c, Type *t, char *buf,
+									size_t bufsz) {
+	(void)c;
+	switch (t->kind) {
+	case TYPE_I8: return "i8";
+	case TYPE_U8: return "u8";
+	case TYPE_I16: return "i16";
+	case TYPE_U16: return "u16";
+	case TYPE_I32: return "i32";
+	case TYPE_U32: return "u32";
+	case TYPE_I64: return "i64";
+	case TYPE_U64: return "u64";
+	case TYPE_F16: return "f16";
+	case TYPE_BF16: return "bf16";
+	case TYPE_F32: return "f32";
+	case TYPE_F64: return "f64";
+	case TYPE_BOOL: return "bool";
+	case TYPE_VOID: return "void";
+	case TYPE_SLICE:
+	case TYPE_ARRAY:
+	case TYPE_PTR: {
+		if (!t->inner)
+			return "?ptr";
+		char inner[128];
+		const char *in =
+			mangle_type_name(c, t->inner, inner, sizeof(inner));
+		snprintf(buf, bufsz, t->kind == TYPE_SLICE ? "slice_%s"
+						   : t->kind == TYPE_ARRAY ? "arr%s_%s"
+												 : "ptr_%s",
+				 t->kind == TYPE_ARRAY ? "" : "", in);
+		return buf;
+	}
+	default:
+		if (t->name) {
+			snprintf(buf, bufsz, "%s", t->name);
+			return buf;
+		}
+		return "?";
+	}
+}
+
+// Structural type equality for overload resolution: kinds must match,
+// element/inner types recursively.
+int kawa_types_same(Type *a, Type *b) {
+	while (a && b) {
+		if (a->kind != b->kind)
+			return 0;
+		if (a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS ||
+			a->kind == TYPE_CHAN) {
+			const char *an = a->name, *bn = b->name;
+			if (an != bn && (!an || !bn || strcmp(an, bn) != 0))
+				return 0;
+			// Structs/chans have no further structure to compare here;
+			// the name is the identity.
+			return a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS
+					   ? 1
+					   : kawa_types_same(a->inner, b->inner);
+		}
+		if (a->kind == TYPE_ARRAY && a->array_len != b->array_len)
+			return 0;
+		a = a->inner;
+		b = b->inner;
+	}
+	return a == b; // both NULL ends the walk
+}
+
+// Build `bare__t1_t2` from declared param types. Result is arena-owned.
+static char *overload_mangled_name(KawaCompiler *c, const char *bare,
+								   ASTNode *args) {
+	size_t need = strlen(bare) + 4;
+	for (ASTNode *a = args; a; a = a->next)
+		need += 24;
+	char *out = arena_alloc(c->arena, need + 1);
+	int n = snprintf(out, need, "%s", bare);
+	char buf[160];
+	int first = 1;
+	for (ASTNode *a = args; a; a = a->next) {
+		if (a->data_type) {
+			n += snprintf(out + n, need - (size_t)n, "%s%s", first ? "__" : "_",
+						  mangle_type_name(c, a->data_type, buf, sizeof(buf)));
+			first = 0;
+		}
+	}
+	if (first)
+		snprintf(out + n, need - (size_t)n, "__");
+	return out;
+}
+
+// Pass over all decls: register every NODE_FUNC_DECL whose bare name is
+// declared more than once (with distinct param lists). Called before the
+// emission walk so codegen_func_decl can rename overloads on the way by.
+void collect_overloads(KawaCompiler *c, ASTNode *root) {
+	// Count decls per bare name.
+	struct { const char *name; int count; } names[64];
+	int nn = 0;
+	for (ASTNode *g = root; g; g = g->next) {
+		if (g->type != NODE_FUNC_DECL || !g->data.func.name)
+			continue;
+		int found = 0;
+		for (int i = 0; i < nn; i++) {
+			if (strcmp(names[i].name, g->data.func.name) == 0) {
+				names[i].count++;
+				found = 1;
+				break;
+			}
+		}
+		if (!found && nn < 64) {
+			names[nn].name = g->data.func.name;
+			names[nn].count = 1;
+			nn++;
+		}
+	}
+	// Register every fn sharing an overloaded name.
+	for (ASTNode *g = root; g; g = g->next) {
+		if (g->type != NODE_FUNC_DECL || !g->data.func.name)
+			continue;
+		int dup = 0;
+		for (int i = 0; i < nn; i++)
+			if (strcmp(names[i].name, g->data.func.name) == 0 &&
+				names[i].count > 1)
+				dup = 1;
+		if (!dup || c->overload_fn_count >= 64)
+			continue;
+		int np = 0;
+		for (ASTNode *a = g->data.func.args; a; a = a->next)
+			np++;
+		struct OverloadFn *of = &c->overload_fns[c->overload_fn_count];
+		of->bare = g->data.func.name;
+		of->decl = g;
+		of->mangled =
+			overload_mangled_name(c, g->data.func.name, g->data.func.args);
+		of->nparams = np;
+		of->params = arena_alloc(c->arena,
+								 sizeof(Type *) * (np > 0 ? np : 1));
+		int pi2 = 0;
+		for (ASTNode *a = g->data.func.args; a; a = a->next)
+			of->params[pi2++] = a->data_type;
+		c->overload_fn_count++;
+	}
+	// Record which bare names are overloaded for cheap call-site checks.
+	for (int i = 0; i < nn && c->overload_name_count < 32; i++) {
+		if (names[i].count > 1)
+			c->overload_names[c->overload_name_count++] =
+				(char *)names[i].name;
+	}
+}
+
+// Is this bare name part of an overload set?
+int is_overloaded_name(KawaCompiler *c, const char *bare) {
+	for (int i = 0; i < c->overload_name_count; i++)
+		if (strcmp(c->overload_names[i], bare) == 0)
+			return 1;
+	return 0;
+}
+
+// Find the overload whose param list matches the given argument types
+// exactly. Returns the mangled symbol or NULL. Ambiguity reports and exits.
+const char *resolve_overload(KawaCompiler *c, ASTNode *call,
+							 const char *bare, ASTNode *args) {
+	Type *argt[16];
+	int na = 0;
+	for (ASTNode *a = args; a; a = a->next, na++) {
+		Type *at = a->data_type;
+		if (!at && a->type == NODE_VAR_REF) {
+			Scope *sv = scope_find(c, a->data.var_ref.name);
+			if (sv && sv->node && sv->node->data_type)
+				at = sv->node->data_type;
+		}
+		argt[na] = at;
+	}
+	struct OverloadFn *match = NULL;
+	int matches = 0;
+	for (int i = 0; i < c->overload_fn_count; i++) {
+		struct OverloadFn *of = &c->overload_fns[i];
+		if (strcmp(of->bare, bare) != 0)
+			continue;
+		if (of->nparams != na)
+			continue;
+		int ok = 1;
+		for (int pi = 0; pi < na && ok; pi++) {
+			if (!of->params[pi] || !argt[pi] ||
+				!kawa_types_same(of->params[pi], argt[pi]))
+				ok = 0;
+		}
+		if (!ok)
+			continue;
+		match = of;
+		matches++;
+	}
+	if (matches == 1)
+		return match->mangled;
+	if (matches > 1) {
+		kerr(KAWA_E_TYPE, call, "ambiguous call to `%s`: %d overloads "
+			  "match these argument types", bare, matches);
+		exit(1);
+	}
+	return NULL;
+}
+
+// Count arguments at a call node (helper for overload diagnostics).
+int resolve_overload_arg_count(ASTNode *call) {
+	int na = 0;
+	for (ASTNode *a = call->data.call.args; a; a = a->next)
+		na++;
+	return na;
+}

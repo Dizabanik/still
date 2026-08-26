@@ -1221,6 +1221,7 @@ static ASTNode *parse_postfix(Parser *p) {
 
 			ASTNode *call = arena_alloc(p->arena, sizeof(ASTNode));
 			call->type = NODE_CALL;
+			call->line = p->prev.line;
 
 			// Parse arguments: positional `expr` or named `name: expr`.
 			// Named args carry their label on the node (var_decl.name);
