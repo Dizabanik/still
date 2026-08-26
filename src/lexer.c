@@ -136,8 +136,13 @@ Token lexer_next(Lexer *l) {
 			return make_token(l, TOK_SEMICOLON, ";");
 		if (c == ',')
 			return make_token(l, TOK_COMMA, ",");
-		if (c == '.')
+		if (c == '.') {
+			if (peek(l) == '.') {
+				advance(l);
+				return make_token(l, TOK_DOTDOT, "..");
+			}
 			return make_token(l, TOK_DOT, ".");
+		}
 		if (c == ':') {
 			if (peek(l) == '=') {
 				advance(l);

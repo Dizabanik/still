@@ -46,6 +46,7 @@ typedef struct StructDef {
 	struct {
 		char *name;
 		LLVMTypeRef type;
+		ASTNode *default_expr; // field default (`f32 zoom = 1.0;`), or NULL
 	} fields[64];
 	int field_count;
 	struct StructDef *next;

@@ -656,6 +656,22 @@ static ASTNode *parse_struct_literal(Parser *p) {
 	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		StructInitItem *item = arena_alloc(p->arena, sizeof(StructInitItem));
 		item->field_name = NULL;
+		item->spread_from = NULL;
+
+		// `..base` spread (IDEAS 1.3): remaining fields copy from `base`.
+		if (p->cur.type == TOK_DOTDOT) {
+			advance(p);
+			item->spread_from = parse_expr(p);
+			item->next = NULL;
+			*tail = item;
+			tail = &item->next;
+			if (p->cur.type == TOK_COMMA)
+				advance(p);
+			else if (p->cur.type != TOK_RBRACE)
+				report_error(p,
+							 "Expected ',' or '}' in struct literal");
+			continue;
+		}
 
 		// Handle Designated Init: .age = 10
 		if (p->cur.type == TOK_DOT) {
@@ -2468,10 +2484,12 @@ ASTNode *parse_program(Parser *p) {
 			ASTNode **args_tail = &args_head;
 			int is_variadic = 0;
 			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
-				if (p->cur.type == TOK_DOT) {
-					// `...` lexes as three DOT tokens.
+				if (p->cur.type == TOK_DOT || p->cur.type == TOK_DOTDOT) {
+					// `...` lexes as DOTDOT+DOT (since `..` became the
+					// spread token) or, before that change, three DOTs.
 					is_variadic = 1;
-					while (p->cur.type == TOK_DOT)
+					while (p->cur.type == TOK_DOT ||
+						   p->cur.type == TOK_DOTDOT)
 						advance(p);
 					break;
 				}
@@ -2568,12 +2586,21 @@ parse_soa_struct:
 				}
 				char *f_name = p->cur.text;
 				consume(p, TOK_IDENTIFIER, "Field name");
+				// Field default value (IDEAS 1.3): `f32 zoom = 1.0;`.
+				// The expression must fold at compile time; struct
+				// literals that omit the field use it as the seed.
+				ASTNode *f_default = NULL;
+				if (p->cur.type == TOK_ASSIGN) {
+					advance(p);
+					f_default = parse_expr(p);
+				}
 				consume(p, TOK_SEMICOLON, ";");
 
 				ASTNode *field = arena_alloc(p->arena, sizeof(ASTNode));
 				field->type = NODE_VAR_DECL;
 				field->data.var_decl.name = f_name;
 				field->data_type = f_type;
+				field->data.var_decl.field_default = f_default;
 				*fields_tail = field;
 				fields_tail = &field->next;
 			}

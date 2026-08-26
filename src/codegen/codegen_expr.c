@@ -1150,8 +1150,74 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		}
 
 		LLVMValueRef alloca = create_entry_block_alloca(c, s_type, "lit");
+		LLVMTypeRef base_ty_unused = NULL;
+
+		// Field defaults + `..base` spread (IDEAS 1.3). Seed order:
+		// spread base first (whole-record copy), then defaults for fields
+		// the base didn't provide... no -- the base IS a full record, so
+		// with a spread the seed is just the base; without one, declared
+		// field defaults fill in. Explicit items always overwrite.
+		StructInitItem *spread = NULL;
+		for (StructInitItem *it = n->data.struct_lit.items; it; it = it->next)
+			if (it->spread_from)
+				spread = it;
+		if (spread) {
+			LLVMTypeRef i8_t = LLVMInt8TypeInContext(c->context);
+			LLVMTypeRef i8ptr =
+				LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
+			ASTNode *base_node = spread->spread_from;
+			Type *base_ty = base_node->data_type;
+			// libc memcpy: same machine code as the intrinsic once the
+			// optimizer recognizes the libfunc (lowered inline).
+			LLVMTypeRef memcpy_t = LLVMFunctionType(
+				i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr,
+									   LLVMInt64TypeInContext(c->context)},
+				3, 0);
+			LLVMValueRef mc =
+				LLVMGetNamedFunction(c->module, "memcpy");
+			if (!mc || LLVMGetTypeKind(LLVMGlobalGetValueType(mc)) !=
+						   LLVMFunctionTypeKind)
+				mc = LLVMAddFunction(c->module, "memcpy", memcpy_t);
+			LLVMValueRef base_ptr;
+			if (base_ty && (base_ty->kind == TYPE_STRUCT)) {
+				base_ptr = get_address(c, base_node, &base_ty_unused);
+			} else {
+				// Rvalue base: spill to a temp alloca and copy from there.
+				LLVMValueRef tmp =
+					create_entry_block_alloca(c, s_type, "spread_base");
+				LLVMBuildStore(c->builder,
+							   codegen_expr(c, base_node), tmp);
+				base_ptr = tmp;
+			}
+			LLVMBuildCall2(
+				c->builder, memcpy_t, mc,
+				(LLVMValueRef[]){
+					LLVMBuildBitCast(c->builder, alloca, i8ptr, ""),
+					LLVMBuildBitCast(c->builder, base_ptr, i8ptr, ""),
+					LLVMSizeOf(s_type)},
+				3, "");
+		} else {
+			// Declared defaults: store each before explicit items run.
+			StructDef *sd = find_struct_def_pub(c, s_type);
+			if (sd) {
+				for (int di = 0; di < sd->field_count; di++) {
+					if (!sd->fields[di].default_expr)
+						continue;
+					ASTNode *dflt = sd->fields[di].default_expr;
+					LLVMValueRef dv = codegen_expr(c, dflt);
+					dv = coerce_value(c, dv, dflt->data_type,
+									  sd->fields[di].type, NULL);
+					LLVMValueRef gep = LLVMBuildStructGEP2(
+						c->builder, s_type, alloca, (unsigned)di, "dflt");
+					LLVMBuildStore(c->builder, dv, gep);
+				}
+			}
+		}
+
 		StructInitItem *item = n->data.struct_lit.items;
 		for (int idx = 0; item; idx++, item = item->next) {
+			if (item->spread_from)
+				continue; // already applied as the seed
 			LLVMValueRef val = codegen_expr(c, item->value);
 			int field_idx;
 			LLVMTypeRef field_ty;

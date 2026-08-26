@@ -82,6 +82,7 @@ typedef enum {
 	TOK_TILDE_EQ, // ~= (Pour)
 	TOK_ARROW,	  // -> (Arrow)
 	TOK_DOT,	  // . (Member access)
+	TOK_DOTDOT, // .. (struct-literal spread)
 	TOK_LBRACE,
 	TOK_RBRACE,
 	TOK_LPAREN,

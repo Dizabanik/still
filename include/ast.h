@@ -44,6 +44,9 @@ typedef struct Type {
 typedef struct StructInitItem {
 	char *field_name; // NULL if positional
 	struct ASTNode *value;
+	// `..base` spread: copy remaining fields from this expression. The
+	// item carrying it is ignored as a value source.
+	struct ASTNode *spread_from;
 	struct StructInitItem *next;
 } StructInitItem;
 
@@ -157,6 +160,9 @@ struct ASTNode {
 			ASTNode *init;
 			int is_orbit;
 			int is_const;
+			// Struct FIELD default value (`f32 zoom = 1.0;` in a struct
+			// body). NULL for ordinary locals; only fields carry one.
+			ASTNode *field_default;
 		} var_decl;
 		struct {
 			struct ASTNode *target;

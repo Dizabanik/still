@@ -1,0 +1,29 @@
+import stdc;
+
+struct Config {
+    i32 retries = 3;
+    i32 timeout_ms = 500;
+    bool verbose = false;
+    f64 scale = 1.5;
+}
+
+struct Offset { i32 dx; i32 dy; }
+
+fn i32 main() {
+    // All defaults
+    Config a = { };
+    stdc.printf("a=%d %d %d %.1f\n", a.retries, a.timeout_ms, a.verbose, a.scale);
+    // Override two, rest default
+    Config b = { .retries = 9, .verbose = true };
+    stdc.printf("b=%d %d %d %.1f\n", b.retries, b.timeout_ms, b.verbose, b.scale);
+    // Spread: copy from b then override one
+    Config c = { ..b, .timeout_ms = 42 };
+    stdc.printf("c=%d %d %d %.1f\n", c.retries, c.timeout_ms, c.verbose, c.scale);
+    // Spread with no overrides = copy
+    Config d = { ..c };
+    stdc.printf("d=%d %d\n", d.retries, d.timeout_ms);
+    // Plain struct without defaults still works
+    Offset o = { .dx = 3, .dy = 4 };
+    stdc.printf("o=%d %d\n", o.dx, o.dy);
+    return 0;
+}

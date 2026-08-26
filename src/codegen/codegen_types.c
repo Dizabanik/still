@@ -36,6 +36,8 @@ void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 	for (ASTNode *f = fields; f && idx < 64; f = f->next) {
 		sd->fields[idx].name = arena_strdup(c->arena, f->data.var_decl.name);
 		sd->fields[idx].type = get_llvm_type(c, f->data_type);
+		sd->fields[idx].default_expr =
+			f->data.var_decl.field_default;
 		idx++;
 	}
 	sd->field_count = idx;
