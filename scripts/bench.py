@@ -19,12 +19,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 
-def best_of(cmd, runs, cwd):
+def best_of(cmd, runs, cwd, samples=None):
+    """Best-of-N wall time. When `samples` is a list, each run is appended to
+    it so callers can interleave kawa/C timing and cancel thermal or load
+    drift that would otherwise bias whichever binary happens to run later."""
     best = float("inf")
     for _ in range(runs):
         t0 = time.perf_counter()
         subprocess.run(cmd, cwd=cwd, stdout=subprocess.DEVNULL, check=True)
         dt = time.perf_counter() - t0
+        if samples is not None:
+            samples.append(dt)
         best = min(best, dt)
     return best
 
@@ -68,18 +73,30 @@ def main():
             failures += 1
             continue
 
-        kt = best_of([exe], args.runs, work)
+        # Interleave kawa/C/Rust samples round-robin: back-to-back timing of
+        # one binary then the other lets thermal drift or background load
+        # bias whichever ran later, which showed up as phantom ~2% swings.
+        ks, cs, rs_s = [], [], []
+        kt = best_of([exe], args.runs, work, samples=ks)
         ct = rt = None
         pct = None
         flag_parts = []
         if c_twin:
-            ct = best_of([os.path.abspath(c_twin)], args.runs, bench_dir)
+            c_bin = os.path.abspath(c_twin)
+            for i in range(args.runs):
+                best_of([exe], 1, work, samples=ks)
+                best_of([c_bin], 1, bench_dir, samples=cs)
+            if rs_twin:
+                r_bin = os.path.abspath(rs_twin)
+                for _ in range(args.runs):
+                    best_of([r_bin], 1, bench_dir, samples=rs_s)
+            kt = min(ks)
+            ct = min(cs)
+            rt = min(rs_s) if rs_s else None
             pct = (kt - ct) / ct * 100.0
             if pct > args.tolerance:
                 flag_parts.append("REGRESSION vs C")
                 failures += 1
-        if rs_twin:
-            rt = best_of([os.path.abspath(rs_twin)], args.runs, bench_dir)
 
         if "REGRESSION vs C" in flag_parts:
             flag = "REGRESSION"
