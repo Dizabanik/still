@@ -1928,20 +1928,81 @@ static LLVMValueRef build_str_eq(KawaCompiler *c, LLVMTypeRef view_t,
 	LLVMBuildCondBr(c->builder, lens_eq, len_ok, str_eq_done);
 
 	LLVMPositionBuilderAtEnd(c->builder, len_ok);
-	LLVMTypeRef i8ptr =
-		LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
-	LLVMTypeRef i32_t = LLVMInt32TypeInContext(ctx);
-	LLVMTypeRef fn_t =
-		LLVMFunctionType(i32_t, (LLVMTypeRef[]){i8ptr, i8ptr, i64_t}, 3, 0);
-	LLVMValueRef bcmp = LLVMGetNamedFunction(c->module, "memcmp");
-	if (!bcmp)
-		bcmp = LLVMAddFunction(c->module, "memcmp", fn_t);
-	LLVMValueRef args[3] = {ld, rd, ll};
-	LLVMValueRef call =
-		LLVMBuildCall2(c->builder, fn_t, bcmp, args, 3, "str_bcmp");
-	LLVMValueRef eq_bytes = LLVMBuildICmp(c->builder, LLVMIntEQ, call,
-										  LLVMConstInt(i32_t, 0, 0),
-										  "str_bytes_eq");
+	LLVMValueRef eq_bytes = NULL;
+	long clen = -1;
+	LLVMValueRef clen_v = LLVMIsAConstantInt(ll)	? ll
+						  : LLVMIsAConstantInt(rl)	? rl
+													: NULL;
+	if (clen_v && (clen = LLVMConstIntGetSExtValue(clen_v)) >= 1 &&
+		clen <= 16) {
+		// Small constant length: emit chunked load-compares (i64/i32/i16
+		// pieces then bytes) instead of a memcmp call. The literal side
+		// folds to immediates and the backend never has to expand a call.
+		// Loads are unaligned; on the corpus side they are in-bounds
+		// because the length gate above proved the word is this long.
+		LLVMTypeRef chunk_types[] = {LLVMInt64TypeInContext(ctx),
+									 LLVMInt32TypeInContext(ctx),
+									 LLVMInt16TypeInContext(ctx)};
+		int chunk_widths[] = {8, 4, 2};
+		size_t off = 0;
+		eq_bytes = NULL;
+		for (int t = 0; t < 3 && off < (size_t)clen; t++) {
+			if ((size_t)clen - off < (size_t)chunk_widths[t])
+				continue;
+			LLVMTypeRef ct = chunk_types[t];
+			unsigned w = (unsigned)chunk_widths[t];
+			LLVMValueRef lp = LLVMBuildGEP2(
+				c->builder, LLVMInt8TypeInContext(ctx), ld,
+				(LLVMValueRef[]){LLVMConstInt(i64_t, off, 0)}, 1, "");
+			LLVMValueRef rp = LLVMBuildGEP2(
+				c->builder, LLVMInt8TypeInContext(ctx), rd,
+				(LLVMValueRef[]){LLVMConstInt(i64_t, off, 0)}, 1, "");
+			LLVMValueRef lv =
+				LLVMBuildLoad2(c->builder, ct, lp, "str_chunk_l");
+			LLVMValueRef rv =
+				LLVMBuildLoad2(c->builder, ct, rp, "str_chunk_r");
+			LLVMSetAlignment(lv, 1);
+			LLVMSetAlignment(rv, 1);
+			LLVMValueRef cmp = LLVMBuildICmp(
+				c->builder, LLVMIntEQ, lv, rv, "str_chunk_eq");
+			eq_bytes = eq_bytes ? LLVMBuildAnd(c->builder, eq_bytes, cmp,
+											   "str_and")
+								: cmp;
+			off += w;
+		}
+		while (off < (size_t)clen) {
+			LLVMTypeRef i8_t = LLVMInt8TypeInContext(ctx);
+			LLVMValueRef lp = LLVMBuildGEP2(
+				c->builder, i8_t, ld,
+				(LLVMValueRef[]){LLVMConstInt(i64_t, off, 0)}, 1, "");
+			LLVMValueRef rp = LLVMBuildGEP2(
+				c->builder, i8_t, rd,
+				(LLVMValueRef[]){LLVMConstInt(i64_t, off, 0)}, 1, "");
+			LLVMValueRef lv = LLVMBuildLoad2(c->builder, i8_t, lp, "");
+			LLVMValueRef rv = LLVMBuildLoad2(c->builder, i8_t, rp, "");
+			LLVMValueRef cmp = LLVMBuildICmp(
+				c->builder, LLVMIntEQ, lv, rv, "str_byte_eq");
+			eq_bytes = LLVMBuildAnd(c->builder, eq_bytes ? eq_bytes : cmp,
+									cmp, "str_and");
+			off++;
+		}
+	} else {
+		LLVMTypeRef i8ptr =
+			LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+		LLVMTypeRef i32_t = LLVMInt32TypeInContext(ctx);
+		LLVMTypeRef fn_t =
+			LLVMFunctionType(i32_t, (LLVMTypeRef[]){i8ptr, i8ptr, i64_t},
+							 3, 0);
+		LLVMValueRef bcmp = LLVMGetNamedFunction(c->module, "memcmp");
+		if (!bcmp)
+			bcmp = LLVMAddFunction(c->module, "memcmp", fn_t);
+		LLVMValueRef args[3] = {ld, rd, ll};
+		LLVMValueRef call =
+			LLVMBuildCall2(c->builder, fn_t, bcmp, args, 3, "str_bcmp");
+		eq_bytes = LLVMBuildICmp(c->builder, LLVMIntEQ, call,
+								 LLVMConstInt(i32_t, 0, 0),
+								 "str_bytes_eq");
+	}
 	LLVMBuildBr(c->builder, str_eq_done);
 
 	LLVMPositionBuilderAtEnd(c->builder, str_eq_done);
