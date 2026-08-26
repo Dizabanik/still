@@ -1,0 +1,31 @@
+import stdc;
+
+fn i32 main() {
+    // len 1 (byte-only path)
+    if ("a" == "a") { stdc.printf("1eq "); }
+    if ("a" != "b") { stdc.printf("1ne "); }
+    // len 2 (i16 boundary)
+    if ("ab" == "ab") { stdc.printf("2eq "); }
+    // len 4 (i32 boundary)
+    if ("abcd" == "abcd") { stdc.printf("4eq "); }
+    // len 5 (4+1)
+    let w = "quick";
+    if (w == "quick") { stdc.printf("5eq "); }
+    if (w == "quicj") { stdc.printf("BAD "); } else { stdc.printf("5ne "); }
+    // len 8 (single i64)
+    if ("12345678" == "12345678") { stdc.printf("8eq "); }
+    // len 9 (8+1)
+    if ("123456789" == "123456789") { stdc.printf("9eq "); }
+    // len 16
+    if ("abcdefghijklmnop" == "abcdefghijklmnop") { stdc.printf("16eq "); }
+    // len 17 (>16: memcmp path)
+    if ("abcdefghijklmnopq" == "abcdefghijklmnopq") { stdc.printf("17eq "); }
+    // runtime lengths differing
+    let x = "short";
+    let y = "a much longer string";
+    if (x != y) { stdc.printf("rt_ne "); }
+    // literal vs literal different lens
+    if ("abc" != "abcd") { stdc.printf("ll_ne "); }
+    stdc.printf("\n");
+    return 0;
+}
