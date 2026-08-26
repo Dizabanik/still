@@ -116,6 +116,12 @@ typedef struct {
 	// While emitting a specific overload, its index (for recursive calls).
 	int overloads_active;
 
+	// Every impl method, pre-registered as "Struct__method" before any
+	// function body is emitted -- so operator/index overloads inside a body
+	// can check existence without emission-order luck.
+	char *impl_methods[256];
+	int impl_method_count;
+
 	// Arena shared with the parser. Owns all codegen-side heap-ish memory:
 	// Scope frames, StructDef/AliasDef nodes, duplicated names. Lifetime
 	// is the same as the compiler (typically program lifetime).

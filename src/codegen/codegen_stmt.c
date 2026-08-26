@@ -131,6 +131,87 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_ASSIGN: {
 		ASTNode *target = n->data.assign.target;
+		// Operator-provided indexed store (IDEAS 1.2): `base[i] = v` on a
+		// struct with impl `self_index_set` becomes that call. Checked
+		// before the ordinary lvalue path so library types never need
+		// real storage for their elements.
+		if (target->type == NODE_INDEX) {
+			Type *bt = index_base_struct_type(
+				c, target->data.index.object);
+			if (bt && impl_has_method(c, bt->name, "self_index_set")) {
+				char mangled[256];
+				snprintf(mangled, sizeof(mangled), "%s__self_index_set",
+						 bt->name);
+				LLVMValueRef setter =
+					LLVMGetNamedFunction(c->module, mangled);
+				if (!setter) {
+					kerr(KAWA_E_UNDEF, n,
+						 "`%s__self_index_set` is registered but was "
+						 "not emitted",
+						 bt->name);
+					exit(1);
+				}
+				{
+					// A setter taking `self` BY VALUE mutates a temporary
+					// copy -- the store would vanish. Only pointer
+					// receivers (`self*`) can implement indexed
+					// assignment, so the base address passes directly.
+					LLVMTypeRef recv_t =
+						LLVMTypeOf(LLVMGetParam(setter, 0));
+					if (!recv_t ||
+						LLVMGetTypeKind(recv_t) !=
+							LLVMPointerTypeKind) {
+						kerr(KAWA_E_ARGS, n,
+							 "indexed assignment needs a pointer "
+						 "receiver: declare `%s__self_index_set(self*, ...)`",
+						 bt->name);
+						exit(1);
+					}
+						LLVMTypeRef base_elem_unused = NULL;
+						LLVMValueRef base_addr = get_address(
+							c, target->data.index.object,
+							&base_elem_unused);
+						LLVMValueRef idx = codegen_expr(
+							c, target->data.index.index);
+						// Stamp bare VAR_REF indices with their
+						// declared type so signedness survives widening.
+						if (!target->data.index.index->data_type &&
+							target->data.index.index->type ==
+								NODE_VAR_REF) {
+							Scope *sv = scope_find(
+								c, target->data.index.index->data.var_ref
+									   .name);
+							if (sv && sv->node && sv->node->data_type)
+								target->data.index.index->data_type =
+									sv->node->data_type;
+						}
+						LLVMTypeRef idx_want =
+							LLVMTypeOf(LLVMGetParam(setter, 1));
+						if (idx_want &&
+							LLVMGetTypeKind(idx_want) ==
+								LLVMIntegerTypeKind &&
+							LLVMTypeOf(idx) != idx_want) {
+							Type dsti = {0};
+							dsti.kind = TYPE_I64;
+							dsti.is_signed = 1;
+							idx = coerce_value(
+								c, idx,
+								target->data.index.index->data_type,
+								idx_want, &dsti);
+						}
+						LLVMValueRef val = codegen_expr(
+							c, n->data.assign.value);
+						// LLVM forbids naming instructions that
+						// produce no value -- void calls must pass "".
+						LLVMBuildCall2(
+							c->builder,
+							LLVMGlobalGetValueType(setter), setter,
+							(LLVMValueRef[]){base_addr, idx, val}, 3,
+							"");
+						return;
+				}
+			}
+		}
 		LLVMTypeRef target_type = NULL;
 		LLVMValueRef target_ptr = get_address(c, target, &target_type);
 		if (!target_ptr || !target_type) {

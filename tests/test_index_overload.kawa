@@ -1,0 +1,47 @@
+import stdc;
+
+struct Grid { [4]i32 cells; }
+struct Names { [3]str names; }
+
+impl Grid {
+    fn i32 self_index(self, i64 i) {
+        if (i < 0 || i >= 4) {
+            return -1;
+        }
+        return self.cells[i];
+    }
+    fn void self_index_set(self* g, i64 i, i32 v) {
+        if (i < 0 || i >= 4) {
+            return;
+        }
+        g->cells[i] = v;
+    }
+}
+
+impl Names {
+    fn str self_index(self, i64 i) {
+        if (i < 0 || i >= 3) {
+            return "?";
+        }
+        return self.names[i];
+    }
+}
+
+fn i32 main() {
+    Grid g;
+    g[0] = 10;
+    g[1] = 20;
+    g[2] = g[0] + g[1];
+    stdc.printf("%d %d %d\n", g[0], g[1], g[2]);
+    stdc.printf("oob=%d\n", g[9]);
+    g[9] = 5;
+    stdc.printf("after-oob=%d\n", g[2]);
+
+    Names n;
+    n.names[0] = "espresso";
+    n.names[1] = "latte";
+    n.names[2] = "flat white";
+    stdc.printf("%s/%s/%s\n", n[0], n[1], n[2]);
+    stdc.printf("miss=%s\n", n[7]);
+    return 0;
+}

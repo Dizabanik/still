@@ -164,7 +164,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	// those functions emit under mangled symbols and call sites resolve
 	// by argument type. Runs before emission so codegen_func_decl sees it.
 	collect_overloads(c, cur);
-
+	collect_impl_methods(c, cur);
 	// Pass 3: Globals first (function bodies may reference them), then
 	// functions. Constant-initialized globals are done here; runtime-
 	// initialized ones are queued and emitted after all functions exist so

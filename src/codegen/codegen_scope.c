@@ -836,10 +836,27 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		// `ptr` is a pointer to the container storage. If the container is
 		// itself addressed through a pointer (e.g. `p->x` where the deref
 		// already yielded the pointee address), the container type is the
-		// struct and we GEP straight through `ptr`.
+		// struct and we GEP straight through `ptr`. The pointee type comes
+		// from the AST -- LLVM 21 pointers are opaque, so there is no
+		// element type to read off the pointer itself.
 		LLVMTypeRef struct_t = container_type;
-		if (LLVMGetTypeKind(struct_t) == LLVMPointerTypeKind)
-			struct_t = LLVMGetElementType(struct_t);
+		Type *container_ast =
+			n->data.member_access.object->data_type;
+		if (!container_ast &&
+			n->data.member_access.object->type == NODE_VAR_REF) {
+			Scope *cs =
+				scope_find(c, n->data.member_access.object->data.var_ref.name);
+			container_ast = (cs && cs->node) ? cs->node->data_type : NULL;
+		}
+		if (LLVMGetTypeKind(struct_t) == LLVMPointerTypeKind) {
+			if (container_ast &&
+				(container_ast->kind == TYPE_PTR ||
+				 container_ast->kind == TYPE_AMP) &&
+				container_ast->inner)
+				struct_t = get_llvm_type(c, container_ast->inner);
+			else
+				struct_t = LLVMGetElementType(struct_t);
+		}
 
 		// Direct field first. Miss falls back to embedding promotion
 		// (IDEAS 3): `e.name` on `struct Employee { Person; u32 badge; }`

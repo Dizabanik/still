@@ -327,6 +327,114 @@ static Type *bool_result_type(Parser *p) {
 	return cached;
 }
 
+static int fn_sig_known(Parser *p, const char *name);
+
+// --- Operator overloading (IDEAS 1.1) --------------------------------
+// Whitelisted operators map to fixed impl method names: `+` -> self_add,
+// `-` (binary) -> self_sub, unary `-` -> self_neg, `*` -> self_mul,
+// `/` -> self_div, `==`/`!=`/`<`/`<=`/`>`/`>=` -> self_eq/self_ne/
+// self_lt/self_le/self_gt/self_ge. No free-form symbols; numeric
+// primitives never participate.
+
+static const char *op_method_name(int op) {
+	switch (op) {
+	case TOK_PLUS: return "self_add";
+	case TOK_MINUS: return "self_sub";
+	case TOK_STAR: return "self_mul";
+	case TOK_SLASH: return "self_div";
+	case TOK_ISEQ: return "self_eq";
+	case TOK_NOTEQ: return "self_ne";
+	case TOK_LANGLE: return "self_lt";
+	case TOK_LEQ: return "self_le";
+	case TOK_RANGLE: return "self_gt";
+	case TOK_REQ: return "self_ge";
+	default: return NULL;
+	}
+}
+
+// The struct type of an expression operand, or NULL. Bare var refs and
+// member accesses resolve through the decl table; single-letter names are
+// generic parameters ("T"), never operator-overload receivers.
+static Type *operand_struct_type(Parser *p, ASTNode *e) {
+	if (!e)
+		return NULL;
+	Type *t = e->data_type;
+	if (!t && e->type == NODE_VAR_REF) {
+		ASTNode *decl = find_decl(p, e->data.var_ref.name);
+		if (decl && decl->data_type)
+			t = decl->data_type;
+	}
+	if (!t || t->kind != TYPE_STRUCT || !t->name || strlen(t->name) <= 1)
+		return NULL;
+	return t;
+}
+
+// If either operand is a struct providing the whitelisted operator method,
+// rewrite `l OP r` into a direct call of that method. Returns the call node
+// or NULL to keep the ordinary binop.
+static ASTNode *try_op_overload(Parser *p, int op, ASTNode *lhs,
+								ASTNode *rhs) {
+	const char *method = op_method_name(op);
+	if (!method)
+		return NULL;
+
+	// LHS receiver first (`v1 + v2` calls Vec2__self_add(v1, v2)); a bare
+	// scalar on the left with an overloaded right (`2 * v`) falls back to
+	// the right side's method -- the method still takes both operands.
+	Type *lt = operand_struct_type(p, lhs);
+	Type *rt = rhs ? operand_struct_type(p, rhs) : NULL;
+	Type *recv = lt ? lt : rt;
+	if (!recv)
+		return NULL;
+	// Both overloaded but different structs: ambiguity is the user's to
+	// resolve by defining exactly one; prefer LHS when both match.
+	char mangled[256];
+	snprintf(mangled, sizeof(mangled), "%s__%s", recv->name, method);
+	if (!fn_sig_known(p, mangled)) {
+		if (!lt && rt) {
+			snprintf(mangled, sizeof(mangled), "%s__%s", rt->name,
+					 method);
+			if (!fn_sig_known(p, mangled))
+				return NULL;
+		} else {
+			return NULL;
+		}
+	}
+
+	// Build `Struct__method(lhs, rhs)` as an ordinary call node.
+	ASTNode *call = arena_alloc(p->arena, sizeof(ASTNode));
+	call->type = NODE_CALL;
+	call->line = lhs->line;
+	ASTNode *callee = arena_alloc(p->arena, sizeof(ASTNode));
+	callee->type = NODE_VAR_REF;
+	callee->data.var_ref.name = arena_strdup(p->arena, mangled);
+	call->data.call.callee = callee;
+	lhs->next = rhs;
+	rhs->next = NULL;
+	call->data.call.args = lhs;
+	// Result type: comparisons yield bool; others come from the sig.
+	for (int k = p->fn_sig_count - 1; k >= 0; k--) {
+		if (strcmp(p->fn_sigs[k].name, mangled) == 0) {
+			if (p->fn_sigs[k].ret &&
+				p->fn_sigs[k].ret->kind == TYPE_STRUCT &&
+				p->fn_sigs[k].ret->name &&
+				strlen(p->fn_sigs[k].ret->name) == 1) {
+				// Generic template: leave untyped for codegen inference.
+				return call;
+			}
+			call->data_type = p->fn_sigs[k].ret;
+			break;
+		}
+	}
+	if (!call->data_type)
+		call->data_type =
+			(op == TOK_ISEQ || op == TOK_NOTEQ || op == TOK_LANGLE ||
+			 op == TOK_LEQ || op == TOK_RANGLE || op == TOK_REQ)
+				? bool_result_type(p)
+				: recv;
+	return call;
+}
+
 // Integer promotion at the AST level: pick the type both sides coerce to
 // without loss -- the wider width; signed wins when widths tie. NULL types
 // pass through so untyped operands keep today's i32-default behavior.
@@ -468,6 +576,38 @@ static ASTNode *parse_unary(Parser *p) {
 		zero->data.literal.i_val = 0;
 		zero->data.literal.i64_val = 0;
 		zero->data_type = operand->data_type;
+
+		// Unary minus on a struct with `self_neg` (IDEAS 1.1): rewrite to
+		// the method call before the numeric 0-x desugar.
+		if (op == TOK_MINUS) {
+			Type *ot = operand_struct_type(p, operand);
+			if (ot) {
+				char neg_mangled[256];
+				snprintf(neg_mangled, sizeof(neg_mangled), "%s__self_neg",
+						 ot->name);
+				if (fn_sig_known(p, neg_mangled)) {
+					ASTNode *call =
+						arena_alloc(p->arena, sizeof(ASTNode));
+					call->type = NODE_CALL;
+					call->line = operand->line;
+					ASTNode *callee =
+						arena_alloc(p->arena, sizeof(ASTNode));
+					callee->type = NODE_VAR_REF;
+					callee->data.var_ref.name =
+						arena_strdup(p->arena, neg_mangled);
+					call->data.call.callee = callee;
+					operand->next = NULL;
+					call->data.call.args = operand;
+					for (int k = p->fn_sig_count - 1; k >= 0; k--) {
+						if (strcmp(p->fn_sigs[k].name, neg_mangled) == 0) {
+							call->data_type = p->fn_sigs[k].ret;
+							break;
+						}
+					}
+					return call;
+				}
+			}
+		}
 
 		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
 		n->type = NODE_BINARY_OP;
@@ -1119,6 +1259,30 @@ static ASTNode *parse_postfix(Parser *p) {
 				 expr->data_type->kind == TYPE_AMP)) {
 				index->data_type = expr->data_type->inner;
 			}
+			// Operator-provided indexing (IDEAS 1.2): `g[i]` on a struct
+			// with impl `self_index` becomes that call -- the expression's
+			// type is the METHOD'S return type, stamped here so downstream
+			// consumers (varargs str decay, coercions) see it.
+			if (!index->data_type) {
+				Type *ibase = expr->data_type;
+				if (!ibase && expr->type == NODE_VAR_REF) {
+					ASTNode *idecl =
+						find_decl(p, expr->data.var_ref.name);
+					ibase = idecl ? idecl->data_type : NULL;
+				}
+				if (ibase && ibase->kind == TYPE_STRUCT && ibase->name &&
+					strlen(ibase->name) > 1) {
+					char imethod[512];
+					snprintf(imethod, sizeof(imethod), "%s__self_index",
+							 ibase->name);
+					for (int ik = p->fn_sig_count - 1; ik >= 0; ik--) {
+						if (strcmp(p->fn_sigs[ik].name, imethod) == 0) {
+							index->data_type = p->fn_sigs[ik].ret;
+							break;
+						}
+					}
+				}
+			}
 			expr = index;
 		} else if (p->cur.type == TOK_LPAREN) {
 			advance(p);
@@ -1483,6 +1647,13 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			pour->data.set_pour.value = rhs;
 			lhs = pour;
 		} else {
+			// Whitelisted operator overloading (IDEAS 1.1): a struct with
+			// the matching self_* method turns the binop into that call.
+			ASTNode *ov = try_op_overload(p, op, lhs, rhs);
+			if (ov) {
+				lhs = ov; // becomes the LHS of any following operator
+				continue;
+			}
 			ASTNode *bin = arena_alloc(p->arena, sizeof(ASTNode));
 			bin->type = NODE_BINARY_OP;
 			bin->data.bin_op.op = op;
@@ -2178,6 +2349,16 @@ static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr,
 			default:
 				bin_op = TOK_SLASH;
 				break;
+			}
+			// Operator overloading applies to compound assigns too:
+			// `v1 += v2` rewrites to Vec2__self_add(v1, v2) when defined.
+			ASTNode *ov =
+				try_op_overload(p, bin_op, expr, value);
+			if (ov) {
+				assign->data.assign.value = ov;
+				if (need_semi)
+					consume(p, TOK_SEMICOLON, "Expected ';'");
+				return assign;
 			}
 			ASTNode *bin = arena_alloc(p->arena, sizeof(ASTNode));
 			bin->type = NODE_BINARY_OP;

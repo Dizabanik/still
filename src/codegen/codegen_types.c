@@ -147,6 +147,20 @@ const char *sd_field_name(KawaCompiler *c, LLVMTypeRef struct_type,
 	return sd->fields[index].name;
 }
 
+// Resolve the struct type of an indexing base (`g[i]`): the parser stamps
+// data_type on computed bases but leaves plain VAR_REFs to scope lookup.
+Type *index_base_struct_type(KawaCompiler *c, ASTNode *obj) {
+	Type *bt = obj->data_type;
+	if (!bt && obj->type == NODE_VAR_REF) {
+		Scope *bs = scope_find(c, obj->data.var_ref.name);
+		if (bs && bs->node)
+			bt = bs->node->data_type;
+	}
+	if (bt && bt->kind == TYPE_STRUCT && bt->name && strlen(bt->name) > 1)
+		return bt;
+	return NULL;
+}
+
 int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name) {
 	StructDef *sd = find_struct_def(c, struct_type);
@@ -528,6 +542,40 @@ void collect_overloads(KawaCompiler *c, ASTNode *root) {
 			c->overload_names[c->overload_name_count++] =
 				(char *)names[i].name;
 	}
+}
+
+// Pre-register every impl method as "Struct__method" so bodies can check
+// method existence regardless of emission order (operator overloading,
+// self_index). Also fills the overload registry's needs.
+void collect_impl_methods(KawaCompiler *c, ASTNode *root) {
+	for (ASTNode *g = root; g; g = g->next) {
+		if (g->type != NODE_IMPL_BLOCK ||
+			c->impl_method_count >= 256)
+			continue;
+		for (ASTNode *m = g->data.impl.methods; m; m = m->next) {
+			if (m->type != NODE_FUNC_DECL || !m->data.func.name)
+				continue;
+			if (c->impl_method_count >= 256)
+				break;
+			// Impl methods are stored under their MANGLED name
+			// (`Grid__self_index_set`) -- the parser prefixes the struct
+			// when it builds the decl, matching how they're emitted.
+			c->impl_methods[c->impl_method_count++] =
+				arena_strdup(c->arena, m->data.func.name);
+		}
+	}
+}
+
+int impl_has_method(KawaCompiler *c, const char *struct_name,
+					const char *method) {
+	if (!struct_name)
+		return 0;
+	char buf[256];
+	snprintf(buf, sizeof(buf), "%s__%s", struct_name, method);
+	for (int i = 0; i < c->impl_method_count; i++)
+		if (strcmp(c->impl_methods[i], buf) == 0)
+			return 1;
+	return 0;
 }
 
 // Is this bare name part of an overload set?

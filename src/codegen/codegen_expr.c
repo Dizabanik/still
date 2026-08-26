@@ -2,6 +2,60 @@
 
 static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n);
 
+// `base[i]` on a struct providing impl `self_index`: evaluate the base's
+// ADDRESS (the method mutates through it for self* receivers, and by-value
+// receivers copy from the same storage), the index, then call.
+LLVMValueRef codegen_index_overload(KawaCompiler *c, ASTNode *n) {
+	char mangled[256];
+	ASTNode *obj = n->data.index.object;
+	Type *bt = index_base_struct_type(c, obj);
+	if (!bt)
+		return NULL;
+	snprintf(mangled, sizeof(mangled), "%s__self_index", bt->name);
+	LLVMValueRef fn = LLVMGetNamedFunction(c->module, mangled);
+	if (!fn) {
+		kerr(KAWA_E_UNDEF, n, "missing `%s` -- index overload not emitted",
+			 mangled);
+		exit(1);
+	}
+	LLVMTypeRef fn_t = LLVMGlobalGetValueType(fn);
+	LLVMTypeRef base_elem_unused = NULL;
+	LLVMValueRef base_addr =
+		get_address(c, obj, &base_elem_unused);
+	// By-value receivers take the struct VALUE: load from the resolved
+	// storage. Pointer receivers (`self*`) take the address as-is -- zero
+	// copy either way once the optimizer runs.
+	LLVMTypeRef recv_t = LLVMTypeOf(LLVMGetParam(fn, 0));
+	LLVMValueRef self_arg =
+		LLVMGetTypeKind(recv_t) == LLVMPointerTypeKind
+			? base_addr
+			: LLVMBuildLoad2(c->builder, recv_t, base_addr, "idx_self");
+	LLVMValueRef idx = codegen_expr(c, n->data.index.index);
+	// Widen/narrow the index to whatever the method declares (usually
+	// i64), matching how ordinary integer args are coerced at call sites.
+	// Bare VAR_REF indices carry no parser-side type -- stamp it from the
+	// declaration so a signed i32 widens with sext, not zext.
+	Type *src_t = n->data.index.index->data_type;
+	if (!src_t && n->data.index.index->type == NODE_VAR_REF) {
+		Scope *sv = scope_find(
+			c, n->data.index.index->data.var_ref.name);
+		src_t = (sv && sv->node) ? sv->node->data_type : NULL;
+		if (src_t)
+			n->data.index.index->data_type = src_t;
+	}
+	LLVMTypeRef want_t = LLVMTypeOf(LLVMGetParam(fn, 1));
+	if (want_t && LLVMGetTypeKind(want_t) == LLVMIntegerTypeKind &&
+		LLVMTypeOf(idx) != want_t) {
+		Type dst = {0};
+		dst.kind = TYPE_I64;
+		dst.is_signed = 1; // index slots are signed; sext negatives
+		idx = coerce_value(c, idx, src_t, want_t, &dst);
+	}
+	return LLVMBuildCall2(c->builder, fn_t, fn,
+						  (LLVMValueRef[]){self_arg, idx}, 2,
+						  "idx_overload");
+}
+
 // True when evaluating the expression cannot produce side effects or trap:
 // literals, variable reads, member/index reads, pure operators over pure
 // operands, and calls to functions declared `pure fn` with pure arguments.
@@ -337,7 +391,22 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_VAR_REF:
 	case NODE_MEMBER_ACCESS:
-	case NODE_INDEX:
+	case NODE_INDEX: {
+		// Operator-provided indexing (IDEAS 1.2): a struct with an impl
+		// `self_index` method turns `base[i]` into that call. Arrays,
+		// slices, and pointers never hit this -- their types aren't
+		// TYPE_STRUCT, so the check is one registry probe for everything
+		// else.
+		if (n->type == NODE_INDEX) {
+			Type *bt = index_base_struct_type(
+				c, n->data.index.object);
+			if (bt && impl_has_method(c, bt->name, "self_index")) {
+				return codegen_index_overload(c, n);
+			}
+		}
+		return value_of_lvalue(c, n);
+	}
+
 	case NODE_DEREF:
 	case NODE_AMP:
 		return value_of_lvalue(c, n);

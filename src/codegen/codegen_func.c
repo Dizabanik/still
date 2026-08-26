@@ -83,6 +83,28 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	LLVMAddAttributeAtIndex(
 		c->current_func, LLVMAttributeFunctionIndex,
 		LLVMCreateEnumAttribute(c->context, nounwind_id, 0));
+	// Index overloads are accessor-shaped by contract -- always inline so
+	// `a[i]` costs exactly what the raw array access would. Other impl
+	// methods get a hint; small bodies inline, big ones don't bloat.
+	size_t ilen = cur->data.func.name ? strlen(cur->data.func.name) : 0;
+	if (implicit_self_struct &&
+		((ilen > 12 &&
+		  strcmp(cur->data.func.name + ilen - 12, "__self_index") == 0) ||
+		 (ilen > 16 &&
+		  strcmp(cur->data.func.name + ilen - 16,
+				 "__self_index_set") == 0))) {
+		unsigned ai_id =
+			LLVMGetEnumAttributeKindForName("alwaysinline", 12);
+		LLVMAddAttributeAtIndex(
+			c->current_func, LLVMAttributeFunctionIndex,
+			LLVMCreateEnumAttribute(c->context, ai_id, 0));
+	} else if (implicit_self_struct && !cur->data.func.is_drip) {
+		unsigned ih_id =
+			LLVMGetEnumAttributeKindForName("inlinehint", 10);
+		LLVMAddAttributeAtIndex(
+			c->current_func, LLVMAttributeFunctionIndex,
+			LLVMCreateEnumAttribute(c->context, ih_id, 0));
+	}
 	if (cur->data.func.is_drip) {
 		unsigned noinline_id = LLVMGetEnumAttributeKindForName("noinline", 8);
 		LLVMAddAttributeAtIndex(

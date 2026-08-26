@@ -65,6 +65,7 @@ void register_alias(KawaCompiler *c, const char *name, Type *target);
 Type *resolve_alias_type(KawaCompiler *c, const char *name);
 void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 					 ASTNode *fields);
+Type *index_base_struct_type(KawaCompiler *c, ASTNode *obj);
 int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name);
 LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
@@ -88,6 +89,9 @@ int type_is_signed(KawaCompiler *c, Type *t);
 // --- function overloading (codegen_types.c) ---
 int kawa_types_same(Type *a, Type *b);
 void collect_overloads(KawaCompiler *c, ASTNode *root);
+void collect_impl_methods(KawaCompiler *c, ASTNode *root);
+int impl_has_method(KawaCompiler *c, const char *struct_name,
+					const char *method);
 int is_overloaded_name(KawaCompiler *c, const char *bare);
 const char *resolve_overload(KawaCompiler *c, ASTNode *call,
 							 const char *bare, ASTNode *args);
@@ -177,6 +181,7 @@ int const_eval_i64(KawaCompiler *c, ASTNode *n, long long *out);
 // --- codegen_expr.c ---
 void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node);
 LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n);
+LLVMValueRef codegen_index_overload(KawaCompiler *c, ASTNode *n);
 LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 						 LLVMValueRef r);
 
