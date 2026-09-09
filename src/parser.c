@@ -82,6 +82,7 @@ static void synchronize(Parser *p) {
 }
 
 void parser_init(Parser *p, Lexer *l, Arena *a) {
+	memset(p, 0, sizeof(Parser));
 	p->lexer = l;
 	p->arena = a;
 	p->cur = lexer_next(l);
@@ -91,11 +92,17 @@ void parser_init(Parser *p, Lexer *l, Arena *a) {
 	p->fn_sig_count = 0;
 	p->soa_count = 0;
 	p->struct_name_count = 0;
+	p->cur_module = p->cur.filename ? p->cur.filename : l->filename;
+	p->generic_struct_count = 0;
+	p->generic_impl_count = 0;
+	p->prog_tail = NULL;
 }
 
 static void advance(Parser *p) {
 	p->prev = p->cur;
 	p->cur = lexer_next(p->lexer);
+	if (p->cur.filename)
+		p->cur_module = p->cur.filename;
 	if (p->cur.type == TOK_ERROR)
 		parser_err(p);
 }
@@ -126,6 +133,11 @@ static int find_decl_is_const(Parser *p, const char *name) {
 static int is_type_token(TokenType t) {
 	return (t >= TOK_VOID && t <= TOK_F64) || t == TOK_IDENTIFIER ||
 		   t == TOK_LBRACKET; // [N]T arrays and []T slices
+}
+static int is_ident_like(TokenType t) {
+	return t == TOK_IDENTIFIER || t == TOK_SET || t == TOK_DROP ||
+		   t == TOK_PRESS || t == TOK_FILTER || t == TOK_BREW ||
+		   t == TOK_SIP || t == TOK_ALIAS;
 }
 static int is_likely_cast(Parser *p) {
 	// Lookahead logic:
@@ -162,10 +174,25 @@ static int is_likely_cast(Parser *p) {
 }
 
 static Type *parse_type(Parser *p);
+static const char *type_to_suffix(Arena *arena, Type *t);
+static Type *clone_and_subst_type(Arena *arena, Type *src, const char *param,
+								   Type *concrete, const char *gen_struct,
+								   const char *inst_struct);
+static ASTNode *clone_and_subst_node(Parser *p, ASTNode *src, const char *param,
+									 Type *concrete, const char *gen_struct,
+									 const char *inst_struct);
+static char *instantiate_struct_if_needed(Parser *p, const char *gen_name,
+										  Type *concrete);
+static ASTNode *parse_destructuring_let(Parser *p);
+static void parse_const_decl(Parser *p, ASTNode ***tail, const char *prefix,
+							 int is_pub);
+static void parse_function(Parser *p, ASTNode ***tail, char *prefix,
+						   int is_pub);
 
 // Array length in `[N]T`: a literal or a const identifier. Const lookup
 // goes through p->decls (registered at declaration time), so a const
 // must be declared before the array that uses it -- like C.
+// Supports both `N` and `Mat4.DIM`.
 static long parse_array_len(Parser *p) {
 	if (p->cur.type == TOK_INT_LIT) {
 		long len = atol(p->cur.text);
@@ -173,16 +200,25 @@ static long parse_array_len(Parser *p) {
 		return len;
 	}
 	if (p->cur.type == TOK_IDENTIFIER) {
-		ASTNode *decl = find_decl(p, p->cur.text);
+		char *id1 = p->cur.text;
+		advance(p);
+		char name_buf[256];
+		if (p->cur.type == TOK_DOT) {
+			advance(p);
+			char *id2 = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected identifier after '.' in array length");
+			snprintf(name_buf, sizeof(name_buf), "%s__%s", id1, id2);
+		} else {
+			snprintf(name_buf, sizeof(name_buf), "%s", id1);
+		}
+		ASTNode *decl = find_decl(p, name_buf);
 		if (decl && decl->type == NODE_VAR_DECL &&
 			decl->data.var_decl.is_const && decl->data.var_decl.init &&
 			decl->data.var_decl.init->type == NODE_LITERAL) {
-			long len = (long)decl->data.var_decl.init->data.literal.i_val;
-			advance(p);
+			long len = (long)decl->data.var_decl.init->data.literal.i64_val;
 			return len;
 		}
 		report_error(p, "Array length must be a literal or const");
-		advance(p);
 		return 0;
 	}
 	report_error(p, "Expected array length");
@@ -266,13 +302,33 @@ static Type *parse_type(Parser *p) {
 		t->inner = elem;
 		return t;
 	} else if (tok == TOK_IDENTIFIER) {
-		t->kind = TYPE_STRUCT;
-		t->name = p->cur.text;
+		char *sname = p->cur.text;
+		int is_gen = 0;
+		for (int gi = 0; gi < p->generic_struct_count; gi++) {
+			if (strcmp(p->generic_structs[gi].name, sname) == 0) {
+				is_gen = 1;
+				break;
+			}
+		}
+		if (is_gen && lexer_peek(p->lexer).type == TOK_LPAREN) {
+			advance(p); // 'Box'
+			consume(p, TOK_LPAREN, "Expected '(' after generic struct name");
+			Type *concrete = parse_type(p);
+			consume(p, TOK_RPAREN, "Expected ')' after generic type argument");
+			char *inst_name = instantiate_struct_if_needed(p, sname, concrete);
+			t->kind = TYPE_STRUCT;
+			t->name = inst_name;
+			goto handle_type_postfix;
+		} else {
+			t->kind = TYPE_STRUCT;
+			t->name = sname;
+		}
 	} else {
 		report_error(p, "Expected type");
 		return t;
 	}
 	advance(p);
+handle_type_postfix:
 	// Postfix [N]: fixed-size array type, e.g. [4]i32 or [16]User*
 	if (p->cur.type == TOK_LBRACKET) {
 		advance(p);
@@ -680,7 +736,453 @@ static Type *find_struct_type_by_name(Parser *p, const char *name) {
 			return t;
 		}
 	}
+	for (int gi = 0; gi < p->generic_struct_count; gi++) {
+		if (strcmp(p->generic_structs[gi].name, name) == 0) {
+			Type *t = arena_alloc(p->arena, sizeof(Type));
+			t->kind = TYPE_STRUCT;
+			t->name = p->generic_structs[gi].name;
+			return t;
+		}
+	}
 	return NULL;
+}
+
+static const char *type_to_suffix(Arena *arena, Type *t) {
+	if (!t)
+		return "unknown";
+	switch (t->kind) {
+	case TYPE_VOID: return "void";
+	case TYPE_BOOL: return "bool";
+	case TYPE_CHAR: return "char";
+	case TYPE_I8:   return "i8";
+	case TYPE_U8:   return "u8";
+	case TYPE_I16:  return "i16";
+	case TYPE_U16:  return "u16";
+	case TYPE_I32:  return "i32";
+	case TYPE_U32:  return "u32";
+	case TYPE_I64:  return "i64";
+	case TYPE_U64:  return "u64";
+	case TYPE_F16:  return "f16";
+	case TYPE_BF16: return "bf16";
+	case TYPE_F32:  return "f32";
+	case TYPE_F64:  return "f64";
+	case TYPE_STRUCT:
+		return t->name ? t->name : "struct";
+	case TYPE_PTR: {
+		const char *in = type_to_suffix(arena, t->inner);
+		size_t len = strlen(in) + 5;
+		char *buf = arena_alloc(arena, len);
+		snprintf(buf, len, "%s_ptr", in);
+		return buf;
+	}
+	case TYPE_AMP: {
+		const char *in = type_to_suffix(arena, t->inner);
+		size_t len = strlen(in) + 5;
+		char *buf = arena_alloc(arena, len);
+		snprintf(buf, len, "%s_ref", in);
+		return buf;
+	}
+	case TYPE_SLICE: {
+		const char *in = type_to_suffix(arena, t->inner);
+		size_t len = strlen(in) + 7;
+		char *buf = arena_alloc(arena, len);
+		snprintf(buf, len, "%s_slice", in);
+		return buf;
+	}
+	case TYPE_ARRAY: {
+		const char *in = type_to_suffix(arena, t->inner);
+		size_t len = strlen(in) + 24;
+		char *buf = arena_alloc(arena, len);
+		snprintf(buf, len, "%s_arr%ld", in, t->array_len);
+		return buf;
+	}
+	default:
+		return "val";
+	}
+}
+
+static Type *clone_and_subst_type(Arena *arena, Type *src, const char *param,
+								   Type *concrete, const char *gen_struct,
+								   const char *inst_struct) {
+	if (!src)
+		return NULL;
+	if (src->kind == TYPE_STRUCT && src->name) {
+		if (param && strcmp(src->name, param) == 0)
+			return concrete;
+		if (gen_struct && inst_struct && strcmp(src->name, gen_struct) == 0) {
+			Type *res = arena_alloc(arena, sizeof(Type));
+			res->kind = TYPE_STRUCT;
+			res->name = arena_strdup(arena, inst_struct);
+			return res;
+		}
+	}
+	Type *dst = arena_alloc(arena, sizeof(Type));
+	dst->kind = src->kind;
+	dst->array_len = src->array_len;
+	dst->name = src->name ? arena_strdup(arena, src->name) : NULL;
+	dst->inner = clone_and_subst_type(arena, src->inner, param, concrete,
+									  gen_struct, inst_struct);
+	return dst;
+}
+
+static ASTNode *clone_and_subst_node(Parser *p, ASTNode *src, const char *param,
+									 Type *concrete, const char *gen_struct,
+									 const char *inst_struct) {
+	if (!src)
+		return NULL;
+
+	ASTNode *dst = arena_alloc(p->arena, sizeof(ASTNode));
+	dst->type = src->type;
+	dst->line = src->line;
+	dst->is_pub = src->is_pub;
+	dst->module_name = src->module_name;
+	dst->data_type = clone_and_subst_type(p->arena, src->data_type, param,
+										  concrete, gen_struct, inst_struct);
+
+	switch (src->type) {
+	case NODE_FUNC_DECL: {
+		dst->data.func.is_pure = src->data.func.is_pure;
+		dst->data.func.is_drip = src->data.func.is_drip;
+		dst->data.func.is_test = src->data.func.is_test;
+		dst->data.func.is_ignored = src->data.func.is_ignored;
+
+		const char *old_name = src->data.func.name;
+		if (old_name && gen_struct && inst_struct) {
+			size_t glen = strlen(gen_struct);
+			if (strncmp(old_name, gen_struct, glen) == 0 &&
+				old_name[glen] == '_' && old_name[glen + 1] == '_') {
+				const char *subname = old_name + glen + 2;
+				size_t nlen = strlen(inst_struct) + strlen(subname) + 4;
+				char *mangled = arena_alloc(p->arena, nlen);
+				snprintf(mangled, nlen, "%s__%s", inst_struct, subname);
+				dst->data.func.name = mangled;
+			} else {
+				dst->data.func.name = arena_strdup(p->arena, old_name);
+			}
+		} else {
+			dst->data.func.name = old_name ? arena_strdup(p->arena, old_name) : NULL;
+		}
+
+		dst->data.func.ret_type = clone_and_subst_type(
+			p->arena, src->data.func.ret_type, param, concrete, gen_struct,
+			inst_struct);
+
+		ASTNode *args_head = NULL;
+		ASTNode **args_tail = &args_head;
+		for (ASTNode *a = src->data.func.args; a; a = a->next) {
+			ASTNode *ca = clone_and_subst_node(p, a, param, concrete,
+											   gen_struct, inst_struct);
+			*args_tail = ca;
+			args_tail = &ca->next;
+		}
+		dst->data.func.args = args_head;
+		dst->data.func.body = clone_and_subst_node(p, src->data.func.body,
+												   param, concrete, gen_struct,
+												   inst_struct);
+		break;
+	}
+	case NODE_VAR_DECL: {
+		dst->data.var_decl.name = src->data.var_decl.name
+									  ? arena_strdup(p->arena, src->data.var_decl.name)
+									  : NULL;
+		dst->data.var_decl.is_orbit = src->data.var_decl.is_orbit;
+		dst->data.var_decl.is_const = src->data.var_decl.is_const;
+		dst->data.var_decl.init = clone_and_subst_node(
+			p, src->data.var_decl.init, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.var_decl.field_default = clone_and_subst_node(
+			p, src->data.var_decl.field_default, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	}
+	case NODE_BLOCK: {
+		ASTNode *stmts_head = NULL;
+		ASTNode **stmts_tail = &stmts_head;
+		for (ASTNode *s = src->data.block.stmts; s; s = s->next) {
+			ASTNode *cs = clone_and_subst_node(p, s, param, concrete,
+											   gen_struct, inst_struct);
+			*stmts_tail = cs;
+			stmts_tail = &cs->next;
+		}
+		dst->data.block.stmts = stmts_head;
+		break;
+	}
+	case NODE_RETURN:
+		dst->data.ret_stmt.expr = clone_and_subst_node(
+			p, src->data.ret_stmt.expr, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_ASSIGN:
+		dst->data.assign.target = clone_and_subst_node(
+			p, src->data.assign.target, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.assign.value = clone_and_subst_node(
+			p, src->data.assign.value, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_BINARY_OP:
+		dst->data.bin_op.op = src->data.bin_op.op;
+		dst->data.bin_op.left = clone_and_subst_node(
+			p, src->data.bin_op.left, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.bin_op.right = clone_and_subst_node(
+			p, src->data.bin_op.right, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_CALL: {
+		dst->data.call.callee = clone_and_subst_node(
+			p, src->data.call.callee, param, concrete, gen_struct,
+			inst_struct);
+		ASTNode *args_head = NULL;
+		ASTNode **args_tail = &args_head;
+		for (ASTNode *a = src->data.call.args; a; a = a->next) {
+			ASTNode *ca = clone_and_subst_node(p, a, param, concrete,
+											   gen_struct, inst_struct);
+			ca->has_arg_label = a->has_arg_label;
+			ca->arg_label = a->arg_label ? arena_strdup(p->arena, a->arg_label) : NULL;
+			*args_tail = ca;
+			args_tail = &ca->next;
+		}
+		dst->data.call.args = args_head;
+		break;
+	}
+	case NODE_MEMBER_ACCESS:
+		dst->data.member_access.object = clone_and_subst_node(
+			p, src->data.member_access.object, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.member_access.member = src->data.member_access.member
+											 ? arena_strdup(p->arena, src->data.member_access.member)
+											 : NULL;
+		break;
+	case NODE_INDEX:
+		dst->data.index.object = clone_and_subst_node(
+			p, src->data.index.object, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.index.index = clone_and_subst_node(
+			p, src->data.index.index, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_VAR_REF: {
+		const char *vname = src->data.var_ref.name;
+		if (vname && gen_struct && inst_struct) {
+			if (strcmp(vname, gen_struct) == 0) {
+				dst->data.var_ref.name = arena_strdup(p->arena, inst_struct);
+			} else {
+				size_t glen = strlen(gen_struct);
+				if (strncmp(vname, gen_struct, glen) == 0 &&
+					vname[glen] == '_' && vname[glen + 1] == '_') {
+					const char *subname = vname + glen + 2;
+					size_t nlen = strlen(inst_struct) + strlen(subname) + 4;
+					char *mangled = arena_alloc(p->arena, nlen);
+					snprintf(mangled, nlen, "%s__%s", inst_struct, subname);
+					dst->data.var_ref.name = mangled;
+				} else {
+					dst->data.var_ref.name = arena_strdup(p->arena, vname);
+				}
+			}
+		} else {
+			dst->data.var_ref.name = vname ? arena_strdup(p->arena, vname) : NULL;
+		}
+		break;
+	}
+	case NODE_STRUCT_LITERAL: {
+		StructInitItem *items_head = NULL;
+		StructInitItem **items_tail = &items_head;
+		for (StructInitItem *it = src->data.struct_lit.items; it; it = it->next) {
+			StructInitItem *cit = arena_alloc(p->arena, sizeof(StructInitItem));
+			cit->field_name = it->field_name ? arena_strdup(p->arena, it->field_name) : NULL;
+			cit->value = clone_and_subst_node(p, it->value, param, concrete,
+											  gen_struct, inst_struct);
+			cit->spread_from = clone_and_subst_node(p, it->spread_from, param,
+													concrete, gen_struct,
+													inst_struct);
+			cit->next = NULL;
+			*items_tail = cit;
+			items_tail = &cit->next;
+		}
+		dst->data.struct_lit.items = items_head;
+		break;
+	}
+	case NODE_IF:
+		dst->data.if_stmt.cond = clone_and_subst_node(
+			p, src->data.if_stmt.cond, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.if_stmt.then_block = clone_and_subst_node(
+			p, src->data.if_stmt.then_block, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.if_stmt.else_block = clone_and_subst_node(
+			p, src->data.if_stmt.else_block, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_WHILE:
+		dst->data.while_stmt.cond = clone_and_subst_node(
+			p, src->data.while_stmt.cond, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.while_stmt.body = clone_and_subst_node(
+			p, src->data.while_stmt.body, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_FOR:
+		dst->data.for_stmt.init = clone_and_subst_node(
+			p, src->data.for_stmt.init, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.for_stmt.cond = clone_and_subst_node(
+			p, src->data.for_stmt.cond, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.for_stmt.step = clone_and_subst_node(
+			p, src->data.for_stmt.step, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.for_stmt.body = clone_and_subst_node(
+			p, src->data.for_stmt.body, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_LITERAL:
+		dst->data.literal = src->data.literal;
+		break;
+	case NODE_STRING_LIT:
+		dst->data.str_lit.s_val = src->data.str_lit.s_val
+									  ? arena_strdup(p->arena, src->data.str_lit.s_val)
+									  : NULL;
+		break;
+	case NODE_CAST:
+		dst->data.cast.val = clone_and_subst_node(
+			p, src->data.cast.val, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_DEREF:
+	case NODE_AMP:
+		dst->data.deref.expr = clone_and_subst_node(
+			p, src->data.deref.expr, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	case NODE_SIZEOF:
+		dst->data.size_of.type_val = clone_and_subst_type(
+			p->arena, src->data.size_of.type_val, param, concrete, gen_struct,
+			inst_struct);
+		dst->data.size_of.value = clone_and_subst_node(
+			p, src->data.size_of.value, param, concrete, gen_struct,
+			inst_struct);
+		break;
+	default:
+		break;
+	}
+	return dst;
+}
+
+static char *instantiate_struct_if_needed(Parser *p, const char *gen_name,
+										  Type *concrete) {
+	if (!gen_name || !concrete)
+		return (char *)gen_name;
+
+	int g_idx = -1;
+	for (int i = 0; i < p->generic_struct_count; i++) {
+		if (strcmp(p->generic_structs[i].name, gen_name) == 0) {
+			g_idx = i;
+			break;
+		}
+	}
+	if (g_idx < 0)
+		return (char *)gen_name;
+
+	const char *param = p->generic_structs[g_idx].type_param;
+	if (concrete->kind == TYPE_STRUCT && concrete->name &&
+		strcmp(concrete->name, param) == 0)
+		return (char *)gen_name;
+
+	const char *suffix = type_to_suffix(p->arena, concrete);
+	size_t nlen = strlen(gen_name) + strlen(suffix) + 4;
+	char *inst_name = arena_alloc(p->arena, nlen);
+	snprintf(inst_name, nlen, "%s__%s", gen_name, suffix);
+
+	for (int i = 0; i < p->struct_name_count; i++) {
+		if (strcmp(p->struct_names[i], inst_name) == 0)
+			return inst_name;
+	}
+
+	if (p->generic_structs[g_idx].inst_count < 16) {
+		p->generic_structs[g_idx].instantiations[p->generic_structs[g_idx].inst_count++] = concrete;
+	}
+
+	ASTNode *tmpl = p->generic_structs[g_idx].node;
+	ASTNode *inst_fields = NULL;
+	ASTNode **f_tail = &inst_fields;
+	for (ASTNode *f = tmpl->data.struct_decl.fields; f; f = f->next) {
+		ASTNode *cf = arena_alloc(p->arena, sizeof(ASTNode));
+		cf->type = NODE_VAR_DECL;
+		cf->data.var_decl.name = f->data.var_decl.name;
+		cf->data_type = clone_and_subst_type(p->arena, f->data_type, param,
+											 concrete, gen_name, inst_name);
+		cf->is_pub = f->is_pub;
+		cf->module_name = f->module_name;
+		*f_tail = cf;
+		f_tail = &cf->next;
+	}
+
+	ASTNode *st = arena_alloc(p->arena, sizeof(ASTNode));
+	st->type = NODE_STRUCT_DECL;
+	st->data.struct_decl.name = inst_name;
+	st->data.struct_decl.fields = inst_fields;
+	st->data.struct_decl.is_soa = tmpl->data.struct_decl.is_soa;
+	st->is_pub = tmpl->is_pub;
+	st->module_name = tmpl->module_name;
+
+	if (p->struct_name_count < 128) {
+		p->struct_names[p->struct_name_count] = inst_name;
+		p->struct_nodes[p->struct_name_count] = st;
+		p->struct_name_count++;
+	}
+
+	if (p->prog_tail && *p->prog_tail) {
+		**p->prog_tail = st;
+		*p->prog_tail = &st->next;
+	}
+
+	for (int gi = 0; gi < p->generic_impl_count; gi++) {
+		if (strcmp(p->generic_impls[gi].struct_name, gen_name) != 0)
+			continue;
+		ASTNode *impl_node = p->generic_impls[gi].node;
+		const char *iparam = p->generic_impls[gi].type_param;
+
+		ASTNode *inst_methods = NULL;
+		ASTNode **m_tail = &inst_methods;
+		for (ASTNode *m = impl_node->data.impl.methods; m; m = m->next) {
+			ASTNode *cm = clone_and_subst_node(p, m, iparam, concrete,
+											   gen_name, inst_name);
+			*m_tail = cm;
+			m_tail = &cm->next;
+
+			if (cm->type == NODE_FUNC_DECL) {
+				if (p->fn_sig_count < 512 && cm->data.func.ret_type) {
+					int np = 0;
+					for (ASTNode *a = cm->data.func.args; a; a = a->next)
+						np++;
+					p->fn_sigs[p->fn_sig_count].name = cm->data.func.name;
+					p->fn_sigs[p->fn_sig_count].ret = cm->data.func.ret_type;
+					p->fn_sigs[p->fn_sig_count].nparams = np;
+					p->fn_sig_count++;
+				}
+				if (p->decl_count < 1024) {
+					p->decls[p->decl_count].name = cm->data.func.name;
+					p->decls[p->decl_count].node = cm;
+					p->decl_count++;
+				}
+			}
+		}
+
+		ASTNode *ib = arena_alloc(p->arena, sizeof(ASTNode));
+		ib->type = NODE_IMPL_BLOCK;
+		ib->data.impl.struct_name = inst_name;
+		ib->data.impl.methods = inst_methods;
+		ib->is_pub = impl_node->is_pub;
+		ib->module_name = impl_node->module_name;
+
+		if (p->prog_tail && *p->prog_tail) {
+			**p->prog_tail = ib;
+			*p->prog_tail = &ib->next;
+		}
+	}
+
+	return inst_name;
 }
 
 static int fn_sig_known(Parser *p, const char *name) {
@@ -762,6 +1264,8 @@ static int peek_is_struct_literal(Parser *p) {
 		}
 
 		if (depth == 1) {
+			if (t.type == TOK_COLON)
+				return 1; // Found colon at top level -> Struct
 			if (t.type == TOK_COMMA)
 				return 1; // Found comma at top level -> Struct
 			if (t.type == TOK_SEMICOLON)
@@ -817,27 +1321,35 @@ static ASTNode *parse_struct_literal(Parser *p) {
 		if (p->cur.type == TOK_DOT) {
 			advance(p);
 			item->field_name = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Expected field name");
+			if (is_ident_like(p->cur.type))
+				advance(p);
+			else
+				consume(p, TOK_IDENTIFIER, "Expected field name");
 			consume(p, TOK_ASSIGN, "Expected '='");
-		} else if (p->cur.type == TOK_IDENTIFIER &&
-				   lexer_peek(p->lexer).type != TOK_LPAREN &&
-				   lexer_peek(p->lexer).type != TOK_LBRACE) {
+			item->value = parse_expr(p);
+		} else if (is_ident_like(p->cur.type) &&
+				   lexer_peek(p->lexer).type == TOK_COLON) {
+			item->field_name = p->cur.text;
+			advance(p);
+			consume(p, TOK_COLON, "Expected ':'");
+			item->value = parse_expr(p);
+		} else if (is_ident_like(p->cur.type) &&
+				   lexer_peek(p->lexer).type == TOK_ASSIGN) {
+			item->field_name = p->cur.text;
+			advance(p);
+			consume(p, TOK_ASSIGN, "Expected '='");
+			item->value = parse_expr(p);
+		} else if (is_ident_like(p->cur.type) &&
+				   (lexer_peek(p->lexer).type == TOK_COMMA ||
+					lexer_peek(p->lexer).type == TOK_RBRACE)) {
 			// Field-init shorthand: `Vec { x, y }` means `.x = x, .y = y`
 			// -- the identifier names the field AND supplies the value.
 			item->field_name = p->cur.text;
 			item->value = parse_expr(p);
-			item->next = NULL;
-			*tail = item;
-			tail = &item->next;
-			if (p->cur.type == TOK_COMMA)
-				advance(p);
-			else if (p->cur.type != TOK_RBRACE)
-				report_error(p,
-							 "Expected ',' or '}' in struct literal");
-			continue;
+		} else {
+			item->value = parse_expr(p);
 		}
 
-		item->value = parse_expr(p);
 		item->next = NULL;
 		*tail = item;
 		tail = &item->next;
@@ -1011,6 +1523,34 @@ static ASTNode *parse_primary(Parser *p) {
 			return parse_block(p);
 		}
 	} else if (p->cur.type == TOK_IDENTIFIER) {
+		char *id_name = p->cur.text;
+		int is_gen = 0;
+		for (int gi = 0; gi < p->generic_struct_count; gi++) {
+			if (strcmp(p->generic_structs[gi].name, id_name) == 0) {
+				is_gen = 1;
+				break;
+			}
+		}
+		if (is_gen && lexer_peek(p->lexer).type == TOK_LPAREN) {
+			Lexer temp = *p->lexer;
+			lexer_next(&temp); // eat '('
+			Token t = lexer_next(&temp);
+			if (is_type_token(t.type)) {
+				advance(p); // eat generic struct name
+				consume(p, TOK_LPAREN, "Expected '(' after generic struct name");
+				Type *concrete = parse_type(p);
+				consume(p, TOK_RPAREN, "Expected ')' after generic type argument");
+				char *inst_name = instantiate_struct_if_needed(p, id_name, concrete);
+				n->type = NODE_VAR_REF;
+				n->data.var_ref.name = inst_name;
+				n->line = p->prev.line;
+				Type *st_t = arena_alloc(p->arena, sizeof(Type));
+				st_t->kind = TYPE_STRUCT;
+				st_t->name = inst_name;
+				n->data_type = st_t;
+				return n;
+			}
+		}
 		n->type = NODE_VAR_REF;
 		n->data.var_ref.name = p->cur.text;
 		n->line = p->cur.line; // diagnostics: undefined-variable carets
@@ -1078,7 +1618,7 @@ static ASTNode *parse_primary(Parser *p) {
 		ASTNode **tail = &body->data.block.stmts;
 		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			*tail = parse_statement(p);
-			if (*tail)
+			while (*tail)
 				tail = &(*tail)->next;
 		}
 		consume(p, TOK_RBRACE, "}");
@@ -1142,17 +1682,78 @@ static ASTNode *parse_postfix(Parser *p) {
 		// blocks after bare identifiers never reach here.
 		if (p->cur.type == TOK_LBRACE && expr->type == NODE_VAR_REF) {
 			int names_struct = 0;
-			for (int si = 0; si < p->struct_name_count; si++)
+			ASTNode *st_node = NULL;
+			for (int si = 0; si < p->struct_name_count; si++) {
 				if (strcmp(p->struct_names[si],
-						   expr->data.var_ref.name) == 0)
+						   expr->data.var_ref.name) == 0) {
 					names_struct = 1;
+					st_node = p->struct_nodes[si];
+					break;
+				}
+			}
+			if (!names_struct) {
+				for (int gi = 0; gi < p->generic_struct_count; gi++) {
+					if (strcmp(p->generic_structs[gi].name,
+							   expr->data.var_ref.name) == 0) {
+						names_struct = 1;
+						st_node = p->generic_structs[gi].node;
+						break;
+					}
+				}
+			}
 			if (names_struct) {
+				if (st_node && st_node->module_name && p->cur_module &&
+					strcmp(st_node->module_name, p->cur_module) != 0 && !st_node->is_pub) {
+					report_error(p, "E0006: struct '%s' is private to its module",
+								 st_node->data.struct_decl.name);
+				}
 				Type *st_t = arena_alloc(p->arena, sizeof(Type));
 				st_t->kind = TYPE_STRUCT;
 				st_t->name = expr->data.var_ref.name;
 				ASTNode *lit = parse_struct_literal(p);
 				lit->data_type = st_t;
+				if (st_node && st_node->module_name && p->cur_module &&
+					strcmp(st_node->module_name, p->cur_module) != 0) {
+					for (StructInitItem *it = lit->data.struct_lit.items; it; it = it->next) {
+						if (it->field_name) {
+							for (ASTNode *f = st_node->data.struct_decl.fields; f; f = f->next) {
+								if (strcmp(f->data.var_decl.name, it->field_name) == 0) {
+									if (!f->is_pub) {
+										report_error(p, "E0006: field '%s' on struct '%s' is private to its module",
+													 it->field_name, st_node->data.struct_decl.name);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
 				return lit;
+			}
+		}
+		if (p->cur.type == TOK_DOT && expr->type == NODE_VAR_REF) {
+			const char *sname = expr->data.var_ref.name;
+			Token next_tok = lexer_peek(p->lexer);
+			if (next_tok.type == TOK_IDENTIFIER) {
+				char mangled[256];
+				snprintf(mangled, sizeof(mangled), "%s__%s", sname, next_tok.text);
+				ASTNode *cdecl = find_decl(p, mangled);
+				if (cdecl && cdecl->type == NODE_VAR_DECL && cdecl->data.var_decl.is_const) {
+					advance(p); // eat '.'
+					advance(p); // eat identifier
+					if (cdecl->module_name && p->cur_module &&
+						strcmp(cdecl->module_name, p->cur_module) != 0 && !cdecl->is_pub) {
+						report_error(p, "E0006: associated constant '%s' on struct '%s' is private to its module",
+									 next_tok.text, sname);
+					}
+					ASTNode *cref = arena_alloc(p->arena, sizeof(ASTNode));
+					cref->type = NODE_VAR_REF;
+					cref->data.var_ref.name = arena_strdup(p->arena, mangled);
+					cref->data_type = cdecl->data_type;
+					cref->line = p->prev.line;
+					expr = cref;
+					continue;
+				}
 			}
 		}
 		if (p->cur.type == TOK_DOT) {
@@ -1166,7 +1767,10 @@ static ASTNode *parse_postfix(Parser *p) {
 				is_soa_struct_var(
 					p, expr->data.index.object->data.var_ref.name)) {
 				char *mname2 = p->cur.text;
-				consume(p, TOK_IDENTIFIER, "Expected member name");
+				if (is_ident_like(p->cur.type))
+					advance(p);
+				else
+					consume(p, TOK_IDENTIFIER, "Expected member name");
 				ASTNode *member2 = arena_alloc(p->arena, sizeof(ASTNode));
 				member2->type = NODE_MEMBER_ACCESS;
 				member2->data.member_access.object =
@@ -1185,7 +1789,10 @@ static ASTNode *parse_postfix(Parser *p) {
 			member->line = p->prev.line;
 			member->data.member_access.object = expr;
 			member->data.member_access.member = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Expected member name");
+			if (is_ident_like(p->cur.type))
+				advance(p);
+			else
+				consume(p, TOK_IDENTIFIER, "Expected member name");
 			// Slice builtins: `xs.len` is i64, `xs.data` is T*. Bare var
 			// refs need the decl-table lookup; typed exprs carry it already.
 			if (!member->data_type) {
@@ -1196,6 +1803,26 @@ static ASTNode *parse_postfix(Parser *p) {
 					obj_t = decl ? decl->data_type : NULL;
 				} else {
 					obj_t = expr->data_type;
+				}
+				if (obj_t && obj_t->kind == TYPE_PTR && obj_t->inner)
+					obj_t = obj_t->inner;
+				if (obj_t && obj_t->kind == TYPE_STRUCT && obj_t->name) {
+					for (int si = 0; si < p->struct_name_count; si++) {
+						if (strcmp(p->struct_names[si], obj_t->name) == 0) {
+							for (ASTNode *f = p->struct_nodes[si]->data.struct_decl.fields; f; f = f->next) {
+								if (strcmp(f->data.var_decl.name, member->data.member_access.member) == 0) {
+									member->data_type = f->data_type;
+									if (p->cur.type != TOK_LPAREN && f->module_name && p->cur_module &&
+										strcmp(f->module_name, p->cur_module) != 0 && !f->is_pub) {
+										report_error(p, "E0006: field '%s' on struct '%s' is private to its module",
+													 f->data.var_decl.name, obj_t->name);
+									}
+									break;
+								}
+							}
+							break;
+						}
+					}
 				}
 				if (obj_t && (obj_t->kind == TYPE_SLICE ||
 							  obj_t->kind == TYPE_ARRAY)) {
@@ -1231,7 +1858,28 @@ static ASTNode *parse_postfix(Parser *p) {
 			member->line = p->prev.line;
 			member->data.member_access.object = deref;
 			member->data.member_access.member = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Expected member name after ->");
+			if (is_ident_like(p->cur.type))
+				advance(p);
+			else
+				consume(p, TOK_IDENTIFIER, "Expected member name after ->");
+			if (deref->data_type && deref->data_type->kind == TYPE_STRUCT && deref->data_type->name) {
+				for (int si = 0; si < p->struct_name_count; si++) {
+					if (strcmp(p->struct_names[si], deref->data_type->name) == 0) {
+						for (ASTNode *f = p->struct_nodes[si]->data.struct_decl.fields; f; f = f->next) {
+							if (strcmp(f->data.var_decl.name, member->data.member_access.member) == 0) {
+								member->data_type = f->data_type;
+								if (p->cur.type != TOK_LPAREN && f->module_name && p->cur_module &&
+									strcmp(f->module_name, p->cur_module) != 0 && !f->is_pub) {
+									report_error(p, "E0006: field '%s' on struct '%s' is private to its module",
+												 f->data.var_decl.name, deref->data_type->name);
+								}
+								break;
+							}
+						}
+						break;
+					}
+				}
+			}
 			expr = member;
 		} else if (p->cur.type == TOK_LBRACKET) {
 			advance(p);
@@ -1447,6 +2095,15 @@ static ASTNode *parse_postfix(Parser *p) {
 				new_callee->data.var_ref.name = mangled;
 				call->data.call.callee = new_callee;
 
+				ASTNode *mdecl = find_decl(p, mangled);
+				if (mdecl && mdecl->type == NODE_FUNC_DECL) {
+					if (mdecl->module_name && p->cur_module &&
+						strcmp(mdecl->module_name, p->cur_module) != 0 && !mdecl->is_pub) {
+						report_error(p, "E0006: method '%s' on struct '%s' is private to its module",
+									 method_name, struct_name);
+					}
+				}
+
 				// 3. Receiver binding. Kawa methods declare the receiver
 				// explicitly (`fn u32 add(User a, User b)` called as
 				// `k.add(a, b)` binds k->a). Inject the receiver as the
@@ -1529,6 +2186,16 @@ static ASTNode *parse_postfix(Parser *p) {
 				// Standard function call behavior
 				call->data.call.callee = expr;
 				call->data.call.args = head;
+				if (expr->type == NODE_VAR_REF) {
+					const char *fn_name = expr->data.var_ref.name;
+					ASTNode *decl = find_decl(p, fn_name);
+					if (decl && decl->type == NODE_FUNC_DECL) {
+						if (decl->module_name && p->cur_module &&
+							strcmp(decl->module_name, p->cur_module) != 0 && !decl->is_pub) {
+							report_error(p, "E0006: function '%s' is private to its module", fn_name);
+						}
+					}
+				}
 			}
 
 			// Stamp the call's type from the callee's declared return
@@ -1692,7 +2359,7 @@ static ASTNode *parse_block(Parser *p) {
 	ASTNode **tail = &block->data.block.stmts;
 	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		*tail = parse_statement(p);
-		if (*tail)
+		while (*tail)
 			tail = &(*tail)->next;
 	}
 	consume(p, TOK_RBRACE, "Expected '}'");
@@ -1747,6 +2414,270 @@ static ASTNode *parse_grind(Parser *p) {
 		return folded;
 	}
 	return val;
+}
+
+static ASTNode *parse_destructuring_let(Parser *p) {
+	consume(p, TOK_LET, "Expected 'let'");
+	char *named_struct = NULL;
+	int is_tuple = 0;
+
+	if (p->cur.type == TOK_LPAREN) {
+		is_tuple = 1;
+		advance(p);
+	} else if (p->cur.type == TOK_IDENTIFIER) {
+		named_struct = p->cur.text;
+		advance(p);
+		consume(p, TOK_LBRACE, "Expected '{' after struct name in destructuring let");
+	} else if (p->cur.type == TOK_LBRACE) {
+		advance(p);
+	} else {
+		report_error(p, "Expected '{' or '(' after 'let'");
+		return NULL;
+	}
+
+	struct {
+		char *field_name;
+		char *var_name;
+		Type *var_type;
+	} items[32];
+	int item_count = 0;
+
+	if (is_tuple) {
+		while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			char *vname = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected variable name in tuple destructuring");
+			Type *vtype = NULL;
+			if (p->cur.type == TOK_COLON) {
+				advance(p);
+				vtype = parse_type(p);
+			}
+			if (item_count < 32) {
+				items[item_count].field_name = NULL;
+				items[item_count].var_name = vname;
+				items[item_count].var_type = vtype;
+				item_count++;
+			}
+			if (p->cur.type == TOK_COMMA)
+				advance(p);
+			else
+				break;
+		}
+		consume(p, TOK_RPAREN, "Expected ')' in tuple destructuring");
+	} else {
+		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			char *fname = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected field name in struct destructuring");
+			char *vname = fname;
+			Type *vtype = NULL;
+			if (p->cur.type == TOK_COLON) {
+				advance(p);
+				if (is_type_token(p->cur.type) && p->cur.type != TOK_IDENTIFIER) {
+					vtype = parse_type(p);
+				} else if (p->cur.type == TOK_IDENTIFIER) {
+					char *ident = p->cur.text;
+					advance(p);
+					if (p->cur.type == TOK_COLON) {
+						vname = ident;
+						advance(p);
+						vtype = parse_type(p);
+					} else {
+						int is_type = 0;
+						for (int si = 0; si < p->struct_name_count; si++) {
+							if (strcmp(p->struct_names[si], ident) == 0) {
+								is_type = 1;
+								break;
+							}
+						}
+						if (is_type) {
+							Type *t = arena_alloc(p->arena, sizeof(Type));
+							t->kind = TYPE_STRUCT;
+							t->name = ident;
+							vtype = t;
+						} else {
+							vname = ident;
+						}
+					}
+				}
+			}
+			if (item_count < 32) {
+				items[item_count].field_name = fname;
+				items[item_count].var_name = vname;
+				items[item_count].var_type = vtype;
+				item_count++;
+			}
+			if (p->cur.type == TOK_COMMA)
+				advance(p);
+			else
+				break;
+		}
+		consume(p, TOK_RBRACE, "Expected '}' in struct destructuring");
+	}
+
+	consume(p, TOK_ASSIGN, "Expected '=' in destructuring let");
+	ASTNode *rhs = parse_expr(p);
+	consume(p, TOK_SEMICOLON, "Expected ';' after destructuring let");
+
+	static int s_destruct_id = 0;
+	char tmp_name[64];
+	snprintf(tmp_name, sizeof(tmp_name), "__destruct_%d", ++s_destruct_id);
+	char *tmp_var = arena_strdup(p->arena, tmp_name);
+
+	Type *st_type = NULL;
+	if (named_struct) {
+		st_type = find_struct_type_by_name(p, named_struct);
+	}
+	if (!st_type && rhs->data_type) {
+		st_type = rhs->data_type;
+	}
+	if (!st_type && rhs->type == NODE_VAR_REF) {
+		ASTNode *rdecl = find_decl(p, rhs->data.var_ref.name);
+		if (rdecl && rdecl->data_type)
+			st_type = rdecl->data_type;
+	}
+	if (st_type && !rhs->data_type) {
+		rhs->data_type = st_type;
+	}
+
+	ASTNode *tmp_decl = arena_alloc(p->arena, sizeof(ASTNode));
+	tmp_decl->type = NODE_VAR_DECL;
+	tmp_decl->data.var_decl.name = tmp_var;
+	tmp_decl->data.var_decl.init = rhs;
+	tmp_decl->data.var_decl.is_const = 0;
+	tmp_decl->data.var_decl.is_orbit = 0;
+	tmp_decl->data_type = rhs->data_type ? rhs->data_type : st_type;
+
+	if (p->decl_count < 1024) {
+		p->decls[p->decl_count].name = tmp_var;
+		p->decls[p->decl_count].node = tmp_decl;
+		p->decl_count++;
+	}
+
+	ASTNode *head = tmp_decl;
+	ASTNode *cur = head;
+
+	for (int i = 0; i < item_count; i++) {
+		ASTNode *tmp_ref = arena_alloc(p->arena, sizeof(ASTNode));
+		tmp_ref->type = NODE_VAR_REF;
+		tmp_ref->data.var_ref.name = tmp_var;
+		tmp_ref->data_type = tmp_decl->data_type;
+
+		ASTNode *val_expr = NULL;
+		const char *fld = items[i].field_name;
+
+		if (is_tuple && !fld) {
+			if (st_type && st_type->kind == TYPE_STRUCT && st_type->name) {
+				for (int si = 0; si < p->struct_name_count; si++) {
+					if (strcmp(p->struct_names[si], st_type->name) == 0) {
+						ASTNode *f = p->struct_nodes[si]->data.struct_decl.fields;
+						for (int fi = 0; fi < i && f; fi++)
+							f = f->next;
+						if (f)
+							fld = f->data.var_decl.name;
+						break;
+					}
+				}
+			}
+		}
+
+		if (fld) {
+			ASTNode *mem = arena_alloc(p->arena, sizeof(ASTNode));
+			mem->type = NODE_MEMBER_ACCESS;
+			mem->data.member_access.object = tmp_ref;
+			mem->data.member_access.member = (char *)fld;
+			if (st_type)
+				mem->data_type = find_field_type(p, st_type, fld);
+			val_expr = mem;
+		} else {
+			ASTNode *idx = arena_alloc(p->arena, sizeof(ASTNode));
+			idx->type = NODE_LITERAL;
+			idx->data_type = arena_alloc(p->arena, sizeof(Type));
+			idx->data_type->kind = TYPE_I32;
+			idx->data.literal.i_val = i;
+			idx->data.literal.i64_val = i;
+
+			ASTNode *arr_idx = arena_alloc(p->arena, sizeof(ASTNode));
+			arr_idx->type = NODE_INDEX;
+			arr_idx->data.index.object = tmp_ref;
+			arr_idx->data.index.index = idx;
+			if (st_type && (st_type->kind == TYPE_ARRAY || st_type->kind == TYPE_SLICE))
+				arr_idx->data_type = st_type->inner;
+			val_expr = arr_idx;
+		}
+
+		ASTNode *var_node = arena_alloc(p->arena, sizeof(ASTNode));
+		var_node->type = NODE_VAR_DECL;
+		var_node->data.var_decl.name = items[i].var_name;
+		var_node->data.var_decl.init = val_expr;
+		var_node->data.var_decl.is_const = 0;
+		var_node->data.var_decl.is_orbit = 0;
+		var_node->data_type = items[i].var_type ? items[i].var_type :
+			(val_expr->data_type ? val_expr->data_type : NULL);
+
+		if (p->decl_count < 1024) {
+			p->decls[p->decl_count].name = items[i].var_name;
+			p->decls[p->decl_count].node = var_node;
+			p->decl_count++;
+		}
+
+		cur->next = var_node;
+		cur = var_node;
+	}
+
+	return head;
+}
+
+static void parse_const_decl(Parser *p, ASTNode ***tail, const char *prefix,
+							 int is_pub) {
+	consume(p, TOK_CONST, "Expected 'const'");
+	Type *type = NULL;
+	if (is_type_token(p->cur.type)) {
+		Token after = lexer_peek(p->lexer);
+		if (p->cur.type != TOK_IDENTIFIER || after.type == TOK_IDENTIFIER || after.type == TOK_STAR)
+			type = parse_type(p);
+	}
+	char *cname = p->cur.text;
+	consume(p, TOK_IDENTIFIER, "Expected const identifier");
+	if (p->cur.type == TOK_COLON) {
+		advance(p);
+		type = parse_type(p);
+	}
+	consume(p, TOK_ASSIGN, "Expected '='");
+	ASTNode *init = parse_expr(p);
+	consume(p, TOK_SEMICOLON, "Expected ';'");
+
+	char *mangled = cname;
+	if (prefix) {
+		size_t len = strlen(prefix) + strlen(cname) + 4;
+		char *buf = arena_alloc(p->arena, len);
+		snprintf(buf, len, "%s__%s", prefix, cname);
+		mangled = buf;
+	}
+
+	if (!type && init && init->data_type)
+		type = init->data_type;
+	if (!type) {
+		type = arena_alloc(p->arena, sizeof(Type));
+		type->kind = TYPE_I32;
+	}
+
+	ASTNode *node = arena_alloc(p->arena, sizeof(ASTNode));
+	node->type = NODE_VAR_DECL;
+	node->data.var_decl.name = mangled;
+	node->data.var_decl.init = init;
+	node->data.var_decl.is_const = 1;
+	node->data.var_decl.is_orbit = 0;
+	node->data_type = type;
+	node->is_pub = is_pub;
+	node->module_name = p->cur_module;
+
+	if (p->decl_count < 1024) {
+		p->decls[p->decl_count].name = mangled;
+		p->decls[p->decl_count].node = node;
+		p->decl_count++;
+	}
+
+	**tail = node;
+	*tail = &node->next;
 }
 
 static ASTNode *parse_statement(Parser *p) {
@@ -1818,7 +2749,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			ASTNode **tail = &body->data.block.stmts;
 			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 				*tail = parse_statement(p);
-				if (*tail)
+				while (*tail)
 					tail = &(*tail)->next;
 			}
 			n->data.block.stmts = body;
@@ -1857,6 +2788,19 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		n->data.asm_block.asm_template = tmpl;
 		n->data.asm_block.constraints = constraints;
 		return n;
+	}
+	if (p->cur.type == TOK_LET) {
+		Lexer temp = *p->lexer;
+		Token t1 = lexer_next(&temp);
+		if (t1.type == TOK_LBRACE || t1.type == TOK_LPAREN) {
+			return parse_destructuring_let(p);
+		}
+		if (t1.type == TOK_IDENTIFIER) {
+			Token t2 = lexer_next(&temp);
+			if (t2.type == TOK_LBRACE) {
+				return parse_destructuring_let(p);
+			}
+		}
 	}
 	if (p->cur.type == TOK_LET || p->cur.type == TOK_CONST ||
 		p->cur.type == TOK_ORBIT || is_c_style_decl) {
@@ -2063,7 +3007,8 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 				if (!s)
 					break;
 				*body_tail = s;
-				body_tail = &s->next;
+				while (*body_tail)
+					body_tail = &(*body_tail)->next;
 			}
 
 			ASTNode *cs = arena_alloc(p->arena, sizeof(ASTNode));
@@ -2376,7 +3321,7 @@ static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr,
 		consume(p, TOK_SEMICOLON, "Expected ';'");
 	return expr;
 }
-void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
+void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 	// Attributes directly above `fn` attach to it: #[test], #[ignore].
 	int attr_is_test = 0;
 	int attr_is_ignored = 0;
@@ -2399,7 +3344,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	Type *ret_type = NULL;
 	if (is_type_token(p->cur.type)) {
 		Token next = lexer_peek(p->lexer);
-		if (next.type == TOK_IDENTIFIER) {
+		if (next.type == TOK_IDENTIFIER || is_ident_like(next.type)) {
 			ret_type = parse_type(p);
 		}
 	}
@@ -2410,7 +3355,10 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 		snprintf(mangled, len, "%s__%s", prefix, func_name);
 		func_name = mangled;
 	}
-	consume(p, TOK_IDENTIFIER, "Expected func name");
+	if (is_ident_like(p->cur.type))
+		advance(p);
+	else
+		consume(p, TOK_IDENTIFIER, "Expected func name");
 	consume(p, TOK_LPAREN, "Expected '('");
 
 	ASTNode *args_head = NULL;
@@ -2454,6 +3402,12 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 				arg_name = p->cur.text;
 				advance(p);
 			}
+		} else if (p->cur.type == TOK_IDENTIFIER &&
+				   lexer_peek(p->lexer).type == TOK_COLON) {
+			arg_name = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Arg name");
+			consume(p, TOK_COLON, ":");
+			arg_type = parse_type(p);
 		} else if (is_type_token(p->cur.type)) {
 			arg_type = parse_type(p);
 			arg_name = p->cur.text;
@@ -2475,6 +3429,17 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 			advance(p);
 	}
 
+	consume(p, TOK_RPAREN, "Expected ')'");
+
+	if (!ret_type) {
+		if (p->cur.type == TOK_ARROW) {
+			advance(p);
+			ret_type = parse_type(p);
+		} else if (is_type_token(p->cur.type) && p->cur.type != TOK_LBRACE && p->cur.type != TOK_SEMICOLON) {
+			ret_type = parse_type(p);
+		}
+	}
+
 	ASTNode *fn_node = arena_alloc(p->arena, sizeof(ASTNode));
 	fn_node->type = NODE_FUNC_DECL;
 	fn_node->line = p->prev.line; // `fn` keyword line, for debug info
@@ -2485,13 +3450,13 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	fn_node->data.func.name = func_name;
 	fn_node->data.func.ret_type = ret_type;
 	fn_node->data.func.args = args_head;
-
-	consume(p, TOK_RPAREN, "Expected ')'");
+	fn_node->is_pub = is_pub;
+	fn_node->module_name = p->cur_module;
 	// Record the signature BEFORE parsing the body so recursive
 	// `let x = name(...)` calls inside infer the declared return type.
 	// Generic templates (return type is a bare `T`) are excluded: their
 	// concrete type only exists per instantiation.
-	if (p->fn_sig_count < 128 && ret_type) {
+	if (p->fn_sig_count < 512 && ret_type) {
 		int np = 0;
 		for (ASTNode *a = args_head; a; a = a->next)
 			np++;
@@ -2503,11 +3468,16 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix) {
 	// Register parameters so member/index typing (`argv[0].len`) can see
 	// their declared types.
 	for (ASTNode *a = args_head; a; a = a->next) {
-		if (p->decl_count < 256) {
+		if (p->decl_count < 1024) {
 			p->decls[p->decl_count].name = a->data.var_decl.name;
 			p->decls[p->decl_count].node = a;
 			p->decl_count++;
 		}
+	}
+	if (p->decl_count < 1024) {
+		p->decls[p->decl_count].name = func_name;
+		p->decls[p->decl_count].node = fn_node;
+		p->decl_count++;
 	}
 	fn_node->data.func.body = parse_block(p);
 	**tail = fn_node;
@@ -2616,11 +3586,18 @@ ASTNode *parse_program(Parser *p) {
 	ASTNode *prog = arena_alloc(p->arena, sizeof(ASTNode));
 	prog->type = NODE_PROGRAM;
 	ASTNode **tail = &prog->next;
+	p->prog_tail = &tail;
 
 	while (p->cur.type != TOK_EOF) {
 		if (p->cur.type == TOK_ERROR) {
 			synchronize(p);
 			continue;
+		}
+
+		int is_pub = 0;
+		if (p->cur.type == TOK_PUB) {
+			is_pub = 1;
+			advance(p);
 		}
 
 		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE ||
@@ -2635,7 +3612,7 @@ ASTNode *parse_program(Parser *p) {
 					leading_soa = 1;
 			}
 			if (!leading_soa)
-				parse_function(p, &tail, NULL);
+				parse_function(p, &tail, NULL, is_pub);
 			else
 				goto parse_soa_struct;
 		} else if (p->cur.type == TOK_EXTERN) {
@@ -2676,7 +3653,14 @@ ASTNode *parse_program(Parser *p) {
 				}
 				Type *arg_type = NULL;
 				char *arg_name = NULL;
-				if (is_type_token(p->cur.type)) {
+				if (p->cur.type == TOK_IDENTIFIER &&
+					lexer_peek(p->lexer).type == TOK_COLON) {
+					// Kawa-style: `x: f64`.
+					arg_name = p->cur.text;
+					consume(p, TOK_IDENTIFIER, "Arg name");
+					consume(p, TOK_COLON, ":");
+					arg_type = parse_type(p);
+				} else if (is_type_token(p->cur.type)) {
 					// C-style: `f64 x` -- type first.
 					arg_type = parse_type(p);
 					arg_name = p->cur.text;
@@ -2701,6 +3685,14 @@ ASTNode *parse_program(Parser *p) {
 					break;
 			}
 			consume(p, TOK_RPAREN, "Expected ')'");
+			if (!ret_type) {
+				if (p->cur.type == TOK_ARROW) {
+					advance(p);
+					ret_type = parse_type(p);
+				} else if (is_type_token(p->cur.type) && p->cur.type != TOK_SEMICOLON) {
+					ret_type = parse_type(p);
+				}
+			}
 			consume(p, TOK_SEMICOLON,
 					"Expected ';' after extern declaration (no body)");
 
@@ -2715,7 +3707,7 @@ ASTNode *parse_program(Parser *p) {
 			tail = &node->next;
 
 			// Register the signature for let-inference too.
-			if (p->fn_sig_count < 128 && ret_type) {
+			if (p->fn_sig_count < 512 && ret_type) {
 				int np2 = 0;
 				for (ASTNode *a2 = args_head; a2; a2 = a2->next)
 					np2++;
@@ -2725,7 +3717,7 @@ ASTNode *parse_program(Parser *p) {
 				p->fn_sig_count++;
 			}
 		} else if (p->cur.type == TOK_STRUCT) {
-parse_soa_struct:
+parse_soa_struct:;
 			int soa_attr = 0;
 			while (p->cur.type == TOK_ATTRIBUTE) {
 				if (strcmp(p->cur.text, "soa") == 0)
@@ -2737,7 +3729,19 @@ parse_soa_struct:
 			st->type = NODE_STRUCT_DECL;
 			st->data.struct_decl.name = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Struct name");
-			if (p->struct_name_count < 64) {
+
+			char *type_param = NULL;
+			if (p->cur.type == TOK_LPAREN) {
+				advance(p);
+				type_param = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected type parameter");
+				consume(p, TOK_RPAREN, "Expected ')' after type parameter");
+			}
+			st->data.struct_decl.type_param = type_param;
+			st->is_pub = is_pub;
+			st->module_name = p->cur_module;
+
+			if (!type_param && p->struct_name_count < 128) {
 				p->struct_names[p->struct_name_count] =
 					st->data.struct_decl.name;
 				p->struct_nodes[p->struct_name_count] = st;
@@ -2749,6 +3753,11 @@ parse_soa_struct:
 			ASTNode **fields_tail = &fields_head;
 
 			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+				int f_pub = 0;
+				if (p->cur.type == TOK_PUB) {
+					f_pub = 1;
+					advance(p);
+				}
 				Type *f_type = parse_type(p);
 				// Embedded struct (IDEAS 3): `struct Employee { Person; u32
 				// badge; }`. A type followed directly by ';' embeds it --
@@ -2761,12 +3770,17 @@ parse_soa_struct:
 					emb->type = NODE_VAR_DECL;
 					emb->data.var_decl.name = f_type->name;
 					emb->data_type = f_type;
+					emb->is_pub = f_pub;
+					emb->module_name = p->cur_module;
 					*fields_tail = emb;
 					fields_tail = &emb->next;
 					continue;
 				}
 				char *f_name = p->cur.text;
-				consume(p, TOK_IDENTIFIER, "Field name");
+				if (is_ident_like(p->cur.type))
+					advance(p);
+				else
+					consume(p, TOK_IDENTIFIER, "Field name");
 				// Field default value (IDEAS 1.3): `f32 zoom = 1.0;`.
 				// The expression must fold at compile time; struct
 				// literals that omit the field use it as the seed.
@@ -2782,6 +3796,8 @@ parse_soa_struct:
 				field->data.var_decl.name = f_name;
 				field->data_type = f_type;
 				field->data.var_decl.field_default = f_default;
+				field->is_pub = f_pub;
+				field->module_name = p->cur_module;
 				*fields_tail = field;
 				fields_tail = &field->next;
 			}
@@ -2790,6 +3806,18 @@ parse_soa_struct:
 			st->data.struct_decl.is_soa = soa_attr;
 			if (soa_attr && p->soa_count < 64)
 				p->soa_structs[p->soa_count++] = st->data.struct_decl.name;
+
+			if (type_param) {
+				if (p->generic_struct_count < 32) {
+					p->generic_structs[p->generic_struct_count].name =
+						st->data.struct_decl.name;
+					p->generic_structs[p->generic_struct_count].type_param =
+						type_param;
+					p->generic_structs[p->generic_struct_count].node = st;
+					p->generic_struct_count++;
+				}
+				continue;
+			}
 
 			*tail = st;
 			tail = &st->next;
@@ -2823,24 +3851,105 @@ parse_soa_struct:
 			}
 		} else if (p->cur.type == TOK_ALIAS) {
 			ASTNode *s = parse_statement(p);
+			if (s) {
+				s->is_pub = is_pub;
+				s->module_name = p->cur_module;
+			}
 			*tail = s;
-			tail = &s->next;
+			while (*tail)
+				tail = &(*tail)->next;
 		} else if (p->cur.type == TOK_IMPL) {
 			advance(p);
-			ASTNode *st = arena_alloc(p->arena, sizeof(ASTNode));
-			st->type = NODE_IMPL_BLOCK;
-			st->data.impl.struct_name = p->cur.text;
+			char *sname = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Impl struct name");
+			char *type_param = NULL;
+			if (p->cur.type == TOK_LPAREN) {
+				advance(p);
+				type_param = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected type parameter");
+				consume(p, TOK_RPAREN, "Expected ')' after type parameter");
+			}
 			consume(p, TOK_LBRACE, "{");
 
 			ASTNode *methods_head = NULL;
 			ASTNode **methods_tail = &methods_head;
 
 			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
-				parse_function(p, &methods_tail, st->data.impl.struct_name);
+				int item_pub = 0;
+				if (p->cur.type == TOK_PUB) {
+					item_pub = 1;
+					advance(p);
+				}
+				if (p->cur.type == TOK_CONST) {
+					parse_const_decl(p, &methods_tail, sname, item_pub);
+				} else {
+					parse_function(p, &methods_tail, sname, item_pub);
+				}
 			}
 			consume(p, TOK_RBRACE, "}");
+
+			ASTNode *st = arena_alloc(p->arena, sizeof(ASTNode));
+			st->type = NODE_IMPL_BLOCK;
+			st->data.impl.struct_name = sname;
+			st->data.impl.type_param = type_param;
 			st->data.impl.methods = methods_head;
+			st->is_pub = is_pub;
+			st->module_name = p->cur_module;
+
+			if (type_param) {
+				if (p->generic_impl_count < 32) {
+					p->generic_impls[p->generic_impl_count].struct_name = sname;
+					p->generic_impls[p->generic_impl_count].type_param = type_param;
+					p->generic_impls[p->generic_impl_count].node = st;
+					p->generic_impl_count++;
+				}
+				for (int gi = 0; gi < p->generic_struct_count; gi++) {
+					if (strcmp(p->generic_structs[gi].name, sname) == 0) {
+						for (int inst_i = 0; inst_i < p->generic_structs[gi].inst_count; inst_i++) {
+							Type *conc = p->generic_structs[gi].instantiations[inst_i];
+							const char *sfx = type_to_suffix(p->arena, conc);
+							char inst_sname[256];
+							snprintf(inst_sname, sizeof(inst_sname), "%s__%s", sname, sfx);
+
+							ASTNode *inst_methods = NULL;
+							ASTNode **m_tail = &inst_methods;
+							for (ASTNode *m = methods_head; m; m = m->next) {
+								ASTNode *cm = clone_and_subst_node(p, m, type_param, conc, sname, inst_sname);
+								*m_tail = cm;
+								m_tail = &cm->next;
+								if (cm->type == NODE_FUNC_DECL) {
+									if (p->fn_sig_count < 512 && cm->data.func.ret_type) {
+										int np = 0;
+										for (ASTNode *a = cm->data.func.args; a; a = a->next)
+											np++;
+										p->fn_sigs[p->fn_sig_count].name = cm->data.func.name;
+										p->fn_sigs[p->fn_sig_count].ret = cm->data.func.ret_type;
+										p->fn_sigs[p->fn_sig_count].nparams = np;
+										p->fn_sig_count++;
+									}
+									if (p->decl_count < 1024) {
+										p->decls[p->decl_count].name = cm->data.func.name;
+										p->decls[p->decl_count].node = cm;
+										p->decl_count++;
+									}
+								}
+							}
+							ASTNode *ib = arena_alloc(p->arena, sizeof(ASTNode));
+							ib->type = NODE_IMPL_BLOCK;
+							ib->data.impl.struct_name = arena_strdup(p->arena, inst_sname);
+							ib->data.impl.methods = inst_methods;
+							ib->is_pub = is_pub;
+							ib->module_name = p->cur_module;
+							if (p->prog_tail && *p->prog_tail) {
+								**p->prog_tail = ib;
+								*p->prog_tail = &ib->next;
+							}
+						}
+						break;
+					}
+				}
+				continue;
+			}
 
 			*tail = st;
 			tail = &st->next;
@@ -2875,8 +3984,13 @@ parse_soa_struct:
 
 			if (is_global_decl) {
 				ASTNode *s = parse_statement(p);
+				if (s) {
+					s->is_pub = is_pub;
+					s->module_name = p->cur_module;
+				}
 				*tail = s;
-				tail = &s->next;
+				while (*tail)
+					tail = &(*tail)->next;
 			} else {
 				report_error(p, "Unexpected top-level token: %s", p->cur.text);
 				advance(p);

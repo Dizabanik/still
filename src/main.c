@@ -96,6 +96,7 @@ static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
 // Expand one file: read it, then walk its text splicing in any quoted
 // imports. Output accumulates into *out (grown as needed).
 static void expand_text(ImportCtx *ctx, const char *src_dir, const char *src,
+						const char *current_file,
 						Arena *a, char **out, size_t *out_len,
 						size_t *out_cap) {
 	const char *p = src;
@@ -120,6 +121,9 @@ static void expand_text(ImportCtx *ctx, const char *src_dir, const char *src,
 
 						char *abs = join_path(src_dir, rel, a);
 						expand_file(ctx, abs, a, out, out_len, out_cap);
+						append_str(out, out_len, out_cap, "\n#module \"");
+						append_str(out, out_len, out_cap, current_file);
+						append_str(out, out_len, out_cap, "\"\n");
 
 						p = semi + 1; // skip past `import "...";`
 						continue;
@@ -148,12 +152,15 @@ static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
 	ctx->paths[ctx->count++] = arena_strdup(a, abs_path);
 
 	char *src = read_file(abs_path);
-	append_str(out, out_len, out_cap, "\n// ---- imported from \"");
+	append_str(out, out_len, out_cap, "\n#module \"");
+	append_str(out, out_len, out_cap, abs_path);
+	append_str(out, out_len, out_cap, "\"\n");
+	append_str(out, out_len, out_cap, "// ---- imported from \"");
 	append_str(out, out_len, out_cap, abs_path);
 	append_str(out, out_len, out_cap, "\" ----\n");
 
 	char *src_dir = dir_name(abs_path, a);
-	expand_text(ctx, src_dir, src, a, out, out_len, out_cap);
+	expand_text(ctx, src_dir, src, abs_path, a, out, out_len, out_cap);
 	free(src);
 }
 
@@ -163,6 +170,9 @@ static char *expand_imports(const char *entry_path, Arena *a) {
 	size_t cap = 1 << 16, len = 0;
 	char *out = malloc(cap);
 	out[0] = '\0';
+	append_str(&out, &len, &cap, "#module \"");
+	append_str(&out, &len, &cap, entry_path);
+	append_str(&out, &len, &cap, "\"\n");
 	expand_file(&ctx, entry_path, a, &out, &len, &cap);
 	out[len] = '\0';
 	return out;

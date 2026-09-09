@@ -6,6 +6,7 @@
 *.bc
 *.ll
 bench/*_c
+bench/*_rs
 bench/b1_c
 bench/b1_hash
 bench/b1_rs

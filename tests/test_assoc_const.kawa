@@ -1,0 +1,30 @@
+struct Mat4 {
+    i32 dummy;
+}
+
+impl Mat4 {
+    const DIM = 4;
+    const EPSILON: f64 = 0.001;
+    const SCALE = 10;
+}
+
+fn int main() {
+    let dim = Mat4.DIM;
+    let eps = Mat4.EPSILON;
+    let scale = Mat4.SCALE;
+
+    stdc.printf("dim: %d, scale: %d\n", dim, scale);
+    stdc.printf("eps: %.3f\n", eps);
+
+    // Array dimension using associated constant
+    let buf: [Mat4.DIM]i32;
+    for (let i = 0; i < Mat4.DIM; i += 1) {
+        buf[i] = (i + 1) * Mat4.SCALE;
+    }
+
+    for (let j = 0; j < Mat4.DIM; j += 1) {
+        stdc.printf("buf[%d] = %d\n", j, buf[j]);
+    }
+
+    return 0;
+}

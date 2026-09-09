@@ -15,7 +15,7 @@ typedef struct {
 	struct {
 		char *name;
 		ASTNode *node;
-	} decls[256];
+	} decls[1024];
 	int decl_count;
 
 	// Function signatures seen so far (name -> declared return type +
@@ -27,7 +27,7 @@ typedef struct {
 		char *name;
 		Type *ret;
 		int nparams;
-	} fn_sigs[128];
+	} fn_sigs[512];
 	int fn_sig_count;
 
 	// Names of `#[soa]` structs (IDEAS 2.7): indexing a value of such a
@@ -41,9 +41,29 @@ typedef struct {
 	// registry, `{` after an identifier has no way to know it's not a block.
 	// nodes[i] is the NODE_STRUCT_DECL, kept for embedding promotion
 	// (IDEAS 3): method lookup falls back through embedded fields.
-	char *struct_names[64];
-	ASTNode *struct_nodes[64];
+	char *struct_names[128];
+	ASTNode *struct_nodes[128];
 	int struct_name_count;
+
+	const char *cur_module;
+
+	struct {
+		char *name;
+		char *type_param;
+		ASTNode *node;
+		Type *instantiations[16];
+		int inst_count;
+	} generic_structs[32];
+	int generic_struct_count;
+
+	struct {
+		char *struct_name;
+		char *type_param;
+		ASTNode *node;
+	} generic_impls[32];
+	int generic_impl_count;
+
+	ASTNode ***prog_tail;
 } Parser;
 
 void parser_init(Parser *p, Lexer *l, Arena *a);

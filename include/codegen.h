@@ -64,6 +64,12 @@ typedef struct {
 	int generic_instantiating;
 	struct ASTNode *generic_fns[64];
 	int generic_fn_count;
+	struct GenericImplMethod {
+		char *struct_name;
+		char *type_param;
+		struct ASTNode *fn_decl;
+	} generic_impl_methods[64];
+	int generic_impl_method_count;
 
 	// Optimization level from -O0..-O3 (default 2). Selects the pass
 	// pipeline in kawa_optimize_and_write; -O3 adds aggressive vectorize

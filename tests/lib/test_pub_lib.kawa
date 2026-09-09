@@ -1,0 +1,23 @@
+pub struct Counter {
+    pub i32 count;
+}
+
+pub impl Counter {
+    pub const MAX = 1000;
+
+    pub fn new(start: i32) Counter {
+        return Counter { count: start };
+    }
+
+    pub fn inc(self*, step: i32) void {
+        self.count += step;
+    }
+
+    pub fn get(self) i32 {
+        return self.count;
+    }
+}
+
+pub fn create_counter(start: i32) Counter {
+    return Counter.new(start);
+}

@@ -1,0 +1,31 @@
+struct Box(T) {
+    T value;
+}
+
+impl Box(T) {
+    fn new(v: T) Box(T) {
+        return Box(T) { value: v };
+    }
+
+    fn get(self) T {
+        return self.value;
+    }
+
+    fn set(self*, v: T) void {
+        self.value = v;
+    }
+}
+
+fn int main() {
+    let b1 = Box(i32).new(42);
+    stdc.printf("b1: %d\n", b1.get());
+    b1.set(99);
+    stdc.printf("b1 after set: %d\n", b1.get());
+
+    let b2 = Box(f64).new(1.25);
+    stdc.printf("b2: %.2f\n", b2.get());
+    b2.set(3.75);
+    stdc.printf("b2 after set: %.2f\n", b2.get());
+
+    return 0;
+}

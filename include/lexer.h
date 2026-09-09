@@ -43,6 +43,7 @@ typedef enum {
 	TOK_SIZEOF,
 	TOK_MUT,
 	TOK_ENUM,
+	TOK_PUB,
 	// Primitive Types
 	TOK_VOID,
 	TOK_STR,
@@ -130,6 +131,7 @@ typedef struct {
 	// Float literal suffix: 0=none, 1=f16, 2=f32, 3=f64, 4=bf16.
 	// Set only on TOK_FLOAT_LIT / TOK_INT_LIT with an explicit suffix.
 	int float_suffix;
+	const char *filename;
 } Token;
 
 typedef struct {

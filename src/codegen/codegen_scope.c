@@ -107,6 +107,19 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 		// Comptime-callable when the evaluator can run it (pure fn over
 		// integer constants). The eval itself is the authority.
 		return kawa_comptime_eval(c, n, 64, NULL) != NULL;
+	case NODE_MEMBER_ACCESS: {
+		if (n->data.member_access.object->type == NODE_VAR_REF) {
+			char mangled[256];
+			snprintf(mangled, sizeof(mangled), "%s__%s",
+					 n->data.member_access.object->data.var_ref.name,
+					 n->data.member_access.member);
+			Scope *asv = scope_find(c, mangled);
+			if (asv && asv->node && asv->node->type == NODE_VAR_DECL &&
+				asv->node->data.var_decl.is_const)
+				return global_init_is_constant(c, asv->node->data.var_decl.init);
+		}
+		return 0;
+	}
 	default:
 		(void)c;
 		return 0;
@@ -189,7 +202,7 @@ LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 		size_t blen = strlen(n->data.str_lit.s_val);
 		LLVMValueRef data = LLVMConstStringInContext(
 			c->context, n->data.str_lit.s_val, (unsigned)blen + 1, 0);
-		LLVMValueRef arr_t = LLVMTypeOf(data); // sized by ConstString rules
+		LLVMTypeRef arr_t = LLVMTypeOf(data); // sized by ConstString rules
 		LLVMValueRef str_g =
 			LLVMAddGlobal(c->module, arr_t, ".gstrview");
 		LLVMSetInitializer(str_g, data);
@@ -351,6 +364,19 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		LLVMValueRef folded = kawa_comptime_eval(c, n, 64, NULL);
 		if (folded)
 			return folded;
+		return NULL;
+	}
+	case NODE_MEMBER_ACCESS: {
+		if (n->data.member_access.object->type == NODE_VAR_REF) {
+			char mangled[256];
+			snprintf(mangled, sizeof(mangled), "%s__%s",
+					 n->data.member_access.object->data.var_ref.name,
+					 n->data.member_access.member);
+			Scope *asv = scope_find(c, mangled);
+			if (asv && asv->node && asv->node->type == NODE_VAR_DECL &&
+				asv->node->data.var_decl.is_const)
+				return const_eval_expr(c, asv->node->data.var_decl.init, dst);
+		}
 		return NULL;
 	}
 	default:
@@ -827,6 +853,18 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			ptr = tmp;
 			container_type = obj_t;
 		}
+		if (!ptr && n->data.member_access.object->type == NODE_VAR_REF) {
+			char mangled[256];
+			snprintf(mangled, sizeof(mangled), "%s__%s",
+					 n->data.member_access.object->data.var_ref.name,
+					 n->data.member_access.member);
+			Scope *asv = scope_find(c, mangled);
+			if (asv) {
+				if (out_type)
+					*out_type = asv->type;
+				return asv->val;
+			}
+		}
 		if (!ptr || !container_type) {
 			kerr(KAWA_E_SEMANTIC, n,
 				 "failed to resolve member access base"); // internal
@@ -849,6 +887,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			container_ast = (cs && cs->node) ? cs->node->data_type : NULL;
 		}
 		if (LLVMGetTypeKind(struct_t) == LLVMPointerTypeKind) {
+			ptr = LLVMBuildLoad2(c->builder, container_type, ptr, "auto_deref");
 			if (container_ast &&
 				(container_ast->kind == TYPE_PTR ||
 				 container_ast->kind == TYPE_AMP) &&

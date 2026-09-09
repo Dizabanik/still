@@ -1,0 +1,38 @@
+import stdc;
+
+struct Box(T) {
+    T value;
+}
+
+impl Box(T) {
+    fn new(v: T) Box(T) {
+        return Box(T) { value: v };
+    }
+
+    fn get(self) T {
+        return self.value;
+    }
+
+    fn put(self*, v: T) void {
+        self.value = v;
+    }
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 50000000;
+    let b_i = Box(i64).new(1);
+    let b_w = Box(i32).new(1);
+
+    for (i64 r = 0; r < ROUNDS; r += 1) {
+        let v = b_i.get();
+        let next_i = (v ^ (r * 16777619)) & 2147483647;
+        b_i.put(next_i);
+
+        let vw = b_w.get();
+        let next_w = (vw * 31 + (i32)(r & 255)) ^ (i32)(v & 65535);
+        b_w.put(next_w);
+    }
+
+    stdc.printf("i=%lld w=%d\n", b_i.get(), b_w.get());
+    return 0;
+}

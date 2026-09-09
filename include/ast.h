@@ -123,7 +123,8 @@ struct ASTNode {
 	// so reusing it would corrupt the argument expression it labels.
 	char *arg_label;
 	int has_arg_label;
-
+	int is_pub;
+	const char *module_name;
 
 	union {
 		struct {
@@ -143,6 +144,7 @@ struct ASTNode {
 			char *name;
 			ASTNode *fields;
 			int is_soa; // #[soa]: fields stored as parallel arrays
+			char *type_param; // e.g. "T" for generic struct Box(T)
 		} struct_decl;
 		struct {
 			char *name;
@@ -154,6 +156,7 @@ struct ASTNode {
 		struct {
 			char *struct_name;
 			ASTNode *methods;
+			char *type_param; // e.g. "T" for generic impl Box(T)
 		} impl;
 		struct {
 			char *name;

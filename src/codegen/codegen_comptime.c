@@ -226,6 +226,21 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 		return ce_fail();
 	}
 
+	case NODE_MEMBER_ACCESS: {
+		if (n->data.member_access.object->type == NODE_VAR_REF) {
+			char mangled[256];
+			snprintf(mangled, sizeof(mangled), "%s__%s",
+					 n->data.member_access.object->data.var_ref.name,
+					 n->data.member_access.member);
+			Scope *asv = scope_find(c, mangled);
+			if (asv && asv->node && asv->node->type == NODE_VAR_DECL &&
+				asv->node->data.var_decl.is_const && asv->node->data.var_decl.init)
+				return ce_eval(c, asv->node->data.var_decl.init, NULL, depth + 1,
+							   steps);
+		}
+		return ce_fail();
+	}
+
 	case NODE_CALL: {
 		ASTNode *leaf = n->data.call.callee;
 		if (!leaf || leaf->type != NODE_VAR_REF)

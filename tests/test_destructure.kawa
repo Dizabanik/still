@@ -1,0 +1,39 @@
+struct Point {
+    i32 x;
+    i32 y;
+}
+
+struct Pair {
+    i32 first;
+    i32 second;
+}
+
+fn int main() {
+    let pt = Point { x: 10, y: 20 };
+
+    // Named struct destructuring
+    let Point { x, y } = pt;
+    stdc.printf("named: %d %d\n", x, y);
+
+    // Inferred struct destructuring
+    let { x: x2, y: y2 } = pt;
+    stdc.printf("inferred: %d %d\n", x2, y2);
+
+    // Renamed field destructuring
+    let Point { x: px, y: py } = pt;
+    stdc.printf("renamed: %d %d\n", px, py);
+
+    // Positional struct destructuring
+    let p = Pair { first: 100, second: 200 };
+    let (p1, p2) = p;
+    stdc.printf("pair: %d %d\n", p1, p2);
+
+    // Positional array destructuring
+    let arr: [2]i32;
+    arr[0] = 42;
+    arr[1] = 99;
+    let (v0, v1) = arr;
+    stdc.printf("arr: %d %d\n", v0, v1);
+
+    return 0;
+}

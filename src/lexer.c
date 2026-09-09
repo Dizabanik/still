@@ -44,6 +44,7 @@ static Token make_token(Lexer *l, TokenType type, char *text) {
 	t.posA = l->posA - l->posL;
 	t.pos = l->posA;
 	t.len = l->pos - l->posL;
+	t.filename = l->filename;
 	return t;
 }
 
@@ -114,6 +115,19 @@ Token lexer_next(Lexer *l) {
 				if (peek(l) == ']')
 					advance(l); // consume ']'
 				return t;
+			}
+			if (l->pos + 8 <= l->len && strncmp(l->src + l->pos, "module \"", 8) == 0) {
+				l->pos += 8; // skip 'module "'
+				size_t mstart = l->pos;
+				while (!is_at_end(l) && peek(l) != '"' && peek(l) != '\n')
+					advance(l);
+				size_t mlen = l->pos - mstart;
+				char *mpath = arena_alloc(l->arena, mlen + 1);
+				memcpy(mpath, l->src + mstart, mlen);
+				mpath[mlen] = '\0';
+				l->filename = mpath;
+				if (peek(l) == '"')
+					advance(l);
 			}
 			while (peek(l) != '\n' && !is_at_end(l))
 				advance(l);
@@ -494,6 +508,8 @@ Token lexer_next(Lexer *l) {
 				type = TOK_MUT;
 			else if (strcmp(text, "enum") == 0)
 				type = TOK_ENUM;
+			else if (strcmp(text, "pub") == 0)
+				type = TOK_PUB;
 			else if (strcmp(text, "pure") == 0)
 				type = TOK_PURE;
 			else if (strcmp(text, "struct") == 0)

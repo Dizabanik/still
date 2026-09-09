@@ -176,6 +176,12 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	for (ASTNode *scanner = cur; scanner; scanner = scanner->next) {
 		if (scanner->type == NODE_VAR_DECL)
 			codegen_global_decl(c, scanner, &pending_inits);
+		else if (scanner->type == NODE_IMPL_BLOCK) {
+			for (ASTNode *m = scanner->data.impl.methods; m; m = m->next) {
+				if (m->type == NODE_VAR_DECL)
+					codegen_global_decl(c, m, &pending_inits);
+			}
+		}
 	}
 
 	// Snapshot the file-level scope (globals) so coroutine bodies can
@@ -260,8 +266,10 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			codegen_func_decl(c, cur, NULL);
 		} else if (cur->type == NODE_IMPL_BLOCK) {
 			for (ASTNode *method = cur->data.impl.methods; method;
-				 method = method->next)
-				codegen_func_decl(c, method, cur->data.impl.struct_name);
+				 method = method->next) {
+				if (method->type == NODE_FUNC_DECL)
+					codegen_func_decl(c, method, cur->data.impl.struct_name);
+			}
 		}
 		cur = cur->next;
 	}

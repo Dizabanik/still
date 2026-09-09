@@ -23,6 +23,7 @@ from kawa_format import KawaTestFormat
 
 config.name = "kawa"
 config.suffixes = [".kawa"]
+config.excludes = ["lib"]
 config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.environ.get("KAWA_TEST_WORK", config.test_source_root)
 

@@ -29,5 +29,16 @@ recorded numbers:
   threads (Rust). On macOS swapcontext costs ~870ns (sigprocmask et al.
   per switch), so Kawa's userspace resumes win big here; on Linux the gap
   narrows but does not close. At N=1e8 Kawa finishes ~9x ahead.
+- `b8_generics`: generic `Box(T)` (`Box(i64)` and `Box(i32)`) monomorphized
+  into specialized structs and methods in a 50M-iteration loop. Validates
+  zero-overhead generic instantiation and SROA scalarization matching C and Rust.
+- `b9_destructure`: comprehensive destructuring `let` benchmark testing named
+  patterns (`let Point { x, y } = pt;`), renamed patterns (`let Point { x: px, y: py }`),
+  inferred patterns (`let { x, y } = pt;`), positional structs (`let (p1, p2) = p;`),
+  and fixed arrays (`let (a0, a1) = arr;`) in a 50M-iteration loop. Validates
+  that destructuring compiles to direct register/field extractions with zero runtime penalty.
+- `b10_assoc_const`: type-scoped associated constants (`impl Mat4 { const DIM = 4; const SIZE = 16; }`)
+  used for array dimension sizing (`[Mat4.SIZE]i64`) and loop bounds in a 20M-iteration
+  matrix-vector transformation loop.
 - Outputs must be byte-identical across the three languages -- that is
   the correctness check tying the twins together.
