@@ -1,0 +1,39 @@
+import stdc;
+
+fn i64 sum_slice([]i64 s) {
+    i64 total = 0;
+    for (v in s) {
+        total += v;
+    }
+    return total;
+}
+
+fn void transform_slice([]i64 s, i64 delta) {
+    for (i in 0..((i64)s.len)) {
+        s[i] = (s[i] * 3 + delta) & 65535;
+    }
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 50000;
+    let buf: [1024]i64;
+    for (i in 0..1024) {
+        buf[i] = (i * 17 + 5) & 65535;
+    }
+
+    i64 acc = 0;
+    for (r in 0..ROUNDS) {
+        i64 start = (r * 7) & 511;
+        i64 len = ((r * 13) & 255) + 32;
+        i64 end = start + len;
+
+        []i64 view = buf[start..end];
+        i64 s = sum_slice(view);
+        transform_slice(view, r & 7);
+
+        acc = (acc * 37 + s) & 2147483647;
+    }
+
+    stdc.printf("acc=%lld\n", acc);
+    return 0;
+}

@@ -28,7 +28,8 @@ typedef enum {
 	TYPE_PTR,
 	TYPE_AMP,
 	TYPE_SLICE,
-	TYPE_CHAN
+	TYPE_CHAN,
+	TYPE_ENUM
 } TypeKind;
 
 typedef struct Type {
@@ -37,9 +38,18 @@ typedef struct Type {
 				   // 0 for unsigned integer (u8/16/32/64), bool, char, void,
 				   // and any other kind. Conservatively defaults to 0.
 	struct Type *inner; // For set<T>, T* or [N]T; the element type of []T
-	char *name;			// For struct/alias names
+	char *name;			// For struct/alias/enum names
 	long array_len;		// For [N]T fixed-size arrays
 } Type;
+
+typedef struct EnumVariant {
+	char *name;
+	int tag;
+	Type *payload_types[16];
+	char *payload_names[16];
+	int payload_count;
+	struct EnumVariant *next;
+} EnumVariant;
 
 typedef struct StructInitItem {
 	char *field_name; // NULL if positional
@@ -97,6 +107,10 @@ typedef enum {
 	NODE_SIZEOF,
 	NODE_CAST,
 	NODE_IMPORT,
+	NODE_MATCH,
+	NODE_MATCH_ARM,
+	NODE_RANGE,
+	NODE_SLICE_INDEX,
 
 	// --- Internal / Lowering ---
 	NODE_STRUCT_LITERAL,
@@ -149,6 +163,8 @@ struct ASTNode {
 		struct {
 			char *name;
 			ASTNode *fields; // NODE_VAR_DECL chain: one i32 const per member
+			EnumVariant *variants;
+			int variant_count;
 		} enum_decl;
 		struct {
 			struct ASTNode *val;
@@ -251,6 +267,7 @@ struct ASTNode {
 		} batch;
 		struct {
 			ASTNode *stmt;
+			ASTNode *captures; // chain of NODE_VAR_DECL for captured variables
 		} defer;
 		struct {
 			ASTNode *try_block;
@@ -303,6 +320,28 @@ struct ASTNode {
 		struct {
 			ASTNode *expr;
 		} ret_stmt;
+		struct {
+			ASTNode *left;
+			ASTNode *right;
+			int is_inclusive; // 1 for ..=, 0 for ..
+		} range;
+		struct {
+			ASTNode *target;
+			ASTNode *arms; // NODE_MATCH_ARM chain
+		} match_stmt;
+		struct {
+			char *enum_name;
+			char *variant_name;
+			ASTNode *bindings;
+			int is_else;
+			ASTNode *body;
+		} match_arm;
+		struct {
+			ASTNode *object;
+			ASTNode *start;
+			ASTNode *end;
+			int is_inclusive;
+		} slice_index;
 	} data;
 
 	ASTNode *next;

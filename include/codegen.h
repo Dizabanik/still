@@ -37,6 +37,13 @@ typedef struct FilterFrame {
 // reverse order when the enclosing function returns.
 typedef struct DeferFrame {
 	struct ASTNode *stmt;
+	struct {
+		char *name;
+		LLVMValueRef slot;
+		LLVMTypeRef type;
+		struct ASTNode *node;
+	} captures[16];
+	int capture_count;
 	struct DeferFrame *next;
 } DeferFrame;
 
@@ -158,6 +165,7 @@ typedef struct {
 	struct LoopTargets {
 		LLVMBasicBlockRef break_bb;
 		LLVMBasicBlockRef continue_bb;
+		DeferFrame *defers_at_entry;
 		struct LoopTargets *next;
 	} *loop_stack;
 

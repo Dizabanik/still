@@ -44,6 +44,7 @@ typedef enum {
 	TOK_MUT,
 	TOK_ENUM,
 	TOK_PUB,
+	TOK_MATCH,
 	// Primitive Types
 	TOK_VOID,
 	TOK_STR,
@@ -82,8 +83,10 @@ typedef enum {
 	TOK_SLASH_EQ, // /=
 	TOK_TILDE_EQ, // ~= (Pour)
 	TOK_ARROW,	  // -> (Arrow)
+	TOK_FAT_ARROW, // => (Fat arrow)
 	TOK_DOT,	  // . (Member access)
-	TOK_DOTDOT, // .. (struct-literal spread)
+	TOK_DOTDOT, // .. (struct-literal spread / range)
+	TOK_DOTDOTEQ, // ..= (inclusive range)
 	TOK_LBRACE,
 	TOK_RBRACE,
 	TOK_LPAREN,

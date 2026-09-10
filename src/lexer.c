@@ -153,6 +153,10 @@ Token lexer_next(Lexer *l) {
 		if (c == '.') {
 			if (peek(l) == '.') {
 				advance(l);
+				if (peek(l) == '=') {
+					advance(l);
+					return make_token(l, TOK_DOTDOTEQ, "..=");
+				}
 				return make_token(l, TOK_DOTDOT, "..");
 			}
 			return make_token(l, TOK_DOT, ".");
@@ -238,6 +242,10 @@ Token lexer_next(Lexer *l) {
 			if (peek(l) == '=') {
 				advance(l);
 				return make_token(l, TOK_ISEQ, "==");
+			}
+			if (peek(l) == '>') {
+				advance(l);
+				return make_token(l, TOK_FAT_ARROW, "=>");
 			}
 			return make_token(l, TOK_ASSIGN, "=");
 		}
@@ -412,6 +420,8 @@ Token lexer_next(Lexer *l) {
 					continue;
 				}
 				if (peek(l) == '.') {
+					if (peek2(l) == '.')
+						break;
 					// Second '.' ends the number: `1.f` member access and
 					// `arr[0].len` must lex as number-then-dot.
 					if (saw_fp)
@@ -510,6 +520,8 @@ Token lexer_next(Lexer *l) {
 				type = TOK_ENUM;
 			else if (strcmp(text, "pub") == 0)
 				type = TOK_PUB;
+			else if (strcmp(text, "match") == 0)
+				type = TOK_MATCH;
 			else if (strcmp(text, "pure") == 0)
 				type = TOK_PURE;
 			else if (strcmp(text, "struct") == 0)

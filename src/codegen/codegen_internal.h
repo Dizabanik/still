@@ -209,4 +209,11 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
 					  LLVMBasicBlockRef suspend_bb);
 
+// --- Tagged Unions, Match & Defer ---
+ASTNode *find_enum_decl(KawaCompiler *c, const char *name);
+EnumVariant *find_enum_variant(ASTNode *enum_decl, const char *variant_name);
+int get_enum_max_payload_words(KawaCompiler *c, const char *name);
+void run_defer_frame(KawaCompiler *c, DeferFrame *d);
+void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeRef res_type);
+
 #endif

@@ -40,5 +40,7 @@ recorded numbers:
 - `b10_assoc_const`: type-scoped associated constants (`impl Mat4 { const DIM = 4; const SIZE = 16; }`)
   used for array dimension sizing (`[Mat4.SIZE]i64`) and loop bounds in a 20M-iteration
   matrix-vector transformation loop.
+- `b11_tagged_union`: tagged union payloads and pattern matching (`enum Shape { Circle(i64), Rect(i64, i64), Point }` and `match s { ... }`) in a 20M-iteration loop. Validates zero-overhead payload packing, inline constructors, and branch switch lowering matching optimized C tagged unions and Rust enums.
+- `b12_range_slice`: range-based loops (`for i in 0..len`), zero-copy slice views (`[]i64 view = buf[start..end]`), slice iteration (`for v in s`), and in-place slice mutation across 50K rounds. Validates zero-cost slice abstractions matching raw pointer slices in C and Rust slices.
 - Outputs must be byte-identical across the three languages -- that is
   the correctness check tying the twins together.

@@ -1,5 +1,14 @@
 #include "codegen_internal.h"
 
+void run_defer_frame(KawaCompiler *c, DeferFrame *d) {
+	Scope *saved_scope = c->scope_stack;
+	for (int i = 0; i < d->capture_count; i++) {
+		scope_push(c, d->captures[i].name, d->captures[i].slot, d->captures[i].type, d->captures[i].node);
+	}
+	codegen_stmt(c, d->stmt);
+	c->scope_stack = saved_scope;
+}
+
 void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	if (!n)
 		return;
@@ -40,8 +49,14 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	case NODE_BLOCK: {
 		ASTNode *saved_list = c->cur_stmt_list;
 		c->cur_stmt_list = n->data.block.stmts;
+		DeferFrame *saved_defers = c->defer_stack;
 		for (ASTNode *s = n->data.block.stmts; s; s = s->next)
 			codegen_stmt(c, s);
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+			for (DeferFrame *d = c->defer_stack; d && d != saved_defers; d = d->next)
+				run_defer_frame(c, d);
+		}
+		c->defer_stack = saved_defers;
 		c->cur_stmt_list = saved_list;
 		return;
 	}
@@ -338,7 +353,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		set_branch_weights(c, br, 64, 1); // loops iterate more often than not
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
 
-		struct LoopTargets targets = {exit_bb, cond_bb, c->loop_stack};
+		struct LoopTargets targets = {exit_bb, cond_bb, c->defer_stack, c->loop_stack};
 		c->loop_stack = &targets;
 		codegen_stmt(c, n->data.while_stmt.body);
 		c->loop_stack = targets.next;
@@ -377,7 +392,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		}
 
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
-		struct LoopTargets targets = {exit_bb, step_bb, c->loop_stack};
+		struct LoopTargets targets = {exit_bb, step_bb, c->defer_stack, c->loop_stack};
 		c->loop_stack = &targets;
 		codegen_stmt(c, n->data.for_stmt.body);
 		c->loop_stack = targets.next;
@@ -426,7 +441,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				default_bb = body_bbs[i];
 		}
 
-		struct LoopTargets targets = {exit_bb, NULL, c->loop_stack};
+		struct LoopTargets targets = {exit_bb, NULL, c->defer_stack, c->loop_stack};
 		// `continue` inside a switch belongs to the enclosing loop; pass it
 		// through so NODE_CONTINUE resolves against the right target (or
 		// errors with its own message when there is no loop).
@@ -511,6 +526,8 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				 n->type == NODE_BREAK ? "break" : "continue");
 			exit(1);
 		}
+		for (DeferFrame *d = c->defer_stack; d && d != c->loop_stack->defers_at_entry; d = d->next)
+			run_defer_frame(c, d);
 		LLVMBuildBr(c->builder, n->type == NODE_BREAK
 									? c->loop_stack->break_bb
 									: c->loop_stack->continue_bb);
@@ -522,75 +539,92 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMContextRef ctx = c->context;
 		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
 
-		// Collection shape: set ({ ptr, len, cap }) or fixed-size array.
-		LLVMValueRef data_ptr, len;
-		LLVMTypeRef elem_t;
+		LLVMValueRef data_ptr = NULL, len = NULL;
+		LLVMTypeRef elem_t = NULL;
+		Type *elem_ast = NULL;
 
-		if (coll->type != NODE_VAR_REF) {
-			kerr(KAWA_E_ARGS, n, "batch requires a variable collection");
-			exit(1);
-		}
-		Scope *s_coll = scope_find(c, coll->data.var_ref.name);
-		if (!s_coll) {
-			const char *cands[33];
-			int nc = 0;
-			for (Scope *cur = c->scope_stack; cur && nc < 32; cur = cur->next)
-				cands[nc++] = cur->name;
-			cands[nc] = NULL;
-			const char *alt = kdiag_closest(coll->data.var_ref.name, cands);
-			if (alt)
-				kdiag_help("a variable with a similar name exists: `%s`",
-						   get_var_path(c, alt));
-			knerr(KAWA_E_UNDEF, n, coll->data.var_ref.name,
-				  "cannot find variable `%s` in this scope",
-				  get_var_path(c, coll->data.var_ref.name));
-			exit(1);
-		}
+		if (coll->type == NODE_VAR_REF) {
+			Scope *s_coll = scope_find(c, coll->data.var_ref.name);
+			if (!s_coll) {
+				const char *cands[33];
+				int nc = 0;
+				for (Scope *cur = c->scope_stack; cur && nc < 32; cur = cur->next)
+					cands[nc++] = cur->name;
+				cands[nc] = NULL;
+				const char *alt = kdiag_closest(coll->data.var_ref.name, cands);
+				if (alt)
+					kdiag_help("a variable with a similar name exists: `%s`",
+							   get_var_path(c, alt));
+				knerr(KAWA_E_UNDEF, n, coll->data.var_ref.name,
+					  "cannot find variable `%s` in this scope",
+					  get_var_path(c, coll->data.var_ref.name));
+				exit(1);
+			}
 
-		Type *coll_ast =
-			(s_coll->node) ? s_coll->node->data_type : NULL;
-		int is_array = (coll_ast && coll_ast->kind == TYPE_ARRAY);
-		int is_slice = (coll_ast && coll_ast->kind == TYPE_SLICE);
-		if (is_slice) {
-			// []T: load the data pointer and length out of the pair. The
-			// trip count is runtime data, but the body GEP is identical
-			// to the array form -- same vectorization opportunities.
-			LLVMTypeRef slice_t = get_llvm_type(c, coll_ast);
-			elem_t = get_llvm_type(c, coll_ast->inner);
-			LLVMTypeRef ptr_t = LLVMPointerType(elem_t, 0);
-			LLVMValueRef len_ptr2 = LLVMBuildStructGEP2(
-				c->builder, slice_t, s_coll->val, 1, "len_ptr");
-			len = LLVMBuildLoad2(c->builder, i64_t, len_ptr2, "len");
-			attach_tbaa(c, len, i64_t);
-			LLVMValueRef data_pp = LLVMBuildStructGEP2(
-				c->builder, slice_t, s_coll->val, 0, "buf_ptr");
-			data_ptr =
-				LLVMBuildLoad2(c->builder, ptr_t, data_pp, "buf");
-			attach_tbaa(c, data_ptr, ptr_t);
-		} else if (is_array) {
-			// Zero-copy: GEP straight into the array alloca; the trip
-			// count is a constant so the backend can fully unroll small
-			// arrays and vectorize large ones.
-			LLVMTypeRef arr_t = s_coll->type;
-			unsigned alen = LLVMGetArrayLength(arr_t);
-			elem_t = LLVMGetElementType(arr_t);
-			data_ptr = s_coll->val;
-			len = LLVMConstInt(i64_t, alen, 0);
+			Type *coll_ast =
+				(s_coll->node) ? s_coll->node->data_type : NULL;
+			int is_array = (coll_ast && coll_ast->kind == TYPE_ARRAY);
+			int is_slice = (coll_ast && coll_ast->kind == TYPE_SLICE);
+			if (is_slice) {
+				LLVMTypeRef slice_t = get_llvm_type(c, coll_ast);
+				elem_t = get_llvm_type(c, coll_ast->inner);
+				elem_ast = coll_ast->inner;
+				LLVMTypeRef ptr_t = LLVMPointerType(elem_t, 0);
+				LLVMValueRef len_ptr2 = LLVMBuildStructGEP2(
+					c->builder, slice_t, s_coll->val, 1, "len_ptr");
+				len = LLVMBuildLoad2(c->builder, i64_t, len_ptr2, "len");
+				attach_tbaa(c, len, i64_t);
+				LLVMValueRef data_pp = LLVMBuildStructGEP2(
+					c->builder, slice_t, s_coll->val, 0, "buf_ptr");
+				data_ptr =
+					LLVMBuildLoad2(c->builder, ptr_t, data_pp, "buf");
+				attach_tbaa(c, data_ptr, ptr_t);
+			} else if (is_array) {
+				LLVMTypeRef arr_t = s_coll->type;
+				unsigned alen = LLVMGetArrayLength(arr_t);
+				elem_t = LLVMGetElementType(arr_t);
+				elem_ast = coll_ast ? coll_ast->inner : NULL;
+				data_ptr = s_coll->val;
+				len = LLVMConstInt(i64_t, alen, 0);
+			} else {
+				LLVMTypeRef i32_ptr_t =
+					LLVMPointerType(LLVMInt32TypeInContext(ctx), 0);
+				LLVMValueRef set_ptr = s_coll->val;
+				LLVMValueRef len_ptr = LLVMBuildStructGEP2(c->builder, s_coll->type,
+														   set_ptr, 1, "len_ptr");
+				len = LLVMBuildLoad2(c->builder, i64_t, len_ptr, "len");
+				attach_tbaa(c, len, i64_t);
+				LLVMValueRef data_ptr_ptr = LLVMBuildStructGEP2(
+					c->builder, s_coll->type, set_ptr, 0, "buf_ptr");
+				data_ptr =
+					LLVMBuildLoad2(c->builder, i32_ptr_t, data_ptr_ptr, "buf");
+				attach_tbaa(c, data_ptr, i32_ptr_t);
+				elem_t = LLVMInt32TypeInContext(ctx);
+			}
 		} else {
-			LLVMTypeRef i32_ptr_t =
-				LLVMPointerType(LLVMInt32TypeInContext(ctx), 0);
-			LLVMValueRef set_ptr = s_coll->val;
-			LLVMValueRef len_ptr = LLVMBuildStructGEP2(c->builder, s_coll->type,
-													   set_ptr, 1, "len_ptr");
-			len = LLVMBuildLoad2(c->builder, i64_t, len_ptr, "len");
-			attach_tbaa(c, len, i64_t);
-			LLVMValueRef data_ptr_ptr = LLVMBuildStructGEP2(
-				c->builder, s_coll->type, set_ptr, 0, "buf_ptr");
-			data_ptr =
-				LLVMBuildLoad2(c->builder, i32_ptr_t, data_ptr_ptr, "buf");
-			attach_tbaa(c, data_ptr, i32_ptr_t);
-			elem_t = LLVMInt32TypeInContext(ctx);
+			LLVMValueRef coll_val = codegen_expr(c, coll);
+			LLVMTypeRef cty = LLVMTypeOf(coll_val);
+			if (LLVMGetTypeKind(cty) == LLVMStructTypeKind) {
+				data_ptr = LLVMBuildExtractValue(c->builder, coll_val, 0, "batch_coll_buf");
+				len = LLVMBuildExtractValue(c->builder, coll_val, 1, "batch_coll_len");
+				if (coll->data_type && coll->data_type->inner) {
+					elem_ast = coll->data_type->inner;
+					elem_t = get_llvm_type(c, elem_ast);
+				} else {
+					elem_t = LLVMGetElementType(LLVMTypeOf(data_ptr));
+				}
+			} else {
+				kerr(KAWA_E_ARGS, n, "batch requires a slice, array, or collection");
+				exit(1);
+			}
 		}
+
+		if (!elem_ast) {
+			elem_ast = arena_alloc(c->arena, sizeof(Type));
+			elem_ast->kind = TYPE_I32;
+		}
+		if (!elem_t)
+			elem_t = LLVMInt32TypeInContext(ctx);
 
 		LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
 		LLVMBasicBlockRef loop_bb =
@@ -617,25 +651,20 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef n_ptr =
 			create_entry_block_alloca(c, elem_t, n->data.batch.iterator_var);
 		LLVMBuildStore(c->builder, item_val, n_ptr);
-		// Synthesize a var-decl node for the iterator so type lookups on the
-		// scope entry (binop stamping, coercions) always see a data_type --
-		// a NULL node here segfaults `b == 'x'` inside the body.
+
 		ASTNode *iter_decl = arena_alloc(c->arena, sizeof(ASTNode));
 		iter_decl->type = NODE_VAR_DECL;
 		iter_decl->data.var_decl.name = n->data.batch.iterator_var;
-		Type *elem_ast = arena_alloc(c->arena, sizeof(Type));
-		if (is_slice) {
-			*elem_ast = *coll_ast->inner;
-		} else if (coll_ast) {
-			*elem_ast = *coll_ast->inner;
-		} else {
-			elem_ast->kind = TYPE_I32;
-		}
 		iter_decl->data_type = elem_ast;
+
 		Scope *old_scope = c->scope_stack;
-		scope_push(c, n->data.batch.iterator_var, n_ptr, elem_t,
-				   iter_decl);
+		scope_push(c, n->data.batch.iterator_var, n_ptr, elem_t, iter_decl);
+
+		struct LoopTargets targets = {exit_bb, loop_bb, c->defer_stack, c->loop_stack};
+		c->loop_stack = &targets;
 		codegen_stmt(c, n->data.batch.body);
+		c->loop_stack = targets.next;
+
 		c->scope_stack = old_scope;
 
 		LLVMBasicBlockRef body_end_bb = LLVMGetInsertBlock(c->builder);
@@ -649,10 +678,15 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_RETURN: {
+		LLVMValueRef ret_val = NULL;
+		if (n->data.ret_stmt.expr != NULL) {
+			ret_val = codegen_expr(c, n->data.ret_stmt.expr);
+		}
+
 		// Deferred statements run before control leaves the function, in
 		// reverse registration order (LIFO).
 		for (DeferFrame *d = c->defer_stack; d; d = d->next)
-			codegen_stmt(c, d->stmt);
+			run_defer_frame(c, d);
 
 		if (n->data.ret_stmt.expr == NULL) {
 			// bare `return;` -- runs defers, then leaves. Valid in void
@@ -671,8 +705,6 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			}
 			return;
 		}
-
-		LLVMValueRef ret_val = codegen_expr(c, n->data.ret_stmt.expr);
 		if (c->in_coroutine) {
 			if (c->current_promise_ptr) {
 				ret_val =
@@ -866,7 +898,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		// Normal exit through the try body: run defers registered inside,
 		// then pop them so the enclosing scope won't repeat them.
 		for (DeferFrame *d = c->defer_stack; d && d != saved_defers; d = d->next)
-			codegen_stmt(c, d->stmt);
+			run_defer_frame(c, d);
 		c->defer_stack = saved_defers;
 
 		c->filter_stack = saved_filters;
@@ -923,7 +955,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		// before control transfers to the handler.
 		for (DeferFrame *d = c->defer_stack; d != target->defers_at_entry;
 			 d = d->next)
-			codegen_stmt(c, d->stmt);
+			run_defer_frame(c, d);
 		LLVMBuildBr(c->builder, target->catch_bb);
 		return;
 	}
@@ -934,6 +966,20 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		{
 			DeferFrame *d = arena_alloc(c->arena, sizeof(DeferFrame));
 			d->stmt = n->data.defer.stmt;
+			d->capture_count = 0;
+			for (ASTNode *cap = n->data.defer.captures; cap && d->capture_count < 16; cap = cap->next) {
+				Scope *s = scope_find(c, cap->data.var_decl.name);
+				if (s) {
+					LLVMValueRef shadow = create_entry_block_alloca(c, s->type, "defer_cap");
+					LLVMValueRef cur_val = LLVMBuildLoad2(c->builder, s->type, s->val, "cap_val");
+					LLVMBuildStore(c->builder, cur_val, shadow);
+					d->captures[d->capture_count].name = s->name;
+					d->captures[d->capture_count].slot = shadow;
+					d->captures[d->capture_count].type = s->type;
+					d->captures[d->capture_count].node = s->node;
+					d->capture_count++;
+				}
+			}
 			d->next = c->defer_stack;
 			c->defer_stack = d;
 		}
@@ -977,6 +1023,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		c->unchecked_depth--;
 		return;
 
+	case NODE_MATCH:
+		codegen_match(c, n, NULL, NULL);
+		return;
+
 	case NODE_ASM: {
 		const char *cons =
 			n->data.asm_block.constraints ? n->data.asm_block.constraints : "";
@@ -1000,4 +1050,157 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				   "unknown AST node type %d in codegen_stmt", // internal
 				   n->type);
 	exit(1);
+}
+
+void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeRef res_type) {
+	ASTNode *target = n->data.match_stmt.target;
+	LLVMValueRef target_val = codegen_expr(c, target);
+	LLVMTypeRef enum_t = LLVMTypeOf(target_val);
+
+	LLVMValueRef match_slot = create_entry_block_alloca(c, enum_t, "match_target");
+	LLVMBuildStore(c->builder, target_val, match_slot);
+
+	LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, enum_t, match_slot, 0, "match_tag_ptr");
+	LLVMValueRef tag = LLVMBuildLoad2(c->builder, LLVMInt64TypeInContext(c->context), tag_ptr, "match_tag");
+
+	// Determine enum name
+	const char *enum_name = NULL;
+	if (target->data_type && target->data_type->kind == TYPE_ENUM && target->data_type->name) {
+		enum_name = target->data_type->name;
+	} else {
+		for (ASTNode *a = n->data.match_stmt.arms; a; a = a->next) {
+			if (!a->data.match_arm.is_else) {
+				if (a->data.match_arm.enum_name) {
+					enum_name = a->data.match_arm.enum_name;
+					break;
+				}
+				for (ASTNode *s = c->program_root; s; s = s->next) {
+					if (s->type == NODE_ENUM_DECL && s->data.enum_decl.name) {
+						for (EnumVariant *ev = s->data.enum_decl.variants; ev; ev = ev->next) {
+							if (strcmp(ev->name, a->data.match_arm.variant_name) == 0) {
+								enum_name = s->data.enum_decl.name;
+								break;
+							}
+						}
+						if (enum_name) break;
+					}
+				}
+				if (enum_name) break;
+			}
+		}
+	}
+
+	ASTNode *enum_decl = enum_name ? find_enum_decl(c, enum_name) : NULL;
+
+	int arm_count = 0;
+	ASTNode *else_arm = NULL;
+	for (ASTNode *a = n->data.match_stmt.arms; a; a = a->next) {
+		if (a->data.match_arm.is_else)
+			else_arm = a;
+		else
+			arm_count++;
+	}
+
+	LLVMBasicBlockRef exit_bb = LLVMAppendBasicBlock(c->current_func, "match_exit");
+	LLVMBasicBlockRef default_bb = NULL;
+	LLVMBasicBlockRef else_bb = else_arm ? LLVMAppendBasicBlock(c->current_func, "match_else") : NULL;
+
+	LLVMBasicBlockRef trap_bb = NULL;
+	if (!else_bb) {
+		trap_bb = LLVMAppendBasicBlock(c->current_func, "match_trap");
+		default_bb = trap_bb;
+	} else {
+		default_bb = else_bb;
+	}
+
+	LLVMValueRef switch_inst = LLVMBuildSwitch(c->builder, tag, default_bb, arm_count);
+
+	for (ASTNode *a = n->data.match_stmt.arms; a; a = a->next) {
+		if (a->data.match_arm.is_else)
+			continue;
+
+		LLVMBasicBlockRef arm_bb = LLVMAppendBasicBlock(c->current_func, "match_arm");
+		EnumVariant *ev = enum_decl ? find_enum_variant(enum_decl, a->data.match_arm.variant_name) : NULL;
+		if (!ev && a->data.match_arm.variant_name) {
+			for (ASTNode *s = c->program_root; s; s = s->next) {
+				if (s->type == NODE_ENUM_DECL) {
+					for (EnumVariant *v = s->data.enum_decl.variants; v; v = v->next) {
+						if (strcmp(v->name, a->data.match_arm.variant_name) == 0) {
+							ev = v;
+							if (!enum_decl) enum_decl = s;
+							break;
+						}
+					}
+					if (ev) break;
+				}
+			}
+		}
+
+		long long arm_tag = ev ? ev->tag : 0;
+		LLVMAddCase(switch_inst, LLVMConstInt(LLVMInt64TypeInContext(c->context), arm_tag, 0), arm_bb);
+
+		LLVMPositionBuilderAtEnd(c->builder, arm_bb);
+		Scope *saved_scope = c->scope_stack;
+
+		if (ev && ev->payload_count > 0 && a->data.match_arm.bindings) {
+			LLVMTypeRef param_ts[16];
+			for (int pi = 0; pi < ev->payload_count; pi++) {
+				param_ts[pi] = get_llvm_type(c, ev->payload_types[pi]);
+			}
+			LLVMTypeRef payload_struct_t = LLVMStructTypeInContext(c->context, param_ts, ev->payload_count, 0);
+
+			LLVMValueRef raw_payload = LLVMBuildStructGEP2(c->builder, enum_t, match_slot, 1, "payload_raw");
+			LLVMValueRef typed_payload = LLVMBuildPointerCast(c->builder, raw_payload,
+				LLVMPointerType(payload_struct_t, 0), "typed_payload");
+
+			ASTNode *b = a->data.match_arm.bindings;
+			for (int pi = 0; pi < ev->payload_count && b; pi++, b = b->next) {
+				LLVMValueRef fld_ptr = LLVMBuildStructGEP2(c->builder, payload_struct_t, typed_payload, pi, b->data.var_decl.name);
+				LLVMValueRef val = LLVMBuildLoad2(c->builder, param_ts[pi], fld_ptr, b->data.var_decl.name);
+				LLVMValueRef b_slot = create_entry_block_alloca(c, param_ts[pi], b->data.var_decl.name);
+				LLVMBuildStore(c->builder, val, b_slot);
+				scope_push(c, b->data.var_decl.name, b_slot, param_ts[pi], b);
+			}
+		}
+
+		if (res_slot != NULL) {
+			LLVMValueRef arm_val = codegen_expr(c, a->data.match_arm.body);
+			arm_val = coerce_value(c, arm_val, a->data.match_arm.body ? a->data.match_arm.body->data_type : NULL,
+				res_type, a->data_type);
+			LLVMBuildStore(c->builder, arm_val, res_slot);
+		} else {
+			codegen_stmt(c, a->data.match_arm.body);
+		}
+
+		c->scope_stack = saved_scope;
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+			LLVMBuildBr(c->builder, exit_bb);
+		}
+	}
+
+	if (else_arm) {
+		LLVMPositionBuilderAtEnd(c->builder, else_bb);
+		if (res_slot != NULL) {
+			LLVMValueRef arm_val = codegen_expr(c, else_arm->data.match_arm.body);
+			arm_val = coerce_value(c, arm_val, else_arm->data.match_arm.body ? else_arm->data.match_arm.body->data_type : NULL,
+				res_type, else_arm->data_type);
+			LLVMBuildStore(c->builder, arm_val, res_slot);
+		} else {
+			codegen_stmt(c, else_arm->data.match_arm.body);
+		}
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+			LLVMBuildBr(c->builder, exit_bb);
+		}
+	} else if (trap_bb) {
+		LLVMPositionBuilderAtEnd(c->builder, trap_bb);
+		LLVMValueRef trap_fn = LLVMGetNamedFunction(c->module, "llvm.trap");
+		LLVMTypeRef trap_t = LLVMFunctionType(LLVMVoidTypeInContext(c->context), NULL, 0, 0);
+		if (!trap_fn) {
+			trap_fn = LLVMAddFunction(c->module, "llvm.trap", trap_t);
+		}
+		LLVMBuildCall2(c->builder, trap_t, trap_fn, NULL, 0, "");
+		LLVMBuildUnreachable(c->builder);
+	}
+
+	LLVMPositionBuilderAtEnd(c->builder, exit_bb);
 }

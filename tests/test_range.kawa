@@ -1,0 +1,58 @@
+import stdc;
+
+fn i32 main() {
+    // 1. Half-open range loop
+    i32 sum1 = 0;
+    for (i in 0..5) {
+        sum1 += i;
+    }
+    stdc.printf("sum1=%d\n", sum1);
+
+    // 2. Inclusive range loop
+    i32 sum2 = 0;
+    for (i in 0..=5) {
+        sum2 += i;
+    }
+    stdc.printf("sum2=%d\n", sum2);
+
+    // 3. Collection iteration over array
+    [5]i32 arr = { 10, 20, 30, 40, 50 };
+    i32 sum3 = 0;
+    for (v in arr) {
+        sum3 += v;
+    }
+    stdc.printf("sum3=%d\n", sum3);
+
+    // 4. Slice indexing variations
+    []i32 s1 = arr[1..4];
+    stdc.printf("s1 len=%lld: %d %d %d\n", s1.len, s1[0], s1[1], s1[2]);
+
+    []i32 s2 = arr[..3];
+    stdc.printf("s2 len=%lld: %d %d %d\n", s2.len, s2[0], s2[1], s2[2]);
+
+    []i32 s3 = arr[2..];
+    stdc.printf("s3 len=%lld: %d %d %d\n", s3.len, s3[0], s3[1], s3[2]);
+
+    []i32 s4 = arr[1..=3];
+    stdc.printf("s4 len=%lld: %d %d %d\n", s4.len, s4[0], s4[1], s4[2]);
+
+    // 5. Iteration over slice
+    i32 sum4 = 0;
+    for (x in s1) {
+        sum4 += x;
+    }
+    stdc.printf("sum4=%d\n", sum4);
+
+    // 6. Subslice expression iteration
+    i32 sum5 = 0;
+    for (y in arr[2..5]) {
+        sum5 += y;
+    }
+    stdc.printf("sum5=%d\n", sum5);
+
+    // 7. Mutation through slice
+    s1[0] = 777;
+    stdc.printf("arr[1]=%d s1[0]=%d\n", arr[1], s1[0]);
+
+    return 0;
+}

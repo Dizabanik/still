@@ -174,6 +174,7 @@ static int is_likely_cast(Parser *p) {
 }
 
 static Type *parse_type(Parser *p);
+static ASTNode *parse_match(Parser *p);
 static const char *type_to_suffix(Arena *arena, Type *t);
 static Type *clone_and_subst_type(Arena *arena, Type *src, const char *param,
 								   Type *concrete, const char *gen_struct,
@@ -223,6 +224,39 @@ static long parse_array_len(Parser *p) {
 	}
 	report_error(p, "Expected array length");
 	return 0;
+}
+
+static int is_enum_name(Parser *p, const char *name) {
+	if (!name) return 0;
+	for (int i = 0; i < p->enum_count; i++) {
+		if (p->enums[i].name && strcmp(p->enums[i].name, name) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+static EnumVariant *find_enum_variant_in_parser(Parser *p, const char *enum_name, const char *variant_name) {
+	if (!variant_name) return NULL;
+	for (int i = 0; i < p->enum_count; i++) {
+		if (enum_name && p->enums[i].name && strcmp(p->enums[i].name, enum_name) != 0)
+			continue;
+		for (EnumVariant *ev = p->enums[i].variants; ev; ev = ev->next) {
+			if (ev->name && strcmp(ev->name, variant_name) == 0)
+				return ev;
+		}
+	}
+	return NULL;
+}
+
+static const char *find_enum_name_by_variant(Parser *p, const char *variant_name) {
+	if (!variant_name) return NULL;
+	for (int i = 0; i < p->enum_count; i++) {
+		for (EnumVariant *ev = p->enums[i].variants; ev; ev = ev->next) {
+			if (ev->name && strcmp(ev->name, variant_name) == 0)
+				return p->enums[i].name;
+		}
+	}
+	return NULL;
 }
 
 static Type *parse_type(Parser *p) {
@@ -319,6 +353,9 @@ static Type *parse_type(Parser *p) {
 			t->kind = TYPE_STRUCT;
 			t->name = inst_name;
 			goto handle_type_postfix;
+		} else if (is_enum_name(p, sname)) {
+			t->kind = TYPE_ENUM;
+			t->name = sname;
 		} else {
 			t->kind = TYPE_STRUCT;
 			t->name = sname;
@@ -538,6 +575,17 @@ static Type *unify_types(Parser *p, Type *a, Type *b) {
 
 // 2. Implement parse_unary
 static ASTNode *parse_unary(Parser *p) {
+	if (p->cur.type == TOK_DOTDOT || p->cur.type == TOK_DOTDOTEQ) {
+		int is_inc = (p->cur.type == TOK_DOTDOTEQ);
+		advance(p);
+		ASTNode *rnode = arena_alloc(p->arena, sizeof(ASTNode));
+		rnode->type = NODE_RANGE;
+		rnode->data.range.left = NULL;
+		rnode->data.range.right = parse_unary(p);
+		rnode->data.range.is_inclusive = is_inc;
+		rnode->data_type = rnode->data.range.right ? rnode->data.range.right->data_type : NULL;
+		return rnode;
+	}
 	// Prefix channel receive: `<-ch` yields the next element (IDEAS 3).
 	if (p->cur.type == TOK_RECV) {
 		advance(p);
@@ -1522,8 +1570,29 @@ static ASTNode *parse_primary(Parser *p) {
 		} else {
 			return parse_block(p);
 		}
+	} else if (p->cur.type == TOK_MATCH) {
+		return parse_match(p);
 	} else if (p->cur.type == TOK_IDENTIFIER) {
 		char *id_name = p->cur.text;
+		EnumVariant *ev = find_enum_variant_in_parser(p, NULL, id_name);
+		Token next_tok = lexer_peek(p->lexer);
+		if (ev && ev->payload_count == 0 && next_tok.type != TOK_LPAREN && !find_decl(p, id_name)) {
+			advance(p); // eat identifier
+			ASTNode *call = arena_alloc(p->arena, sizeof(ASTNode));
+			call->type = NODE_CALL;
+			call->line = p->prev.line;
+			ASTNode *callee = arena_alloc(p->arena, sizeof(ASTNode));
+			callee->type = NODE_VAR_REF;
+			callee->data.var_ref.name = id_name;
+			call->data.call.callee = callee;
+			call->data.call.args = NULL;
+			const char *ename = find_enum_name_by_variant(p, id_name);
+			Type *en_t = arena_alloc(p->arena, sizeof(Type));
+			en_t->kind = TYPE_ENUM;
+			en_t->name = (char *)ename;
+			call->data_type = en_t;
+			return call;
+		}
 		int is_gen = 0;
 		for (int gi = 0; gi < p->generic_struct_count; gi++) {
 			if (strcmp(p->generic_structs[gi].name, id_name) == 0) {
@@ -1734,6 +1803,40 @@ static ASTNode *parse_postfix(Parser *p) {
 		if (p->cur.type == TOK_DOT && expr->type == NODE_VAR_REF) {
 			const char *sname = expr->data.var_ref.name;
 			Token next_tok = lexer_peek(p->lexer);
+			if (is_enum_name(p, sname) && next_tok.type == TOK_IDENTIFIER) {
+				EnumVariant *ev = find_enum_variant_in_parser(p, sname, next_tok.text);
+				if (ev) {
+					advance(p); // eat '.'
+					advance(p); // eat variant name
+					char mangled[256];
+					snprintf(mangled, sizeof(mangled), "%s_%s", sname, ev->name);
+					Type *en_t = arena_alloc(p->arena, sizeof(Type));
+					en_t->kind = TYPE_ENUM;
+					en_t->name = (char *)sname;
+
+					if (ev->payload_count == 0 && p->cur.type != TOK_LPAREN) {
+						ASTNode *call = arena_alloc(p->arena, sizeof(ASTNode));
+						call->type = NODE_CALL;
+						call->line = p->prev.line;
+						ASTNode *callee = arena_alloc(p->arena, sizeof(ASTNode));
+						callee->type = NODE_VAR_REF;
+						callee->data.var_ref.name = arena_strdup(p->arena, mangled);
+						call->data.call.callee = callee;
+						call->data.call.args = NULL;
+						call->data_type = en_t;
+						expr = call;
+						continue;
+					} else {
+						ASTNode *vref = arena_alloc(p->arena, sizeof(ASTNode));
+						vref->type = NODE_VAR_REF;
+						vref->data.var_ref.name = arena_strdup(p->arena, mangled);
+						vref->data_type = en_t;
+						vref->line = p->prev.line;
+						expr = vref;
+						continue;
+					}
+				}
+			}
 			if (next_tok.type == TOK_IDENTIFIER) {
 				char mangled[256];
 				snprintf(mangled, sizeof(mangled), "%s__%s", sname, next_tok.text);
@@ -1883,8 +1986,75 @@ static ASTNode *parse_postfix(Parser *p) {
 			expr = member;
 		} else if (p->cur.type == TOK_LBRACKET) {
 			advance(p);
-			ASTNode *idx = parse_expr(p);
+			ASTNode *idx = NULL;
+			int is_slice = 0;
+			int is_inclusive = 0;
+			ASTNode *start_node = NULL;
+			ASTNode *end_node = NULL;
+
+			if (p->cur.type == TOK_DOTDOT || p->cur.type == TOK_DOTDOTEQ) {
+				is_slice = 1;
+				is_inclusive = (p->cur.type == TOK_DOTDOTEQ);
+				advance(p);
+				if (p->cur.type != TOK_RBRACKET) {
+					end_node = parse_expr(p);
+				}
+			} else {
+				idx = parse_expr(p);
+				if (p->cur.type == TOK_DOTDOT || p->cur.type == TOK_DOTDOTEQ) {
+					is_slice = 1;
+					is_inclusive = (p->cur.type == TOK_DOTDOTEQ);
+					start_node = idx;
+					advance(p);
+					if (p->cur.type != TOK_RBRACKET) {
+						end_node = parse_expr(p);
+					}
+				} else if (idx && idx->type == NODE_RANGE) {
+					is_slice = 1;
+					is_inclusive = idx->data.range.is_inclusive;
+					start_node = idx->data.range.left;
+					end_node = idx->data.range.right;
+				}
+			}
 			consume(p, TOK_RBRACKET, "Expected ']' after index");
+
+			if (is_slice) {
+				ASTNode *sindex = arena_alloc(p->arena, sizeof(ASTNode));
+				sindex->type = NODE_SLICE_INDEX;
+				sindex->line = p->cur.line;
+				sindex->data.slice_index.object = expr;
+				sindex->data.slice_index.start = start_node;
+				sindex->data.slice_index.end = end_node;
+				sindex->data.slice_index.is_inclusive = is_inclusive;
+
+				Type *elem_t = NULL;
+				if (expr->data_type && (expr->data_type->kind == TYPE_ARRAY ||
+										expr->data_type->kind == TYPE_PTR ||
+										expr->data_type->kind == TYPE_SLICE ||
+										expr->data_type->kind == TYPE_AMP)) {
+					elem_t = expr->data_type->inner;
+				} else if (expr->type == NODE_VAR_REF) {
+					ASTNode *decl = find_decl(p, expr->data.var_ref.name);
+					if (decl && decl->data_type &&
+						(decl->data_type->kind == TYPE_ARRAY ||
+						 decl->data_type->kind == TYPE_PTR ||
+						 decl->data_type->kind == TYPE_SLICE ||
+						 decl->data_type->kind == TYPE_AMP)) {
+						elem_t = decl->data_type->inner;
+					}
+				}
+				if (!elem_t) {
+					elem_t = arena_alloc(p->arena, sizeof(Type));
+					elem_t->kind = TYPE_I32;
+				}
+				Type *slice_t = arena_alloc(p->arena, sizeof(Type));
+				slice_t->kind = TYPE_SLICE;
+				slice_t->inner = elem_t;
+				sindex->data_type = slice_t;
+				expr = sindex;
+				continue;
+			}
+
 			ASTNode *index = arena_alloc(p->arena, sizeof(ASTNode));
 			index->type = NODE_INDEX;
 			index->line = p->cur.line;
@@ -2246,6 +2416,8 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 			tok_prec = 3;
 		if (p->cur.type == TOK_OROR)
 			tok_prec = 2;
+		if (p->cur.type == TOK_DOTDOT || p->cur.type == TOK_DOTDOTEQ)
+			tok_prec = 3;
 		if (p->cur.type == TOK_PIPE)
 			tok_prec = 4; // bitwise: | < ^ < & < compare (C convention)
 		if (p->cur.type == TOK_CARET)
@@ -2306,8 +2478,22 @@ static ASTNode *parse_binop_rhs(Parser *p, int expr_prec, ASTNode *lhs) {
 		// Precedence climbing: parse the RHS with strictly higher
 		// precedence so `a - b - c` groups left and `a || b == c` binds
 		// the comparison into the RHS of ||.
-		ASTNode *rhs = parse_binop_rhs(p, tok_prec + 1, parse_unary(p));
-		if (op == TOK_TILDE_EQ) {
+		ASTNode *rhs = NULL;
+		if (op == TOK_DOTDOT && (p->cur.type == TOK_RBRACKET || p->cur.type == TOK_RPAREN ||
+								 p->cur.type == TOK_SEMICOLON || p->cur.type == TOK_COMMA)) {
+			rhs = NULL;
+		} else {
+			rhs = parse_binop_rhs(p, tok_prec + 1, parse_unary(p));
+		}
+		if (op == TOK_DOTDOT || op == TOK_DOTDOTEQ) {
+			ASTNode *rnode = arena_alloc(p->arena, sizeof(ASTNode));
+			rnode->type = NODE_RANGE;
+			rnode->data.range.left = lhs;
+			rnode->data.range.right = rhs;
+			rnode->data.range.is_inclusive = (op == TOK_DOTDOTEQ);
+			rnode->data_type = lhs ? lhs->data_type : (rhs ? rhs->data_type : NULL);
+			lhs = rnode;
+		} else if (op == TOK_TILDE_EQ) {
 			ASTNode *pour = arena_alloc(p->arena, sizeof(ASTNode));
 			pour->type = NODE_SET_POUR;
 			pour->data.set_pour.target = lhs;
@@ -2690,6 +2876,113 @@ static ASTNode *parse_statement(Parser *p) {
 	return result;
 }
 
+static ASTNode *parse_match(Parser *p) {
+	advance(p); // eat `match`
+	ASTNode *target = parse_expr(p);
+	consume(p, TOK_LBRACE, "Expected '{' after match target");
+
+	ASTNode *arms_head = NULL;
+	ASTNode **arms_tail = &arms_head;
+	Type *inferred_arm_type = NULL;
+
+	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		ASTNode *arm = arena_alloc(p->arena, sizeof(ASTNode));
+		arm->type = NODE_MATCH_ARM;
+		arm->line = p->cur.line;
+
+		if (p->cur.type == TOK_ELSE ||
+			(p->cur.type == TOK_IDENTIFIER && strcmp(p->cur.text, "_") == 0)) {
+			arm->data.match_arm.is_else = 1;
+			advance(p);
+		} else {
+			char *vname = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected variant name in pattern");
+			char *ename = NULL;
+			if (p->cur.type == TOK_DOT) {
+				ename = vname;
+				advance(p); // eat '.'
+				vname = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected variant name after '.'");
+			} else {
+				ename = (char *)find_enum_name_by_variant(p, vname);
+			}
+			arm->data.match_arm.enum_name = ename;
+			arm->data.match_arm.variant_name = vname;
+
+			EnumVariant *ev = find_enum_variant_in_parser(p, ename, vname);
+
+			if (p->cur.type == TOK_LPAREN) {
+				advance(p); // eat '('
+				ASTNode *bhead = NULL;
+				ASTNode **btail = &bhead;
+				int bi = 0;
+				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+					char *bname = p->cur.text;
+					consume(p, TOK_IDENTIFIER, "Expected identifier in pattern");
+					ASTNode *bdecl = arena_alloc(p->arena, sizeof(ASTNode));
+					bdecl->type = NODE_VAR_DECL;
+					bdecl->data.var_decl.name = bname;
+					if (ev && bi < ev->payload_count) {
+						bdecl->data_type = ev->payload_types[bi];
+					} else {
+						Type *it = arena_alloc(p->arena, sizeof(Type));
+						it->kind = TYPE_I64;
+						bdecl->data_type = it;
+					}
+					*btail = bdecl;
+					btail = &bdecl->next;
+					bi++;
+					if (p->cur.type == TOK_COMMA)
+						advance(p);
+					else
+						break;
+				}
+				consume(p, TOK_RPAREN, "Expected ')' after pattern bindings");
+				arm->data.match_arm.bindings = bhead;
+			}
+		}
+
+		consume(p, TOK_FAT_ARROW, "Expected '=>' after pattern");
+
+		// Register pattern bindings into parser decls for scope resolution in arm body
+		int saved_decls = p->decl_count;
+		for (ASTNode *b = arm->data.match_arm.bindings; b; b = b->next) {
+			if (p->decl_count < 1024) {
+				p->decls[p->decl_count].name = b->data.var_decl.name;
+				p->decls[p->decl_count].node = b;
+				p->decl_count++;
+			}
+		}
+
+		ASTNode *body = NULL;
+		if (p->cur.type == TOK_LBRACE) {
+			body = parse_block(p);
+		} else {
+			body = parse_expr(p);
+		}
+		p->decl_count = saved_decls; // unbind arm pattern variables
+
+		arm->data.match_arm.body = body;
+		if (body && body->data_type && !inferred_arm_type) {
+			inferred_arm_type = body->data_type;
+		}
+
+		*arms_tail = arm;
+		arms_tail = &arm->next;
+
+		if (p->cur.type == TOK_COMMA)
+			advance(p);
+	}
+	consume(p, TOK_RBRACE, "Expected '}' after match arms");
+
+	ASTNode *mnode = arena_alloc(p->arena, sizeof(ASTNode));
+	mnode->type = NODE_MATCH;
+	mnode->data.match_stmt.target = target;
+	mnode->data.match_stmt.arms = arms_head;
+	mnode->data_type = inferred_arm_type;
+	return mnode;
+}
+
 static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 	(void)stmt_line;
 	if (p->cur.type == TOK_ERROR) {
@@ -2932,8 +3225,131 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		loop->data.while_stmt.body = body;
 		return loop;
 	}
+	if (p->cur.type == TOK_MATCH) {
+		return parse_match(p);
+	}
 	if (p->cur.type == TOK_FOR) {
 		advance(p);
+		int has_paren = 0;
+		int is_for_in = 0;
+
+		if (p->cur.type == TOK_LPAREN) {
+			Lexer temp = *p->lexer;
+			Token t1 = lexer_next(&temp);
+			if (t1.type == TOK_IN) {
+				has_paren = 1;
+				is_for_in = 1;
+			} else if (t1.type == TOK_IDENTIFIER || t1.type == TOK_LET) {
+				Token t2 = lexer_next(&temp);
+				if (t2.type == TOK_IN) {
+					has_paren = 1;
+					is_for_in = 1;
+				} else if (t2.type == TOK_IDENTIFIER) {
+					Token t3 = lexer_next(&temp);
+					if (t3.type == TOK_IN) {
+						has_paren = 1;
+						is_for_in = 1;
+					}
+				}
+			}
+		} else {
+			is_for_in = 1;
+		}
+
+		if (is_for_in) {
+			if (has_paren)
+				advance(p); // eat '('
+			if (p->cur.type == TOK_LET)
+				advance(p); // optional 'let'
+			char *iter = p->cur.text;
+			consume(p, TOK_IDENTIFIER, "Expected loop variable name");
+			consume(p, TOK_IN, "Expected 'in'");
+			ASTNode *iter_expr = parse_expr(p);
+			if (has_paren)
+				consume(p, TOK_RPAREN, "Expected ')'");
+			ASTNode *body = parse_block(p);
+
+			if (iter_expr && iter_expr->type == NODE_RANGE) {
+				ASTNode *start = iter_expr->data.range.left;
+				ASTNode *end = iter_expr->data.range.right;
+				int is_inc = iter_expr->data.range.is_inclusive;
+
+				if (!start) {
+					start = arena_alloc(p->arena, sizeof(ASTNode));
+					start->type = NODE_LITERAL;
+					start->data.literal.i_val = 0;
+					start->data.literal.i64_val = 0;
+					Type *i64_t = arena_alloc(p->arena, sizeof(Type));
+					i64_t->kind = TYPE_I64;
+					start->data_type = i64_t;
+				}
+
+				Type *idx_type = start->data_type ? start->data_type
+								: (end && end->data_type ? end->data_type : NULL);
+				if (!idx_type) {
+					idx_type = arena_alloc(p->arena, sizeof(Type));
+					idx_type->kind = TYPE_I64;
+				}
+
+				ASTNode *init = arena_alloc(p->arena, sizeof(ASTNode));
+				init->type = NODE_VAR_DECL;
+				init->data.var_decl.name = iter;
+				init->data.var_decl.init = start;
+				init->data.var_decl.is_const = 0;
+				init->data_type = idx_type;
+
+				ASTNode *iter_ref = arena_alloc(p->arena, sizeof(ASTNode));
+				iter_ref->type = NODE_VAR_REF;
+				iter_ref->data.var_ref.name = iter;
+				iter_ref->data_type = idx_type;
+
+				ASTNode *cond = arena_alloc(p->arena, sizeof(ASTNode));
+				cond->type = NODE_BINARY_OP;
+				cond->data.bin_op.op = is_inc ? TOK_LEQ : TOK_LANGLE;
+				cond->data.bin_op.left = iter_ref;
+				cond->data.bin_op.right = end;
+				cond->data_type = bool_result_type(p);
+
+				ASTNode *step_ref = arena_alloc(p->arena, sizeof(ASTNode));
+				step_ref->type = NODE_VAR_REF;
+				step_ref->data.var_ref.name = iter;
+				step_ref->data_type = idx_type;
+
+				ASTNode *one_lit = arena_alloc(p->arena, sizeof(ASTNode));
+				one_lit->type = NODE_LITERAL;
+				one_lit->data.literal.i_val = 1;
+				one_lit->data.literal.i64_val = 1;
+				one_lit->data_type = idx_type;
+
+				ASTNode *add_one = arena_alloc(p->arena, sizeof(ASTNode));
+				add_one->type = NODE_BINARY_OP;
+				add_one->data.bin_op.op = TOK_PLUS;
+				add_one->data.bin_op.left = step_ref;
+				add_one->data.bin_op.right = one_lit;
+				add_one->data_type = idx_type;
+
+				ASTNode *step = arena_alloc(p->arena, sizeof(ASTNode));
+				step->type = NODE_ASSIGN;
+				step->data.assign.target = step_ref;
+				step->data.assign.value = add_one;
+
+				ASTNode *loop = arena_alloc(p->arena, sizeof(ASTNode));
+				loop->type = NODE_FOR;
+				loop->data.for_stmt.init = init;
+				loop->data.for_stmt.cond = cond;
+				loop->data.for_stmt.step = step;
+				loop->data.for_stmt.body = body;
+				return loop;
+			} else {
+				ASTNode *batch = arena_alloc(p->arena, sizeof(ASTNode));
+				batch->type = NODE_BATCH;
+				batch->data.batch.iterator_var = iter;
+				batch->data.batch.collection = iter_expr;
+				batch->data.batch.body = body;
+				return batch;
+			}
+		}
+
 		consume(p, TOK_LPAREN, "(");
 		// for init; cond; step { body } -- any clause may be empty.
 		// Declarations and expression statements consume their own ';' via
@@ -3065,8 +3481,28 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 	}
 	if (p->cur.type == TOK_DEFER) {
 		advance(p);
+		ASTNode *captures = NULL;
+		ASTNode **cap_tail = &captures;
+		if (p->cur.type == TOK_LPAREN) {
+			advance(p); // eat '('
+			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				char *cname = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected variable name in defer capture list");
+				ASTNode *cnode = arena_alloc(p->arena, sizeof(ASTNode));
+				cnode->type = NODE_VAR_DECL;
+				cnode->data.var_decl.name = cname;
+				*cap_tail = cnode;
+				cap_tail = &cnode->next;
+				if (p->cur.type == TOK_COMMA)
+					advance(p);
+				else
+					break;
+			}
+			consume(p, TOK_RPAREN, "Expected ')' after defer capture list");
+		}
 		ASTNode *defer = arena_alloc(p->arena, sizeof(ASTNode));
 		defer->type = NODE_DEFER;
+		defer->data.defer.captures = captures;
 		defer->data.defer.stmt = parse_statement(p);
 		return defer;
 	}
@@ -3499,9 +3935,43 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 	ASTNode **fields_tail = &fields_head;
 	ASTNode ***outer_tail = tail; // keep the program-chain handle handy
 
+	EnumVariant *variants_head = NULL;
+	EnumVariant **variants_tail = &variants_head;
+	int variant_count = 0;
+
+	Type *en_t = arena_alloc(p->arena, sizeof(Type));
+	en_t->kind = TYPE_ENUM;
+	en_t->name = name;
+
 	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		char *member = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Expected enum member name");
+
+		Type *payload_types[16];
+		char *payload_names[16];
+		int payload_count = 0;
+
+		if (p->cur.type == TOK_LPAREN) {
+			advance(p); // eat '('
+			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				Type *pt = parse_type(p);
+				char *pname = NULL;
+				if (p->cur.type == TOK_IDENTIFIER) {
+					pname = p->cur.text;
+					advance(p);
+				}
+				if (payload_count < 16) {
+					payload_types[payload_count] = pt;
+					payload_names[payload_count] = pname;
+					payload_count++;
+				}
+				if (p->cur.type == TOK_COMMA)
+					advance(p);
+				else
+					break;
+			}
+			consume(p, TOK_RPAREN, "Expected ')' after variant payload");
+		}
 
 		long value = next_value;
 		if (p->cur.type == TOK_ASSIGN) {
@@ -3525,45 +3995,67 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 		}
 		next_value = value + 1;
 
-		// Synthesize `const i32 Name_member = value;` -- the qualified name
-		// keeps members of different enums from colliding.
 		char full_name[256];
 		snprintf(full_name, sizeof(full_name), "%s_%s", name, member);
 
-		Type *i32_t = arena_alloc(p->arena, sizeof(Type));
-		i32_t->kind = TYPE_I32;
+		// Record EnumVariant
+		EnumVariant *ev = arena_alloc(p->arena, sizeof(EnumVariant));
+		ev->name = member;
+		ev->tag = (int)value;
+		ev->payload_count = payload_count;
+		for (int i = 0; i < payload_count; i++) {
+			ev->payload_types[i] = payload_types[i];
+			ev->payload_names[i] = payload_names[i];
+		}
+		*variants_tail = ev;
+		variants_tail = &ev->next;
+		variant_count++;
 
-		ASTNode *lit = arena_alloc(p->arena, sizeof(ASTNode));
-		lit->type = NODE_LITERAL;
-		lit->data_type = i32_t;
-		lit->data.literal.i_val = (int)value;
-		lit->data.literal.i64_val = value;
-
-		ASTNode *member_decl = arena_alloc(p->arena, sizeof(ASTNode));
-		member_decl->type = NODE_VAR_DECL;
-		member_decl->data.var_decl.name =
-			arena_alloc(p->arena, strlen(full_name) + 1);
-		strcpy(member_decl->data.var_decl.name, full_name);
-		member_decl->data.var_decl.init = lit;
-		member_decl->data.var_decl.is_const = 1;
-		member_decl->data_type = i32_t;
-
-		// Register in the decl table so `[Color_RED]i8 buf;` and other
-		// const-identifier lookups resolve.
-		if (p->decl_count < 256) {
-			p->decls[p->decl_count].name = member_decl->data.var_decl.name;
-			p->decls[p->decl_count].node = member_decl;
-			p->decl_count++;
+		// Register constructor signatures
+		if (p->fn_sig_count < 512) {
+			p->fn_sigs[p->fn_sig_count].name = arena_strdup(p->arena, full_name);
+			p->fn_sigs[p->fn_sig_count].ret = en_t;
+			p->fn_sigs[p->fn_sig_count].nparams = payload_count;
+			p->fn_sig_count++;
+		}
+		if (p->fn_sig_count < 512) {
+			p->fn_sigs[p->fn_sig_count].name = arena_strdup(p->arena, member);
+			p->fn_sigs[p->fn_sig_count].ret = en_t;
+			p->fn_sigs[p->fn_sig_count].nparams = payload_count;
+			p->fn_sig_count++;
 		}
 
-		*fields_tail = member_decl;
-		fields_tail = &member_decl->next;
+		if (payload_count == 0) {
+			Type *i32_t = arena_alloc(p->arena, sizeof(Type));
+			i32_t->kind = TYPE_I32;
 
-		// Members live on the program chain too, so kawa_compile's ordinary
-		// NODE_VAR_DECL pass emits them (as folded i32 consts). The
-		// NODE_ENUM_DECL marker follows them for tooling/lookup.
-		**outer_tail = member_decl;
-		*outer_tail = &member_decl->next;
+			ASTNode *lit = arena_alloc(p->arena, sizeof(ASTNode));
+			lit->type = NODE_LITERAL;
+			lit->data_type = i32_t;
+			lit->data.literal.i_val = (int)value;
+			lit->data.literal.i64_val = value;
+
+			ASTNode *member_decl = arena_alloc(p->arena, sizeof(ASTNode));
+			member_decl->type = NODE_VAR_DECL;
+			member_decl->data.var_decl.name =
+				arena_alloc(p->arena, strlen(full_name) + 1);
+			strcpy(member_decl->data.var_decl.name, full_name);
+			member_decl->data.var_decl.init = lit;
+			member_decl->data.var_decl.is_const = 1;
+			member_decl->data_type = i32_t;
+
+			if (p->decl_count < 256) {
+				p->decls[p->decl_count].name = member_decl->data.var_decl.name;
+				p->decls[p->decl_count].node = member_decl;
+				p->decl_count++;
+			}
+
+			*fields_tail = member_decl;
+			fields_tail = &member_decl->next;
+
+			**outer_tail = member_decl;
+			*outer_tail = &member_decl->next;
+		}
 
 		if (p->cur.type == TOK_COMMA)
 			advance(p);
@@ -3571,12 +4063,23 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 			break;
 	}
 	consume(p, TOK_RBRACE, "Expected '}' after enum members");
-	consume(p, TOK_SEMICOLON, "Expected ';' after enum");
+	if (p->cur.type == TOK_SEMICOLON)
+		advance(p);
 
 	ASTNode *en = arena_alloc(p->arena, sizeof(ASTNode));
 	en->type = NODE_ENUM_DECL;
 	en->data.enum_decl.name = name;
 	en->data.enum_decl.fields = fields_head;
+	en->data.enum_decl.variants = variants_head;
+	en->data.enum_decl.variant_count = variant_count;
+
+	if (p->enum_count < 64) {
+		p->enums[p->enum_count].name = name;
+		p->enums[p->enum_count].variants = variants_head;
+		p->enums[p->enum_count].variant_count = variant_count;
+		p->enums[p->enum_count].node = en;
+		p->enum_count++;
+	}
 
 	**outer_tail = en;
 	*outer_tail = &en->next;

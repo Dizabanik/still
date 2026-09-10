@@ -389,6 +389,111 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		return view;
 	}
 
+	case NODE_MATCH: {
+		Type *res_type = n->data_type;
+		if (!res_type && n->data.match_stmt.arms && n->data.match_stmt.arms->data.match_arm.body) {
+			res_type = n->data.match_stmt.arms->data.match_arm.body->data_type;
+		}
+		if (!res_type) {
+			res_type = arena_alloc(c->arena, sizeof(Type));
+			res_type->kind = TYPE_I64;
+		}
+		LLVMTypeRef llvm_res_type = get_llvm_type(c, res_type);
+		LLVMValueRef res_slot = create_entry_block_alloca(c, llvm_res_type, "match_res_slot");
+		codegen_match(c, n, res_slot, llvm_res_type);
+		return LLVMBuildLoad2(c->builder, llvm_res_type, res_slot, "match_res");
+	}
+
+	case NODE_SLICE_INDEX: {
+		ASTNode *obj = n->data.slice_index.object;
+		LLVMContextRef ctx = c->context;
+		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+
+		LLVMValueRef start_val = NULL;
+		if (n->data.slice_index.start) {
+			start_val = codegen_expr(c, n->data.slice_index.start);
+			start_val = coerce_value(c, start_val, n->data.slice_index.start->data_type, i64_t, NULL);
+		} else {
+			start_val = LLVMConstInt(i64_t, 0, 0);
+		}
+
+		LLVMValueRef base_ptr = NULL;
+		LLVMValueRef total_len = NULL;
+		LLVMTypeRef elem_t = NULL;
+
+		Type *obj_ast = obj->data_type;
+		Scope *s_obj = NULL;
+		if (obj->type == NODE_VAR_REF) {
+			s_obj = scope_find(c, obj->data.var_ref.name);
+			if (s_obj && s_obj->node && s_obj->node->data_type)
+				obj_ast = s_obj->node->data_type;
+		}
+
+		if (obj_ast && obj_ast->kind == TYPE_ARRAY) {
+			elem_t = get_llvm_type(c, obj_ast->inner);
+			total_len = LLVMConstInt(i64_t, obj_ast->array_len, 0);
+			if (s_obj) {
+				base_ptr = s_obj->val;
+			} else {
+				base_ptr = codegen_expr(c, obj);
+			}
+			base_ptr = LLVMBuildGEP2(c->builder, elem_t, base_ptr,
+				(LLVMValueRef[]){ LLVMConstInt(i64_t, 0, 0) }, 1, "arr_base");
+		} else if (obj_ast && obj_ast->kind == TYPE_SLICE) {
+			elem_t = get_llvm_type(c, obj_ast->inner);
+			LLVMTypeRef slice_llvm_t = get_llvm_type(c, obj_ast);
+			LLVMValueRef slice_val = NULL;
+			if (s_obj) {
+				slice_val = LLVMBuildLoad2(c->builder, slice_llvm_t, s_obj->val, "slice_tmp");
+			} else {
+				slice_val = codegen_expr(c, obj);
+			}
+			base_ptr = LLVMBuildExtractValue(c->builder, slice_val, 0, "slice_base");
+			total_len = LLVMBuildExtractValue(c->builder, slice_val, 1, "slice_len");
+		} else if (obj_ast && obj_ast->kind == TYPE_PTR) {
+			elem_t = get_llvm_type(c, obj_ast->inner);
+			base_ptr = codegen_expr(c, obj);
+			total_len = LLVMConstInt(i64_t, 0x7FFFFFFF, 0);
+		} else {
+			LLVMValueRef obj_val = codegen_expr(c, obj);
+			LLVMTypeRef val_t = LLVMTypeOf(obj_val);
+			if (LLVMGetTypeKind(val_t) == LLVMStructTypeKind) {
+				base_ptr = LLVMBuildExtractValue(c->builder, obj_val, 0, "slice_base");
+				total_len = LLVMBuildExtractValue(c->builder, obj_val, 1, "slice_len");
+				elem_t = LLVMGetElementType(LLVMTypeOf(base_ptr));
+			} else if (LLVMGetTypeKind(val_t) == LLVMPointerTypeKind) {
+				base_ptr = obj_val;
+				elem_t = LLVMGetElementType(val_t);
+				total_len = LLVMConstInt(i64_t, 0x7FFFFFFF, 0);
+			}
+		}
+
+		if (!elem_t)
+			elem_t = LLVMInt32TypeInContext(ctx);
+
+		LLVMValueRef end_val = NULL;
+		if (n->data.slice_index.end) {
+			end_val = codegen_expr(c, n->data.slice_index.end);
+			end_val = coerce_value(c, end_val, n->data.slice_index.end->data_type, i64_t, NULL);
+		} else {
+			end_val = total_len;
+		}
+
+		LLVMValueRef slice_len = LLVMBuildSub(c->builder, end_val, start_val, "slice_len_raw");
+		if (n->data.slice_index.is_inclusive) {
+			slice_len = LLVMBuildAdd(c->builder, slice_len, LLVMConstInt(i64_t, 1, 0), "slice_len_inc");
+		}
+
+		LLVMValueRef sub_data = LLVMBuildGEP2(c->builder, elem_t, base_ptr, &start_val, 1, "sub_slice_ptr");
+
+		LLVMTypeRef ptr_elem_t = LLVMPointerType(elem_t, 0);
+		LLVMTypeRef ret_slice_t = LLVMStructTypeInContext(ctx, (LLVMTypeRef[]){ ptr_elem_t, i64_t }, 2, 0);
+		LLVMValueRef res_slice = LLVMGetUndef(ret_slice_t);
+		res_slice = LLVMBuildInsertValue(c->builder, res_slice, sub_data, 0, "res_data");
+		res_slice = LLVMBuildInsertValue(c->builder, res_slice, slice_len, 1, "res_len");
+		return res_slice;
+	}
+
 	case NODE_VAR_REF:
 	case NODE_MEMBER_ACCESS:
 	case NODE_INDEX: {

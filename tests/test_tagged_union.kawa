@@ -1,0 +1,77 @@
+import stdc;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point
+}
+
+enum Status {
+    Ok(i32),
+    Err(i32)
+}
+
+fn f64 area(Shape s) {
+    return match s {
+        Circle(r) => 3.141592653589793 * r * r,
+        Rect(w, h) => w * h,
+        Point => 0.0,
+        else => -1.0
+    };
+}
+
+fn void print_status(Status st) {
+    match st {
+        Ok(code) => {
+            stdc.printf("Success code=%d\n", code);
+        },
+        Err(err) => {
+            stdc.printf("Failed error=%d\n", err);
+        }
+    }
+}
+
+fn void describe_shape(Shape s) {
+    match s {
+        Circle(r) => {
+            stdc.printf("Shape::Circle(radius=%.2f)\n", r);
+        },
+        Rect(w, h) => {
+            stdc.printf("Shape::Rect(width=%.2f, height=%.2f)\n", w, h);
+        },
+        Point => {
+            stdc.printf("Shape::Point\n");
+        }
+    }
+}
+
+fn i32 main() {
+    let c = Shape.Circle(5.0);
+    let r = Shape.Rect(3.0, 4.0);
+    let p = Shape.Point;
+    let c2 = Circle(2.5);
+
+    describe_shape(c);
+    describe_shape(r);
+    describe_shape(p);
+    describe_shape(c2);
+
+    stdc.printf("area(c) = %.2f\n", area(c));
+    stdc.printf("area(r) = %.2f\n", area(r));
+    stdc.printf("area(p) = %.2f\n", area(p));
+    stdc.printf("area(c2) = %.2f\n", area(c2));
+
+    let s1 = Status.Ok(200);
+    let s2 = Err(404);
+    print_status(s1);
+    print_status(s2);
+
+    let status_val = match s1 {
+        Ok(val) => val * 2,
+        Err(err) => err,
+        else => 0
+    };
+    stdc.printf("status_val = %d\n", status_val);
+
+    return 0;
+}

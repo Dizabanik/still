@@ -1,0 +1,39 @@
+import stdc;
+
+enum Shape {
+    Circle(i64),
+    Rect(i64, i64),
+    Point
+}
+
+fn i64 eval_shape(Shape s, i64 factor) {
+    return match s {
+        Circle(radius) => radius * radius * 3 + factor,
+        Rect(width, height) => width * height + factor * 2,
+        Point => factor
+    };
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 20000000;
+    i64 acc = 0;
+    for (i64 r = 0; r < ROUNDS; r += 1) {
+        let mode = r & 3;
+        Shape s = Shape.Point;
+        if (mode == 0) {
+            s = Shape.Circle((r & 127) + 1);
+        } else if (mode == 1) {
+            s = Shape.Rect((r & 63) + 1, ((r >> 2) & 63) + 1);
+        } else if (mode == 2) {
+            s = Shape.Point;
+        } else {
+            s = Shape.Rect(((r >> 1) & 31) + 2, (r & 31) + 3);
+        }
+
+        let val = eval_shape(s, r & 15);
+        acc = (acc * 33 + val) & 2147483647;
+    }
+
+    stdc.printf("acc=%lld\n", acc);
+    return 0;
+}

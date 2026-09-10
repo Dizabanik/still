@@ -2,6 +2,7 @@
 !tests/*.kawa.out
 .cache/
 .claude/
+.codex/
 .DS_Store
 *.bc
 *.ll

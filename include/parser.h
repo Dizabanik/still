@@ -63,6 +63,14 @@ typedef struct {
 	} generic_impls[32];
 	int generic_impl_count;
 
+	struct {
+		char *name;
+		EnumVariant *variants;
+		int variant_count;
+		ASTNode *node;
+	} enums[64];
+	int enum_count;
+
 	ASTNode ***prog_tail;
 } Parser;
 

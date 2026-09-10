@@ -1,0 +1,71 @@
+import stdc;
+
+fn i32 test_return_order() {
+    i32 x = 10;
+    defer {
+        x = 999;
+        stdc.printf("defer ran, x is now %d\n", x);
+    }
+    return x;
+}
+
+fn void test_block_scope() {
+    stdc.printf("entering outer block\n");
+    {
+        defer stdc.printf("inner defer 1\n");
+        defer stdc.printf("inner defer 2\n");
+        stdc.printf("inside inner block\n");
+    }
+    stdc.printf("exited inner block\n");
+}
+
+fn void test_loop_defer() {
+    for (i in 0..3) {
+        defer stdc.printf("loop defer i=%d\n", i);
+        stdc.printf("loop body i=%d\n", i);
+    }
+}
+
+fn void test_capture_defer() {
+    i32 a = 100;
+    i32 b = 200;
+
+    defer(a) {
+        stdc.printf("captured a=%d\n", a);
+    }
+    defer {
+        stdc.printf("live b=%d\n", b);
+    }
+
+    a = 111;
+    b = 222;
+    stdc.printf("mutated a=%d b=%d\n", a, b);
+}
+
+fn void test_break_continue_defer() {
+    for (i in 0..4) {
+        defer stdc.printf("iter defer %d\n", i);
+        if (i == 1) {
+            stdc.printf("continuing at %d\n", i);
+            continue;
+        }
+        if (i == 2) {
+            stdc.printf("breaking at %d\n", i);
+            break;
+        }
+        stdc.printf("body end %d\n", i);
+    }
+    stdc.printf("loop ended\n");
+}
+
+fn i32 main() {
+    let ret = test_return_order();
+    stdc.printf("test_return_order returned %d\n", ret);
+
+    test_block_scope();
+    test_loop_defer();
+    test_capture_defer();
+    test_break_continue_defer();
+
+    return 0;
+}

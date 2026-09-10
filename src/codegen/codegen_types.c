@@ -229,6 +229,52 @@ int type_is_signed(KawaCompiler *c, Type *t) {
 	return kind_is_signed_int(t->kind);
 }
 
+ASTNode *find_enum_decl(KawaCompiler *c, const char *name) {
+	if (!name || !c || !c->program_root)
+		return NULL;
+	for (ASTNode *s = c->program_root->next; s; s = s->next) {
+		if (s->type == NODE_ENUM_DECL && s->data.enum_decl.name &&
+			strcmp(s->data.enum_decl.name, name) == 0)
+			return s;
+	}
+	return NULL;
+}
+
+EnumVariant *find_enum_variant(ASTNode *enum_decl, const char *variant_name) {
+	if (!enum_decl || !variant_name)
+		return NULL;
+	for (EnumVariant *v = enum_decl->data.enum_decl.variants; v; v = v->next) {
+		if (strcmp(v->name, variant_name) == 0)
+			return v;
+	}
+	return NULL;
+}
+
+int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
+	ASTNode *en = find_enum_decl(c, name);
+	if (!en)
+		return 1;
+	int max_words = 0;
+	for (EnumVariant *v = en->data.enum_decl.variants; v; v = v->next) {
+		int words = 0;
+		for (int i = 0; i < v->payload_count; i++) {
+			Type *pt = v->payload_types[i];
+			if (!pt) continue;
+			if (pt->kind == TYPE_SLICE)
+				words += 2;
+			else if (pt->kind == TYPE_ARRAY) {
+				int elem_words = (pt->inner && pt->inner->kind == TYPE_SLICE) ? 2 : 1;
+				words += (int)(pt->array_len * elem_words);
+			} else {
+				words += 1;
+			}
+		}
+		if (words > max_words)
+			max_words = words;
+	}
+	return max_words > 0 ? max_words : 1;
+}
+
 // Map a Type* to an LLVMTypeRef. Sets t->is_signed as a side effect for
 // integer kinds (so callers can read sign without re-checking the kind).
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
@@ -381,6 +427,23 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		if (alias_target)
 			return get_llvm_type(c, alias_target);
 		return LLVMInt32TypeInContext(c->context);
+	}
+
+	case TYPE_ENUM: {
+		if (!t->name)
+			return LLVMInt64TypeInContext(c->context);
+		char enum_struct_name[256];
+		snprintf(enum_struct_name, sizeof(enum_struct_name), "enum.%s", t->name);
+		LLVMTypeRef enum_t = LLVMGetTypeByName(c->module, enum_struct_name);
+		if (enum_t)
+			return enum_t;
+		int max_words = get_enum_max_payload_words(c, t->name);
+		LLVMTypeRef fields[2];
+		fields[0] = LLVMInt64TypeInContext(c->context); // tag
+		fields[1] = LLVMArrayType(LLVMInt64TypeInContext(c->context), max_words > 0 ? max_words : 1);
+		enum_t = LLVMStructCreateNamed(c->context, enum_struct_name);
+		LLVMStructSetBody(enum_t, fields, 2, 0);
+		return enum_t;
 	}
 
 	default:

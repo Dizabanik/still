@@ -120,6 +120,93 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 	c->current_ret_type = saved_ret;
 }
 
+static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
+	const char *enum_name = en->data.enum_decl.name;
+	Type en_type = {0};
+	en_type.kind = TYPE_ENUM;
+	en_type.name = (char *)enum_name;
+	LLVMTypeRef llvm_en_type = get_llvm_type(c, &en_type);
+
+	for (EnumVariant *ev = en->data.enum_decl.variants; ev; ev = ev->next) {
+		char mangled[256];
+		snprintf(mangled, sizeof(mangled), "%s_%s", enum_name, ev->name);
+
+		LLVMTypeRef param_ts[16];
+		for (int i = 0; i < ev->payload_count; i++) {
+			param_ts[i] = get_llvm_type(c, ev->payload_types[i]);
+		}
+		LLVMTypeRef fn_t = LLVMFunctionType(llvm_en_type, param_ts, ev->payload_count, 0);
+
+		// Emit qualified constructor: Shape_Circle
+		LLVMValueRef fn = LLVMGetNamedFunction(c->module, mangled);
+		if (!fn) {
+			fn = LLVMAddFunction(c->module, mangled, fn_t);
+			LLVMSetLinkage(fn, LLVMInternalLinkage);
+			unsigned ai_id = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
+			LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
+
+			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
+			LLVMBasicBlockRef entry = LLVMAppendBasicBlock(fn, "entry");
+			LLVMPositionBuilderAtEnd(c->builder, entry);
+
+			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
+			LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 0, "tag_ptr");
+			LLVMBuildStore(c->builder, LLVMConstInt(LLVMInt64TypeInContext(c->context), (unsigned long long)ev->tag, 0), tag_ptr);
+
+			if (ev->payload_count > 0) {
+				LLVMValueRef payload_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 1, "payload_raw");
+				LLVMTypeRef payload_struct_t = LLVMStructTypeInContext(c->context, param_ts, ev->payload_count, 0);
+				LLVMValueRef typed_payload = LLVMBuildPointerCast(c->builder, payload_ptr,
+					LLVMPointerType(payload_struct_t, 0), "typed_payload");
+				for (int i = 0; i < ev->payload_count; i++) {
+					LLVMValueRef param_val = LLVMGetParam(fn, i);
+					LLVMValueRef fld_ptr = LLVMBuildStructGEP2(c->builder, payload_struct_t, typed_payload, i, "fld_ptr");
+					LLVMBuildStore(c->builder, param_val, fld_ptr);
+				}
+			}
+
+			LLVMValueRef res = LLVMBuildLoad2(c->builder, llvm_en_type, alloca_s, "res");
+			LLVMBuildRet(c->builder, res);
+			if (prev_bb)
+				LLVMPositionBuilderAtEnd(c->builder, prev_bb);
+		}
+
+		// Also emit unqualified alias if not already defined
+		LLVMValueRef bare_fn = LLVMGetNamedFunction(c->module, ev->name);
+		if (!bare_fn) {
+			bare_fn = LLVMAddFunction(c->module, ev->name, fn_t);
+			LLVMSetLinkage(bare_fn, LLVMInternalLinkage);
+			unsigned ai_id = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
+			LLVMAddAttributeAtIndex(bare_fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
+
+			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
+			LLVMBasicBlockRef entry = LLVMAppendBasicBlock(bare_fn, "entry");
+			LLVMPositionBuilderAtEnd(c->builder, entry);
+
+			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
+			LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 0, "tag_ptr");
+			LLVMBuildStore(c->builder, LLVMConstInt(LLVMInt64TypeInContext(c->context), (unsigned long long)ev->tag, 0), tag_ptr);
+
+			if (ev->payload_count > 0) {
+				LLVMValueRef payload_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 1, "payload_raw");
+				LLVMTypeRef payload_struct_t = LLVMStructTypeInContext(c->context, param_ts, ev->payload_count, 0);
+				LLVMValueRef typed_payload = LLVMBuildPointerCast(c->builder, payload_ptr,
+					LLVMPointerType(payload_struct_t, 0), "typed_payload");
+				for (int i = 0; i < ev->payload_count; i++) {
+					LLVMValueRef param_val = LLVMGetParam(bare_fn, i);
+					LLVMValueRef fld_ptr = LLVMBuildStructGEP2(c->builder, payload_struct_t, typed_payload, i, "fld_ptr");
+					LLVMBuildStore(c->builder, param_val, fld_ptr);
+				}
+			}
+
+			LLVMValueRef res = LLVMBuildLoad2(c->builder, llvm_en_type, alloca_s, "res");
+			LLVMBuildRet(c->builder, res);
+			if (prev_bb)
+				LLVMPositionBuilderAtEnd(c->builder, prev_bb);
+		}
+	}
+}
+
 void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	c->program_root = root; // comptime fn lookup
 	ASTNode *cur = root->next;
@@ -158,6 +245,13 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 		register_struct(c, scanner->data.struct_decl.name, struct_t,
 						scanner->data.struct_decl.fields);
+	}
+
+	// Pass 2.5: Emit enum types and constructor functions
+	for (ASTNode *scanner = cur; scanner; scanner = scanner->next) {
+		if (scanner->type == NODE_ENUM_DECL) {
+			emit_enum_constructors(c, scanner);
+		}
 	}
 
 	// Function overloading: find bare names declared more than once so

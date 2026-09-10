@@ -1,0 +1,23 @@
+defer ran, x is now 999
+test_return_order returned 10
+entering outer block
+inside inner block
+inner defer 2
+inner defer 1
+exited inner block
+loop body i=0
+loop defer i=0
+loop body i=1
+loop defer i=1
+loop body i=2
+loop defer i=2
+mutated a=111 b=222
+live b=222
+captured a=100
+body end 0
+iter defer 0
+continuing at 1
+iter defer 1
+breaking at 2
+iter defer 2
+loop ended

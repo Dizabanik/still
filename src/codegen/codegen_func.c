@@ -221,7 +221,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 		// Falling off the end still runs deferred statements first.
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
 			for (DeferFrame *d = c->defer_stack; d; d = d->next)
-				codegen_stmt(c, d->stmt);
+				run_defer_frame(c, d);
 			if (LLVMGetTypeKind(ret_t) == LLVMVoidTypeKind)
 				LLVMBuildRetVoid(c->builder);
 			else

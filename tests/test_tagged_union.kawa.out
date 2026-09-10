@@ -1,0 +1,11 @@
+Shape::Circle(radius=5.00)
+Shape::Rect(width=3.00, height=4.00)
+Shape::Point
+Shape::Circle(radius=2.50)
+area(c) = 78.54
+area(r) = 12.00
+area(p) = 0.00
+area(c2) = 19.63
+Success code=200
+Failed error=404
+status_val = 400
