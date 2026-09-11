@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "error\\[E0002\\].*missing_name"
+}

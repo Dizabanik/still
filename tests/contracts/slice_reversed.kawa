@@ -1,0 +1,1 @@
+fn i32 main() { [2]i32 a = {1,2}; []i32 s = a[2..1]; println("{s.len}"); return 0; }

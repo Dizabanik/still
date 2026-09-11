@@ -1,0 +1,12 @@
+{
+  "kind": "ir",
+  "optimizations": [
+    0
+  ],
+  "flags": [],
+  "xfail": {
+    "phase": "ir",
+    "pattern": "expected string not found",
+    "reason": "DEFAULT-SAFETY: bounds checks are not enabled by default."
+  }
+}

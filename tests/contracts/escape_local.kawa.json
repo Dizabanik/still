@@ -1,0 +1,8 @@
+{
+  "kind": "reject",
+  "diagnostic": "error\\[E\\d+\\].*(escape|lifetime|local)",
+  "xfail": {
+    "phase": "acceptance",
+    "reason": "LIFETIME: a local address may escape inside an aggregate."
+  }
+}

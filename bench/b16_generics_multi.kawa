@@ -29,7 +29,7 @@ fn i32 main() {
         let a = p.get_first();
         let b = p.get_second();
         let na = (a ^ (r * 16777619)) & 2147483647;
-        let nb = (b * 31 + (i32)(r & 255)) ^ (i32)(a & 65535);
+        let nb = (i32)(((((i64)b) * 31 + (r & 255)) ^ (a & 65535)) & 65535);
         p = Pair(i64, i32).new(na, nb).swap().swap();
         acc = (acc + p.get_first() + (i64)p.get_second()) & 2147483647;
     }

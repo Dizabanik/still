@@ -29,7 +29,7 @@ fn i32 main() {
         b_i.put(next_i);
 
         let vw = b_w.get();
-        let next_w = (vw * 31 + (i32)(r & 255)) ^ (i32)(v & 65535);
+        let next_w = (i32)(((((i64)vw) * 31 + (r & 255)) ^ (v & 65535)) & 65535);
         b_w.put(next_w);
     }
 

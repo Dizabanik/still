@@ -1,0 +1,1 @@
+fn i32 main() { println("{std.process.arg_count()}"); str a = std.process.arg_at(1); str b = std.process.arg_at(2); println("{a}|{b}|{a.len}|{b.len}"); return 0; }

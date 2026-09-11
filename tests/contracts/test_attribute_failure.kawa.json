@@ -1,0 +1,9 @@
+{
+  "kind": "run",
+  "flags": [
+    "--bounds-check=safe",
+    "--test"
+  ],
+  "stdout": "",
+  "exit": 9
+}

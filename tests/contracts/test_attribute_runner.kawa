@@ -1,0 +1,6 @@
+#[test]
+fn check_value() { if (6 * 7 != 42) { std.process.exit(1); } }
+#[ignore]
+#[test]
+fn ignored() { std.process.exit(8); }
+fn i32 main() { println("wrong entry"); return 0; }

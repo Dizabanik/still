@@ -29,18 +29,18 @@ static int32_t validate(uint64_t i, ParseErr *err) {
 
 int main(void) {
     int64_t ok_count = 0;
-    int32_t acc = 0;
+    int64_t acc = 0;
     for (int64_t i = 0; i < N; i++) {
         uint32_t x = (uint32_t)(i * 2654435761u);
         ParseErr e;
         int32_t rc = validate(i, &e);
         if (rc == 0) {
-            acc += (int32_t)x;
+            acc = (acc + (int64_t)x) & 2147483647;
             ok_count++;
         } else {
-            acc -= e.code * e.pos;
+            acc = (acc - (int64_t)e.code * e.pos) & 2147483647;
         }
     }
-    printf("ok=%d acc=%d\n", (int32_t)ok_count, acc);
+    printf("ok=%d acc=%lld\n", (int32_t)ok_count, (long long)acc);
     return 0;
 }

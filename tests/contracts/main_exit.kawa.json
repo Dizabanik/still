@@ -1,0 +1,10 @@
+{
+  "kind": "run",
+  "exit": 7,
+  "stdout": "",
+  "xfail": {
+    "phase": "exit",
+    "pattern": "exit=0",
+    "reason": "MAIN-EXIT: synthesized entry wrapper discards the user return code."
+  }
+}

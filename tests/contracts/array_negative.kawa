@@ -1,0 +1,1 @@
+fn i32 main() { [2]i32 a = {10,20}; i64 i = -1; println("{a[i]}"); return 0; }

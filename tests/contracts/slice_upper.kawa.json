@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "kawa: trap: slice index out of bounds"
+}

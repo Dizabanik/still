@@ -1,0 +1,7 @@
+tuple indexing: 10 20
+tuple underscore: 10 20
+divmod: 4 3
+minmax: 42 100
+sum: 40
+split3: 7 14 21
+explicit: 88 99

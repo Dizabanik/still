@@ -1,0 +1,9 @@
+{
+  "kind": "trap",
+  "diagnostic": "kawa: trap: .*bounds",
+  "xfail": {
+    "phase": "trap",
+    "pattern": "exit=0",
+    "reason": "SLICE-RANGE: reversed slice construction is unchecked."
+  }
+}

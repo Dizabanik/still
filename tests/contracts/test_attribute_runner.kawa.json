@@ -1,0 +1,8 @@
+{
+  "kind": "run",
+  "flags": [
+    "--bounds-check=safe",
+    "--test"
+  ],
+  "stdout": "PASS check_value\n"
+}

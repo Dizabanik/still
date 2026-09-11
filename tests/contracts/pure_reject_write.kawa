@@ -1,0 +1,2 @@
+pure fn i32 write(i32* p) { *p = 42; return *p; }
+fn i32 main() { return 0; }

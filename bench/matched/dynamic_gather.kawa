@@ -1,0 +1,23 @@
+import stdc;
+// Inputs are runtime decimal integers: iterations, seed, active length (1..4096).
+fn i64 input(i32 arg) {
+    // arg_at currently returns a raw C string; the UTF-8 view API has a separate failing contract.
+    char* text = std.process.arg_at(arg);
+    i64 value = 0;
+    for (i64 i = 0; text[i] != 0; i += 1) { value = value * 10 + ((i64)text[i]) - 48; }
+    return value;
+}
+
+fn i32 main() {
+    i64 rounds=input(1); i64 state=input(2); i64 n=input(3);
+    [4096]i64 data;
+    for (i64 i=0; i<4096; i+=1) { data[i]=(i*17+state)&65535; }
+    []i64 view=data[0..n]; i64 acc=0;
+    for (i64 r=0; r<rounds; r+=1) {
+        state=(state*1103515245+12345)&2147483647;
+        i64 index=state%n;
+        view[index]=(view[index]*3+r)&65535;
+        acc=(acc+view[index])&2147483647;
+    }
+    println("{acc} {state}"); return 0;
+}

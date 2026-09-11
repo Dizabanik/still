@@ -1,0 +1,2 @@
+struct P { i32 x; }
+fn i32 main() { P p = {1}; return p.missing; }

@@ -1,0 +1,530 @@
+{
+  "schema_version": 1,
+  "benchmarks": [
+    {
+      "name": "runtime_mix",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/runtime_mix.kawa",
+        "c": "matched/runtime_mix.c",
+        "rust": "matched/runtime_mix.rs"
+      },
+      "contract": "Scalar dependent recurrence; bounded signed i64 arithmetic; zero kernel allocations; runtime seed and iterations.",
+      "oracle": "runtime_mix",
+      "cases": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          65535
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          63,
+          17
+        ],
+        [
+          64,
+          99
+        ],
+        [
+          65,
+          123
+        ],
+        [
+          1025,
+          255
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345
+      ],
+      "quick_args": [
+        10000,
+        12345
+      ]
+    },
+    {
+      "name": "dynamic_gather",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/dynamic_gather.kawa",
+        "c": "matched/dynamic_gather.c",
+        "rust": "matched/dynamic_gather.rs"
+      },
+      "contract": "Fully initialized 4096-slot i64 stack buffer, active-length checked random read/modify/write; identical LCG and bounds contract; zero kernel allocations.",
+      "oracle": "dynamic_gather",
+      "cases": [
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          2,
+          65535,
+          3
+        ],
+        [
+          17,
+          42,
+          17
+        ],
+        [
+          63,
+          17,
+          63
+        ],
+        [
+          64,
+          99,
+          64
+        ],
+        [
+          65,
+          123,
+          65
+        ],
+        [
+          1025,
+          255,
+          4096
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345,
+        4096
+      ],
+      "quick_args": [
+        10000,
+        12345,
+        4096
+      ]
+    },
+    {
+      "name": "indexed_graph",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/indexed_graph.kawa",
+        "c": "matched/indexed_graph.c",
+        "rust": "matched/indexed_graph.rs"
+      },
+      "contract": "4096 initialized inline {i64 next,i64 value} nodes; index-based mutable graph walk, not yet safe pointers; fixed-capacity bounds; zero kernel allocations.",
+      "oracle": "indexed_graph",
+      "cases": [
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          2,
+          65535,
+          3
+        ],
+        [
+          17,
+          42,
+          17
+        ],
+        [
+          63,
+          17,
+          63
+        ],
+        [
+          64,
+          99,
+          64
+        ],
+        [
+          65,
+          123,
+          65
+        ],
+        [
+          1025,
+          255,
+          4096
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345,
+        4096
+      ],
+      "quick_args": [
+        10000,
+        12345,
+        4096
+      ]
+    },
+    {
+      "name": "overlap_views",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/overlap_views.kawa",
+        "c": "matched/overlap_views.c",
+        "rust": "matched/overlap_views.rs"
+      },
+      "contract": "Sequential overlapping reads/writes, identical storage and update order; Rust uses one mutable slice; zero kernel allocations.",
+      "oracle": "overlap_views",
+      "cases": [
+        [
+          0,
+          0,
+          2
+        ],
+        [
+          1,
+          1,
+          2
+        ],
+        [
+          2,
+          65535,
+          3
+        ],
+        [
+          17,
+          42,
+          17
+        ],
+        [
+          63,
+          17,
+          63
+        ],
+        [
+          64,
+          99,
+          64
+        ],
+        [
+          65,
+          123,
+          65
+        ],
+        [
+          1025,
+          255,
+          4096
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345,
+        4096
+      ],
+      "quick_args": [
+        10000,
+        12345,
+        4096
+      ]
+    },
+    {
+      "name": "matrix4",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/matrix4.kawa",
+        "c": "matched/matrix4.c",
+        "rust": "matched/matrix4.rs"
+      },
+      "contract": "Explicit 4x4 i64 matrix/vector recurrence with fixed output buffer; bounded integer arithmetic; no BLAS/fast-math/allocation.",
+      "oracle": "matrix4",
+      "cases": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          65535
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          63,
+          17
+        ],
+        [
+          64,
+          99
+        ],
+        [
+          65,
+          123
+        ],
+        [
+          1025,
+          255
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345
+      ],
+      "quick_args": [
+        10000,
+        12345
+      ]
+    },
+    {
+      "name": "ring_pipeline",
+      "suite": "matched",
+      "sources": {
+        "kawa": "matched/ring_pipeline.kawa",
+        "c": "matched/ring_pipeline.c",
+        "rust": "matched/ring_pipeline.rs"
+      },
+      "contract": "Three cap-64 batch buffers, one thread, identical stage/drain order; scheduler-free baseline, not a measurement of brew/channel overhead.",
+      "oracle": "ring_pipeline",
+      "cases": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          65535
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          63,
+          17
+        ],
+        [
+          64,
+          99
+        ],
+        [
+          65,
+          123
+        ],
+        [
+          1025,
+          255
+        ]
+      ],
+      "timing_args": [
+        10000000,
+        12345
+      ],
+      "quick_args": [
+        10000,
+        12345
+      ]
+    },
+    {
+      "name": "b10_assoc_const",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b10_assoc_const.kawa",
+        "c": "b10_assoc_const.c",
+        "rust": "b10_assoc_const.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b11_tagged_union",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b11_tagged_union.kawa",
+        "c": "b11_tagged_union.c",
+        "rust": "b11_tagged_union.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b12_range_slice",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b12_range_slice.kawa",
+        "c": "b12_range_slice.c",
+        "rust": "b12_range_slice.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b13_bounds",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b13_bounds.kawa",
+        "c": "b13_bounds.c",
+        "rust": "b13_bounds.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b14_format",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b14_format.kawa",
+        "c": "b14_format.c",
+        "rust": "b14_format.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Different formatting/buffering libraries; includes output pipe costs; implementation comparison only."
+    },
+    {
+      "name": "b15_tuples",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b15_tuples.kawa",
+        "c": "b15_tuples.c",
+        "rust": "b15_tuples.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b16_generics_multi",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b16_generics_multi.kawa",
+        "c": "b16_generics_multi.c",
+        "rust": "b16_generics_multi.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
+    },
+    {
+      "name": "b1_hash",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b1_hash.kawa",
+        "c": "b1_hash.c",
+        "rust": "b1_hash.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b2_mem",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b2_mem.kawa",
+        "c": "b2_mem.c",
+        "rust": "b2_mem.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b3_particles",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b3_particles.kawa",
+        "c": "b3_particles.c",
+        "rust": "b3_particles.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Printed floating-point accumulator uses an explicit 2e-6 absolute tolerance, not byte equality.",
+      "comparison": {
+        "kind": "numeric",
+        "pattern": "acc=(-?[0-9]+\\.[0-9]{6})\\n",
+        "abs_tolerance": 2e-06,
+        "rel_tolerance": 0.0,
+        "reason": "Absolute agreement within two units of the last printed decimal; FP contraction/rounding differ between historical implementations. Not byte-identical or strict-FP parity."
+      }
+    },
+    {
+      "name": "b4_reductions",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b4_reductions.kawa",
+        "c": "b4_reductions.c",
+        "rust": "b4_reductions.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Loop-invariant work may be hoisted; do not interpret as repeated memory bandwidth."
+    },
+    {
+      "name": "b5_strings",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b5_strings.kawa",
+        "c": "b5_strings.c",
+        "rust": "b5_strings.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "b6_chan",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b6_chan.kawa",
+        "c": "b6_chan.c",
+        "rust": "b6_chan.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Different scheduling: Kawa coroutines, C ucontext, Rust threads; implementation comparison only. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
+    },
+    {
+      "name": "b7_errors",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b7_errors.kawa",
+        "c": "b7_errors.c",
+        "rust": "b7_errors.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
+    },
+    {
+      "name": "b8_generics",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b8_generics.kawa",
+        "c": "b8_generics.c",
+        "rust": "b8_generics.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
+    },
+    {
+      "name": "b9_destructure",
+      "suite": "historical",
+      "sources": {
+        "kawa": "b9_destructure.kawa",
+        "c": "b9_destructure.c",
+        "rust": "b9_destructure.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking."
+    },
+    {
+      "name": "bench2",
+      "suite": "historical",
+      "sources": {
+        "kawa": "bench2.kawa",
+        "c": "bench2.c",
+        "rust": "bench2.rs"
+      },
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Loop-invariant work may be hoisted; do not interpret as repeated memory bandwidth."
+    }
+  ]
+}

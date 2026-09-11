@@ -30,7 +30,7 @@ fn main() {
         b_i.put(next_i);
 
         let vw = b_w.get();
-        let next_w = (vw.wrapping_mul(31).wrapping_add((r & 255) as i32)) ^ ((v & 65535) as i32);
+        let next_w = ((((vw as i64) * 31 + (r & 255)) ^ (v & 65535)) & 65535) as i32;
         b_w.put(next_w);
     }
 

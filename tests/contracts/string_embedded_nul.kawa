@@ -1,0 +1,1 @@
+fn i32 main() { str a = "a\0b"; str b = "a\0c"; println("{a.len}"); if (a == b) { println("wrong"); } else { println("different"); } return 0; }

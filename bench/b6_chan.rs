@@ -10,7 +10,7 @@ const CAP: usize = 64;
 
 #[inline]
 fn step(v: i64) -> i64 {
-    (v.wrapping_mul(3).wrapping_add(1)) ^ i64::MIN
+    (v * 3 + 1) & 2147483647
 }
 
 fn main() {

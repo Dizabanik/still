@@ -7,7 +7,7 @@ chan<i64> c4 = make_chan(64);
 const i64 N = 2000000;
 
 pure fn i64 step(i64 v) {
-    return (v * 3 + 1) ^ 9223372036854775808;
+    return (v * 3 + 1) & 2147483647;
 }
 
 fn i32 main() {

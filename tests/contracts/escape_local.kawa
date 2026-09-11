@@ -1,0 +1,3 @@
+struct Holder { i32* p; }
+fn Holder escape() { i32 x = 42; Holder h = { .p = &x }; return h; }
+fn i32 main() { return 0; }

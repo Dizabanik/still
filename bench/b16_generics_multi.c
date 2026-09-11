@@ -43,7 +43,7 @@ int main(void) {
         int64_t a = Pair_i64_i32_get_first(p);
         int32_t b = Pair_i64_i32_get_second(p);
         int64_t na = (a ^ (r * 16777619LL)) & 2147483647LL;
-        int32_t nb = (b * 31 + (int32_t)(r & 255)) ^ (int32_t)(a & 65535);
+        int32_t nb = (int32_t)((((int64_t)b * 31 + (r & 255)) ^ (a & 65535)) & 65535);
         p = Pair_i32_i64_swap(Pair_i64_i32_swap(Pair_i64_i32_new(na, nb)));
         acc = (acc + Pair_i64_i32_get_first(p) + (int64_t)Pair_i64_i32_get_second(p)) & 2147483647LL;
     }

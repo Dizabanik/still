@@ -1,0 +1,1 @@
+fn i32 main() { u32 a = 4294967295; u32 b = 1; u32 c = a + b; u32 d = c - b; u32 e = d * d; println("{c} {d} {e}"); return 0; }

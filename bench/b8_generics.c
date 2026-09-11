@@ -46,7 +46,7 @@ int main(void) {
         Box_i64_put(&b_i, next_i);
 
         int32_t vw = Box_i32_get(b_w);
-        int32_t next_w = (int32_t)((uint32_t)vw * 31U + (uint32_t)(r & 255)) ^ (int32_t)(v & 65535);
+        int32_t next_w = (int32_t)((((int64_t)vw * 31 + (r & 255)) ^ (v & 65535)) & 65535);
         Box_i32_put(&b_w, next_w);
     }
 

@@ -1,0 +1,3 @@
+i32 calls = 0;
+fn bool touch() { calls += 1; return true; }
+fn i32 main() { let a = false && touch(); let b = true || touch(); let c = true && touch(); println("{calls}"); return 0; }

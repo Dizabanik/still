@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "kawa: trap: index out of bounds"
+}

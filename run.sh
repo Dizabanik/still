@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build kawac and run the full test suite through lit (golden-output tests +
-# IR-shape FileCheck tests). Equivalent: cmake --build build-cmake &&
+# Build kawac and run semantic, FileCheck, and harness tests through CTest.
+# Equivalent: cmake --build build-cmake &&
 # ctest --test-dir build-cmake.
 set -e
 cd "$(dirname "$0")"
@@ -10,4 +10,4 @@ if [ ! -f build-cmake/CMakeCache.txt ]; then
 fi
 cmake --build build-cmake > /dev/null
 
-exec ./scripts/lit.sh -sv tests/
+exec ctest --test-dir build-cmake --output-on-failure

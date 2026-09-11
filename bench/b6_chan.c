@@ -44,7 +44,7 @@ static int64_t chan_recv(chan_t *c, int self) {
 }
 
 static inline int64_t step(int64_t v) {
-    return (int64_t)((uint64_t)(v * 3 + 1) ^ 0x8000000000000000ULL);
+    return (v * 3 + 1) & 2147483647;
 }
 
 typedef struct {
@@ -79,7 +79,7 @@ static void sink(void) {
 }
 
 int main(void) {
-    static const void (*bodies[4])(void) = {producer, stage2, stage3, sink};
+    static void (*const bodies[4])(void) = {producer, stage2, stage3, sink};
     for (int i = 0; i < 4; i++) {
         getcontext(&ctx[i]);
         ctx[i].uc_stack.ss_sp = stacks[i];

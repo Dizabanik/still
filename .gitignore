@@ -31,3 +31,5 @@ build-cmake/
 tests/.lit_test_times.txt
 tests/__pycache__/
 *.pyc
+scripts/__pycache__/
+scripts/harness_tests/__pycache__/

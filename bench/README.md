@@ -1,50 +1,71 @@
 # Benchmarks
 
-Each `<name>.kawa` is paired with byte-identical-output twins:
-`<name>.c` (C) and `<name>.rs` (Rust). `scripts/bench.py` builds the Kawa
-source, times all three best-of-N, and reports deltas.
+`scripts/bench.py` builds **Kawa, C and Rust from their source files on every invocation**. It never discovers or runs the old `*_c`/`*_rs` executables. An explicit [manifest](manifest.json) selects sources, input sets, workload contracts, and output comparisons.
 
-## Prebuilt twins
+```sh
+# Fast correctness check, including separate untimed C ASan/UBSan builds:
+python3 scripts/bench.py --kawac ./kawac --quick --verify-only --sanitize-c
 
-The harness expects executables named `<prefix>_c` and `<prefix>_rs`
-(e.g. `b5_c`, `b5_rs`) in this directory. Build flags used for the
-recorded numbers:
+# Measurements: run alone on an idle host, with stable power settings.
+python3 scripts/bench.py --kawac ./kawac --runs 9 --warmups 2 --json build/bench.json
 
-    # C twins
-    cc -O3 -march=native -o <prefix>_c <name>.c
-    # b6 needs ucontext on macOS:
-    cc -O3 -march=native -Wno-error=incompatible-function-pointer-types \
-       -o b6_c b6_chan.c
+# If a workload is too short, increase work inside every language's process:
+python3 scripts/bench.py --kawac ./kawac --filter runtime_mix --iterations 50000000
 
-    # Rust twins
-    rustc -C opt-level=3 -C target-cpu=native -C codegen-units=1 \
-          -o <prefix>_rs <name>.rs
+# Historical implementation comparisons, explicitly requested:
+python3 scripts/bench.py --kawac ./kawac --suite historical --verify-only
+python3 scripts/bench.py --list
+```
 
-## Notes
+`cmake --build build-cmake --target bench-verify` runs the quick correctness gate. CI runs this gate, never a speed threshold on shared hardware.
 
-- `b6_chan`: pipeline of brew{} coroutines over cap-64 rings. The Kawa
-  version drains the output ring per scheduler round (`while c4.count > 0`)
-  and marks `step` as `pure fn` so the sent value never spills through a
-  coroutine frame. Twins: ucontext coroutines (C) and std::sync::mpsc +
-  threads (Rust). On macOS swapcontext costs ~870ns (sigprocmask et al.
-  per switch), so Kawa's userspace resumes win big here; on Linux the gap
-  narrows but does not close. At N=1e8 Kawa finishes ~9x ahead.
-- `b8_generics`: generic `Box(T)` (`Box(i64)` and `Box(i32)`) monomorphized
-  into specialized structs and methods in a 50M-iteration loop. Validates
-  zero-overhead generic instantiation and SROA scalarization matching C and Rust.
-- `b9_destructure`: comprehensive destructuring `let` benchmark testing named
-  patterns (`let Point { x, y } = pt;`), renamed patterns (`let Point { x: px, y: py }`),
-  inferred patterns (`let { x, y } = pt;`), positional structs (`let (p1, p2) = p;`),
-  and fixed arrays (`let (a0, a1) = arr;`) in a 50M-iteration loop. Validates
-  that destructuring compiles to direct register/field extractions with zero runtime penalty.
-- `b10_assoc_const`: type-scoped associated constants (`impl Mat4 { const DIM = 4; const SIZE = 16; }`)
-  used for array dimension sizing (`[Mat4.SIZE]i64`) and loop bounds in a 20M-iteration
-  matrix-vector transformation loop.
-- `b11_tagged_union`: tagged union payloads and pattern matching (`enum Shape { Circle(i64), Rect(i64, i64), Point }` and `match s { ... }`) in a 20M-iteration loop. Validates zero-overhead payload packing, inline constructors, and branch switch lowering matching optimized C tagged unions and Rust enums.
-- `b12_range_slice`: range-based loops (`for i in 0..len`), zero-copy slice views (`[]i64 view = buf[start..end]`), slice iteration (`for v in s`), and in-place slice mutation across 50K rounds. Validates zero-cost slice abstractions matching raw pointer slices in C and Rust slices.
-- `b13_bounds`: bounds check elimination via static constant folding and loop-carried range induction analysis in a 51.2M-access array workload. Validates zero-cost array indexing matching unchecked C access and optimized Rust loops.
-- `b14_format`: string interpolation with hoisted arguments, compile-time typed desugaring, 64KB zero-allocation user-space buffered I/O, 2-digit radix-10 integer formatting, exact 128-bit fixed-point float rendering, and zero per-call locks across 1,000,000 formatted lines. Kawa finishes in 0.026s, beating Rust (0.070s) by 2.69x and C (0.122s) by 4.69x with byte-identical output.
-- `b15_tuples`: first-class tuples `(T1, T2, ...)`, multi-return functions, tuple destructuring `let (a, b) = ...`, and positional element access (`.0`, `.1`) across 20M iterations. Validates register-passed multi-return SysV/ARM64 ABI and zero-cost scalarization matching C structs and Rust tuples.
-- `b16_generics_multi`: multi-parameter generic structs (`Pair(A, B)`), generic impl blocks with methods and associated constructors, and method chaining across 20M iterations. Validates monomorphized code generation parity with C templates and Rust generics.
-- Outputs must be byte-identical across the three languages -- that is
-  the correctness check tying the twins together.
+## What the measurements mean
+
+Every new workload has runtime inputs (no source substitution), dependent observable output, multiple boundary/seed cases, and an independent arbitrary-precision Python oracle in `scripts/bench_oracles.py`. Verification includes **the full timed input**, not just small cases. Every warmup and timed run must also produce the expected output. A bad build, wrong output, unexpected stderr, crash, or timeout fails the workload and produces no timing comparison.
+
+The timer measures **whole-process elapsed time**: process launch, argument parsing, initialization, work, formatting, stdout-pipe handling, and teardown. These are not isolated kernel-cycle measurements. Standard-library startup and argument parsing can allocate differently even though the new kernels do not allocate. The zero-allocation descriptions below apply to the kernel, not the entire process.
+
+Each measured round runs each language once, in seeded randomized order. All receive the same number of warmups and samples. Reports contain every sample, median, median absolute deviation (MAD), minimum, maximum, order, inputs, source/binary hashes, compiler versions and paths, build commands/times, executable sizes, and host details. Builds and Python oracles are outside timed intervals. Sanitizer runs are also outside timing.
+
+Durations below 50 ms and MAD above 5% produce warnings. `--quick` is for checking the harness, not publishing speed claims. Increase `--iterations` if startup noise dominates; that scales work *inside* the process, not repeated process launches. There is no universal Kawa-versus-C pass threshold and no aggregate language ranking. Median ratios are descriptive and appear only for the matched suite; they are not statistical significance claims.
+
+Build policies are explicit:
+
+| Implementation | Policy |
+| --- | --- |
+| Kawa | `-O3 --bounds-check=safe`; compiler selects host target; current compiler's O3 pipeline includes its LTO pass. |
+| C | `-O3 -march=native -std=c11 -ffp-contract=off`; dynamic index guards are written explicitly where needed. |
+| Rust | `--edition=2021`, O3, native CPU, one codegen unit, panic abort, overflow checks off; normal indexed accesses retain bounds semantics. |
+
+The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. No checked-pointer or temporal-safety guarantee is claimed for today's compiler. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor currently returns a raw C string, so its setup parser uses that representation explicitly; a compiler contract separately exposes the broken conversion to `str`.
+
+## New matched workloads
+
+| Workload | Measures and controls |
+| --- | --- |
+| `runtime_mix` | Runtime-seeded scalar recurrence, carried dependence, bounded i64 arithmetic. |
+| `dynamic_gather` | Checked random read/modify/write of a fully initialized 4096-slot buffer, with varying active lengths. |
+| `indexed_graph` | Mutation during dependent traversal of inline `{next,value}` nodes. A baseline for future checked pointers, not yet a pointer-safety benchmark. |
+| `overlap_views` | Sequential updates through overlapping views of the same storage. Rust expresses the same update order using one mutable slice. |
+| `matrix4` | Explicit 4×4 integer matrix/vector recurrence with output storage, no implicit temporaries or BLAS. Future shape/aliasing baseline. |
+| `ring_pipeline` | Three capacity-64 batch buffers and an identical one-thread fill/stage/drain schedule. This measures buffer/pipeline work, **not** coroutine or channel overhead. |
+
+Each includes zero/one iteration, multiple seeds, and boundaries such as 63/64/65. Variable-length workloads include small, non-power-of-two and full capacity lengths. Arithmetic oracles use Python integers; the ring checksum uses a closed-form equation independent of the batch implementation. The input domain is nonnegative iterations up to 100 million, seed 0..65535, and active length 1..4096 (at least 2 for overlap).
+
+## Historical suite
+
+The original 17 source triples remain available under `--suite historical`. They are freshly built and correctness-checked too, but have fixed inputs and no independent oracle, so agreement among twins is weaker evidence. Their timings receive no language-ranking ratios.
+
+- `b6_chan` compares cooperative Kawa coroutines, C `ucontext`, and Rust OS threads. Equal output does not make their scheduling costs equivalent. `ring_pipeline` supplies a separate equal-policy baseline; it does not replace this end-to-end implementation comparison.
+- `b14_format` measures different formatting/buffering libraries, including output handling. It is not evidence of a generally faster language.
+- `b4_reductions` and `bench2` contain invariant work that an optimizer may hoist. Do not interpret their source iteration counts as proof of executed loads or memory bandwidth.
+- `b3_particles` uses a declared **2e-6 absolute tolerance** on its six-decimal accumulator, with exact output structure and finite values required. Different historical FP contraction/rounding paths are not byte-identical. The report preserves per-language output hashes and the comparison policy.
+- Signed-overflow hazards in `b6`, `b7`, `b8`, and `b16` have been replaced by bounded arithmetic across all three languages. Their outputs changed intentionally. Old recorded numbers and generated documentation do not describe the revised sources.
+
+All other historical output comparisons are byte-exact. Prefer the matched suite for new comparisons. Do not restore the old timing table without a fresh report and a workload-specific interpretation.
+
+## Future performance acceptance
+
+[future-contracts.json](future-contracts.json) specifies workloads, input distributions, correctness oracles, and required metrics for every proposed language area. It is linked from [future compiler acceptance cases](../tests/future-contracts.json).
+
+The plan includes per-access checked references versus inferred/explicit stability, descriptor reuse, cyclic arenas, resize invalidation, ownership moves/clones, noalloc effects, typed error paths, strings/C conversion, FFI, synchronization/transfer, shaped numerics and compiler tooling. It asks for allocation/check counts and peak memory where relevant, as well as time. Counters and native implementations must exist before those entries become measurements; no fabricated placeholder timings are reported.

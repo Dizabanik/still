@@ -13,7 +13,7 @@ const i64 N = 200000000;
 
 fn i32 main() {
     i64 ok_count = 0;
-    i32 acc = 0;
+    i64 acc = 0;
     for (i64 i = 0; i < N; i += 1) {
         u32 x = ((u32)(i * 2654435761));
         filter {
@@ -29,12 +29,12 @@ fn i32 main() {
                 e2.pos = ((i32)(x >> 8));
                 press err = e2;
             }
-            acc += ((i32)x);
+            acc = (acc + ((i64)x)) & 2147483647;
             ok_count += 1;
         } dregs (err: ParseErr) {
-            acc -= err.code * err.pos;
+            acc = (acc - ((i64)err.code) * ((i64)err.pos)) & 2147483647;
         }
     }
-    printf("ok=%d acc=%d\n", ((i32)ok_count), acc);
+    printf("ok=%d acc=%lld\n", ((i32)ok_count), acc);
     return 0;
 }

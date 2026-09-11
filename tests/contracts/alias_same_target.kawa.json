@@ -1,0 +1,13 @@
+{
+  "kind": "run",
+  "stdout": "2\n",
+  "xfail": {
+    "optimizations": [
+      2,
+      3
+    ],
+    "phase": "output",
+    "pattern": "actual bytes: b'1",
+    "reason": "ALIAS: unconditional noalias incorrectly allows a stale load to be folded."
+  }
+}

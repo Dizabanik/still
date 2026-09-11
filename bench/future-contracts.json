@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "benchmarks": [
+    {
+      "name": "checked_pointer_walk",
+      "status": "planned",
+      "workload": "runtime indexed graph",
+      "inputs": [
+        "1K,64K,1M objects",
+        "random/sequential locality",
+        "1,4,16 aliases/object"
+      ],
+      "oracle": "Exact visited-node sequence and final checksum; stale-access negative controls",
+      "metrics": [
+        "ns/access",
+        "checks/access",
+        "descriptor bytes/object",
+        "reference bytes",
+        "peak RSS"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "owner_lifecycle",
+      "status": "planned",
+      "workload": "explicit allocations and moves",
+      "inputs": [
+        "small/large values",
+        "0/1/8 nested owners",
+        "clone vs move"
+      ],
+      "oracle": "Allocation/free counters and independent object snapshots",
+      "metrics": [
+        "allocations/op",
+        "bytes copied/op",
+        "cleanup latency",
+        "peak RSS"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "arena_churn",
+      "status": "planned",
+      "workload": "cyclic graph arena lifetime",
+      "inputs": [
+        "bulk free",
+        "10/50/90% remove/reinsert",
+        "forced descriptor reuse"
+      ],
+      "oracle": "Graph model, allocator accounting and stale-reference checks",
+      "metrics": [
+        "ns/allocate",
+        "ns/remove",
+        "bulk-free latency",
+        "metadata high-water bytes"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "stable_pointer_walk",
+      "status": "planned",
+      "workload": "same graph as checked_pointer_walk",
+      "inputs": [
+        "checked per access",
+        "inferred stability",
+        "explicit stable scope"
+      ],
+      "oracle": "Identical updates/checksum; malicious callback must fail before invalidation",
+      "metrics": [
+        "ns/access",
+        "checks/access",
+        "guard cost",
+        "code bytes"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "effect_checked_kernel",
+      "status": "planned",
+      "workload": "runtime buffer kernel",
+      "inputs": [
+        "direct calls",
+        "generic helper",
+        "callback path"
+      ],
+      "oracle": "Effect summary checked against allocation/retention/invalidation instrumentation",
+      "metrics": [
+        "kernel time",
+        "compiler analysis time",
+        "allocation count",
+        "retained checks"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "resize_invalidation",
+      "status": "planned",
+      "workload": "growable buffer",
+      "inputs": [
+        "geometric growth",
+        "front/middle removal",
+        "retained views"
+      ],
+      "oracle": "Sequence model and invalidated view set",
+      "metrics": [
+        "growth latency distribution",
+        "bytes moved",
+        "peak memory",
+        "checks/access"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "shared_region_pipeline",
+      "status": "planned",
+      "workload": "equal scheduling and synchronization policy",
+      "inputs": [
+        "1/2/4 threads",
+        "cap 1/64/1024",
+        "cancellation and contention"
+      ],
+      "oracle": "Every message delivered/dropped exactly once with ordered per-producer sequence",
+      "metrics": [
+        "throughput",
+        "p50/p95/p99 latency",
+        "context switches",
+        "allocation count"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "result_propagation",
+      "status": "planned",
+      "workload": "cross-function typed errors",
+      "inputs": [
+        "0/1/10/50/100% errors",
+        "depth 1/4/16",
+        "resource cleanup"
+      ],
+      "oracle": "Independent success/error counts, payload checksum, resource balance",
+      "metrics": [
+        "ns/record",
+        "code bytes",
+        "cleanup count"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "checked_arithmetic",
+      "status": "planned",
+      "workload": "runtime integer kernel",
+      "inputs": [
+        "checked/wrapping/saturating",
+        "i8/i32/i64",
+        "predictable/unpredictable values"
+      ],
+      "oracle": "Arbitrary-precision oracle; trap cases never timed as successful throughput",
+      "metrics": [
+        "ns/op",
+        "retained checks",
+        "code bytes"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "utf8_and_c_strings",
+      "status": "planned",
+      "workload": "identical UTF-8 and byte corpus",
+      "inputs": [
+        "ASCII/multibyte",
+        "embedded zero",
+        "substring C conversion"
+      ],
+      "oracle": "Independent decoder, byte checksum and allocation counter",
+      "metrics": [
+        "bytes/s",
+        "allocations/conversion",
+        "peak bytes"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "ffi_buffer_roundtrip",
+      "status": "planned",
+      "workload": "same audited C fixture",
+      "inputs": [
+        "borrowed/owned buffers",
+        "callback/retention",
+        "small/large structs"
+      ],
+      "oracle": "C fixture checks bytes, layouts, offsets and lifetime events",
+      "metrics": [
+        "call overhead",
+        "marshal bytes",
+        "allocations",
+        "code bytes"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "shaped_numerics",
+      "status": "planned",
+      "workload": "matmul_into and library complex arithmetic",
+      "inputs": [
+        "static/dynamic shapes",
+        "contiguous/strided",
+        "strict/explicit FP permissions"
+      ],
+      "oracle": "High-precision reference with stated abs/relative/ULP tolerances; equal math policy per lane",
+      "metrics": [
+        "GFLOP/s",
+        "temporary bytes",
+        "allocation count",
+        "max numerical error"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    },
+    {
+      "name": "compiler_tools",
+      "status": "planned",
+      "workload": "fixed versioned source corpus",
+      "inputs": [
+        "small/large modules",
+        "generics depth",
+        "cold/warm cache"
+      ],
+      "oracle": "Expected diagnostics, formatting fixed points, artifact hashes and compile/run checks",
+      "metrics": [
+        "check/fmt/build latency",
+        "peak compiler RSS",
+        "code bytes",
+        "cache hit rate"
+      ],
+      "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
+      "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
+    }
+  ]
+}

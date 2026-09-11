@@ -23,17 +23,17 @@ fn validate(i: i64) -> Result<(), ParseErr> {
 
 fn main() {
     let mut ok_count: i64 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0;
     let mut i: i64 = 0;
     while i < N {
         let x = (i as u64).wrapping_mul(2654435761) as u32;
         match validate(i) {
             Ok(()) => {
-                acc = acc.wrapping_add(x as i32);
+                acc = (acc + x as i64) & 2147483647;
                 ok_count += 1;
             }
             Err(e) => {
-                acc = acc.wrapping_sub(e.code.wrapping_mul(e.pos));
+                acc = (acc - (e.code as i64) * (e.pos as i64)) & 2147483647;
             }
         }
         i += 1;

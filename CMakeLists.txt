@@ -60,33 +60,37 @@ target_compile_definitions(kawac_debug PRIVATE KAWA_DEBUG=1)
 target_link_libraries(kawac_debug PRIVATE ${LLVM_LIBS})
 
 enable_testing()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # Layer 1: smoke test -- the compiler builds and compiles its own test suite
 # entry point without crashing.
 add_test(NAME smoke
 	COMMAND ${CMAKE_SOURCE_DIR}/scripts/smoke.sh $<TARGET_FILE:kawac>)
 
-# Layers 2+ live in tests/ under lit once installed:
-#   golden-output tests (.kawa + .kawa.out), IR-shape FileCheck tests,
-#   and the #[test] harness check. scripts/run_lit.sh wires them up;
-#   ctest picks them up as one lit invocation per directory.
-# lit runner: vendored in tools/ (scripts/setup_lit.sh installs it), with
-# PATH/LLVM-keg fallbacks handled by scripts/lit.sh. KAWAC env points the
-# suite at the just-built binary instead of whatever is in build-cmake/.
-set(ENV{LIT_CMD} ${CMAKE_SOURCE_DIR}/scripts/lit.sh)
+# Both this runner and the optional lit adapter use scripts/test_support.py.
+# No dependency on a particular vendored lit/Python installation.
 add_test(NAME unit
-	COMMAND ${CMAKE_SOURCE_DIR}/scripts/lit.sh -sv
-		--xunit-xml-output=${CMAKE_BINARY_DIR}/unit-results.xml
-		${CMAKE_SOURCE_DIR}/tests)
-set_tests_properties(unit PROPERTIES ENVIRONMENT
-	"KAWAC=$<TARGET_FILE:kawac>")
+	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test.py
+		--kawac $<TARGET_FILE:kawac>
+		--json ${CMAKE_BINARY_DIR}/unit-results.json)
+set_tests_properties(unit PROPERTIES TIMEOUT 600)
 
-find_package(Python3 COMPONENTS Interpreter)
+add_test(NAME harness
+	COMMAND ${Python3_EXECUTABLE} -m unittest discover
+		-s ${CMAKE_SOURCE_DIR}/scripts/harness_tests -v)
 
-# Benchmark: best-of-N timing of bench/*.kawa against their C twins.
+# Benchmarks build every language from source and verify output before timing.
 add_custom_target(bench
 	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench.py
 		--kawac $<TARGET_FILE:kawac>
+	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+	USES_TERMINAL
+	DEPENDS kawac)
+
+add_custom_target(bench-verify
+	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench.py
+		--kawac $<TARGET_FILE:kawac> --quick --verify-only --sanitize-c
+		--json ${CMAKE_BINARY_DIR}/benchmark-verification.json
 	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 	USES_TERMINAL
 	DEPENDS kawac)

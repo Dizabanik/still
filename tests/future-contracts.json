@@ -1,0 +1,440 @@
+{
+  "schema_version": 1,
+  "notice": "Design contracts, not compiled tests. No future case counts as PASS or XFAIL until a concrete syntax and oracle are implemented.",
+  "features": [
+    {
+      "feature": "pointer_identity",
+      "status": "planned",
+      "benchmark": "checked_pointer_walk",
+      "tests": [
+        {
+          "id": "pointer_identity.alias_mutation",
+          "arrange": "Create two references to one initialized object",
+          "action": "Mutate through each reference in source order",
+          "expect": "Both observe the final value; no unconditional noalias."
+        },
+        {
+          "id": "pointer_identity.stale_reference",
+          "arrange": "Keep an alias, destroy its owner",
+          "action": "Dereference the alias",
+          "expect": "Static rejection when evident; otherwise a checked lifetime trap before any object load."
+        },
+        {
+          "id": "pointer_identity.allocation_reuse",
+          "arrange": "Keep a stale alias and force reuse of its descriptor slot and address",
+          "action": "Dereference the old alias",
+          "expect": "Generation mismatch; never observe replacement data."
+        },
+        {
+          "id": "pointer_identity.generation_exhaustion",
+          "arrange": "Use a test allocator with a two-bit generation counter",
+          "action": "Repeatedly allocate/free a reused slot through counter exhaustion",
+          "expect": "Retire the slot or fail allocation; never wrap into a live stale identity."
+        },
+        {
+          "id": "pointer_identity.metadata_lifetime",
+          "arrange": "Keep a reference after its object and arena are destroyed",
+          "action": "Validate the reference",
+          "expect": "No access to reclaimed descriptor memory; clean rejection/trap."
+        },
+        {
+          "id": "pointer_identity.try_access",
+          "arrange": "Hold references to one live and one removed object",
+          "action": "Acquire optional scoped access to each",
+          "expect": "Some for live, None for removed; acquisition protects the entire access interval."
+        }
+      ]
+    },
+    {
+      "feature": "pointer_bounds",
+      "status": "planned",
+      "benchmark": "checked_pointer_walk",
+      "tests": [
+        {
+          "id": "pointer_bounds.arithmetic_extent",
+          "arrange": "Obtain a reference to an array/subobject",
+          "action": "Advance within its permitted extent, to one-past, then dereference one-past",
+          "expect": "In-range operations succeed; one-past dereference fails."
+        },
+        {
+          "id": "pointer_bounds.pointer_overflow",
+          "arrange": "Obtain a one-element reference",
+          "action": "Compute an offset whose byte multiplication overflows",
+          "expect": "Trap/reject before address arithmetic can wrap."
+        },
+        {
+          "id": "pointer_bounds.slice_extent",
+          "arrange": "Create an array and nested slices",
+          "action": "Try negative, reversed, oversized, and valid empty ranges",
+          "expect": "Invalid ranges fail at construction; valid zero-length views remain usable as empty views."
+        },
+        {
+          "id": "pointer_bounds.type_validity",
+          "arrange": "Prepare bytes with invalid alignment or invalid enum/bool representation",
+          "action": "Attempt safe typed access",
+          "expect": "Reject unsafe conversion or validate before exposing the typed value."
+        }
+      ]
+    },
+    {
+      "feature": "ownership",
+      "status": "planned",
+      "benchmark": "owner_lifecycle",
+      "tests": [
+        {
+          "id": "ownership.move_owner",
+          "arrange": "Create one owner and a nonowning alias",
+          "action": "Move the owner, then try to use the old owning variable",
+          "expect": "Old owner rejected; alias remains valid if storage identity did not change."
+        },
+        {
+          "id": "ownership.copy_vs_clone",
+          "arrange": "Create an owning value with nested allocations",
+          "action": "Copy the owner and explicitly clone it",
+          "expect": "Implicit owner copy rejected; explicit clone independent and its allocations reported."
+        },
+        {
+          "id": "ownership.exact_cleanup",
+          "arrange": "Nest owners and defer statements",
+          "action": "Exit via return, break, continue, and error propagation",
+          "expect": "Every resource released exactly once in documented order; no cleanup promise after process abort."
+        },
+        {
+          "id": "ownership.stack_escape",
+          "arrange": "Take a local address and wrap it in nested aggregates",
+          "action": "Return/store it outside its lifetime",
+          "expect": "Reject with escape origin and lifetime end; no implicit heap promotion."
+        }
+      ]
+    },
+    {
+      "feature": "arenas",
+      "status": "planned",
+      "benchmark": "arena_churn",
+      "tests": [
+        {
+          "id": "arenas.cyclic_graph",
+          "arrange": "Create parent/child and self-reference cycles within one arena",
+          "action": "Mutate, traverse, then destroy the arena",
+          "expect": "Traversal works; ownership cycles do not retain allocations; all external refs invalidated."
+        },
+        {
+          "id": "arenas.arena_removal",
+          "arrange": "Create refs to two arena objects",
+          "action": "Remove one object",
+          "expect": "Removed refs become stale; unaffected refs remain valid."
+        },
+        {
+          "id": "arenas.allocation_failure",
+          "arrange": "Use an allocator that fails after a fixed budget",
+          "action": "Allocate an initialized object or clone",
+          "expect": "Explicit failure value; no exposed uninitialized object; no leaks/double drops."
+        }
+      ]
+    },
+    {
+      "feature": "stability",
+      "status": "planned",
+      "benchmark": "stable_pointer_walk",
+      "tests": [
+        {
+          "id": "stability.stable_aliases",
+          "arrange": "Enter a stable scope with multiple aliases",
+          "action": "Update ordinary fields and follow graph edges",
+          "expect": "Allowed; mutation order preserved; lifetime checks may be eliminated only after validation."
+        },
+        {
+          "id": "stability.stable_invalidation",
+          "arrange": "Enter a stable scope",
+          "action": "Free, relocate, remove, resize, or destroy protected storage",
+          "expect": "Reject statically or trap at the invalidating operation before storage changes."
+        },
+        {
+          "id": "stability.reentrant_invalidation",
+          "arrange": "Enter a stable scope and call a callback with another alias",
+          "action": "Callback destroys the protected object",
+          "expect": "Transitive guard prevents invalidation; entry-only checking is insufficient."
+        },
+        {
+          "id": "stability.suspend_boundary",
+          "arrange": "Keep a temporary validated access",
+          "action": "Suspend and allow another task to invalidate storage",
+          "expect": "Disallow spanning the suspension or re-establish validity safely on resume."
+        },
+        {
+          "id": "stability.payload_replacement",
+          "arrange": "Bind a reference into a union payload",
+          "action": "Switch active variant or destroy an owned field",
+          "expect": "Invalidate dependent access or reject; allocation-address stability is insufficient."
+        }
+      ]
+    },
+    {
+      "feature": "effects",
+      "status": "planned",
+      "benchmark": "effect_checked_kernel",
+      "tests": [
+        {
+          "id": "effects.purity_read",
+          "arrange": "Read through a pointer in a side-effect-free function",
+          "action": "Compile and optimize calls around changes to the pointee",
+          "expect": "Reads are reflected in effects; no memory(none) assertion."
+        },
+        {
+          "id": "effects.purity_write",
+          "arrange": "Declare a function pure",
+          "action": "Write through an alias/global or call an impure function",
+          "expect": "Reject with a transitive effect trace."
+        },
+        {
+          "id": "effects.noalloc",
+          "arrange": "Declare a no-allocation boundary",
+          "action": "Call through a helper/generic that allocates",
+          "expect": "Reject; an optimizer accidentally removing one allocation is not a source-level proof."
+        },
+        {
+          "id": "effects.nocapture",
+          "arrange": "Pass a stack reference to a non-escaping parameter",
+          "action": "Store it globally or in a coroutine frame",
+          "expect": "Reject transitive retention; ordinary non-escaping use succeeds."
+        }
+      ]
+    },
+    {
+      "feature": "containers",
+      "status": "planned",
+      "benchmark": "resize_invalidation",
+      "tests": [
+        {
+          "id": "containers.growth_views",
+          "arrange": "Take element and slice views into a vector",
+          "action": "Force growth/compaction/removal",
+          "expect": "Invalidate affected views or reject under stability; document logical identity policy."
+        },
+        {
+          "id": "containers.disjoint_views",
+          "arrange": "Split a slice at each endpoint and an interior point",
+          "action": "Mutate both results, then attempt an overlapping exclusive split",
+          "expect": "Disjoint operations work; exclusive overlap cannot be forged; noalias only on proven paths."
+        }
+      ]
+    },
+    {
+      "feature": "concurrency",
+      "status": "planned",
+      "benchmark": "shared_region_pipeline",
+      "tests": [
+        {
+          "id": "concurrency.thread_confinement",
+          "arrange": "Create a mutable region",
+          "action": "Send a raw mutable reference to another thread",
+          "expect": "Reject without an eligible transfer or shared-region protocol."
+        },
+        {
+          "id": "concurrency.ownership_transfer",
+          "arrange": "Create a self-contained transferable owner",
+          "action": "Send it through a channel and access from sender afterward",
+          "expect": "Sender loses ownership; receiver acquires it; external aliases cannot bypass confinement."
+        },
+        {
+          "id": "concurrency.shared_lock_lifetime",
+          "arrange": "Acquire read/write access through a shared-region lock",
+          "action": "Unlock, then use an escaped access; concurrently remove an object",
+          "expect": "Escaped access rejected; lifetime protection and synchronization both enforced."
+        },
+        {
+          "id": "concurrency.channel_cancel",
+          "arrange": "Create producers with owned resources and a blocked consumer",
+          "action": "Cancel on empty/full channels at every suspension point",
+          "expect": "No lost/double-owned messages, leaked frames, or duplicate cleanup."
+        }
+      ]
+    },
+    {
+      "feature": "errors",
+      "status": "planned",
+      "benchmark": "result_propagation",
+      "tests": [
+        {
+          "id": "errors.option_exhaustive",
+          "arrange": "Create optional live/absent values",
+          "action": "Match without the absent case",
+          "expect": "Compile-time exhaustiveness diagnostic."
+        },
+        {
+          "id": "errors.typed_propagation",
+          "arrange": "Build three helper calls returning distinct success/error payloads",
+          "action": "Propagate success and every failure path",
+          "expect": "Typed return contracts preserved across functions without stack unwinding."
+        },
+        {
+          "id": "errors.error_cleanup",
+          "arrange": "Allocate resources before a propagating call",
+          "action": "Return an error through several scopes",
+          "expect": "LIFO cleanup exactly once; no resource leak; payload preserved."
+        }
+      ]
+    },
+    {
+      "feature": "arithmetic",
+      "status": "planned",
+      "benchmark": "checked_arithmetic",
+      "tests": [
+        {
+          "id": "arithmetic.signed_edges",
+          "arrange": "Create runtime signed values at MIN/MAX",
+          "action": "Add/subtract/multiply beyond range at O0/O2/O3",
+          "expect": "Same checked failure semantics at every optimization level."
+        },
+        {
+          "id": "arithmetic.wrapping_saturating",
+          "arrange": "Use signed and unsigned extrema",
+          "action": "Apply explicit wrapping/saturating operations",
+          "expect": "Matches arbitrary-precision modular/clamped oracle for every width."
+        },
+        {
+          "id": "arithmetic.division_shifts",
+          "arrange": "Prepare zero divisor, MIN/-1 and oversized/negative shift counts",
+          "action": "Evaluate each operation",
+          "expect": "Defined checked behavior; never LLVM poison or accidental hardware signal."
+        },
+        {
+          "id": "arithmetic.conversion_edges",
+          "arrange": "Prepare narrowing integer and finite/NaN/infinite/out-of-range floats",
+          "action": "Convert through checked and explicitly lossy APIs",
+          "expect": "Result/failure follows the specification at representational boundaries."
+        },
+        {
+          "id": "arithmetic.allocation_size",
+          "arrange": "Compute count * element_size near integer limits",
+          "action": "Allocate or construct a slice",
+          "expect": "Overflow fails before allocation; no undersized allocation with oversized view."
+        }
+      ]
+    },
+    {
+      "feature": "text",
+      "status": "planned",
+      "benchmark": "utf8_and_c_strings",
+      "tests": [
+        {
+          "id": "text.utf8_bytes",
+          "arrange": "Prepare multibyte characters, embedded NUL, and invalid UTF-8",
+          "action": "Construct str and bytes, index bytes, iterate characters",
+          "expect": "UTF-8 validity enforced for str; arbitrary bytes allowed; byte/character counts distinct."
+        },
+        {
+          "id": "text.string_ownership",
+          "arrange": "Make a view into an owning string",
+          "action": "Move owner, grow buffer, then drop owner",
+          "expect": "Views follow documented invalidation; no implicit deep copies."
+        },
+        {
+          "id": "text.cstring_conversion",
+          "arrange": "Take a non-terminated substring and text containing NUL",
+          "action": "Pass through safe C-string conversion",
+          "expect": "Termination/lifetime guaranteed or explicit failure; any allocation visible."
+        }
+      ]
+    },
+    {
+      "feature": "ffi",
+      "status": "planned",
+      "benchmark": "ffi_buffer_roundtrip",
+      "tests": [
+        {
+          "id": "ffi.raw_boundary",
+          "arrange": "Construct raw integers, mismatched pointers and forged extents",
+          "action": "Dereference or transmute in safe code",
+          "expect": "Reject; unsafe entry is visible and auditable."
+        },
+        {
+          "id": "ffi.ffi_layout",
+          "arrange": "Export structs, scalars, safe references and C-compatible buffers",
+          "action": "Call in both directions through a compiled C fixture",
+          "expect": "Explicit ABI and widths verified; safe pointer metadata never silently discarded."
+        },
+        {
+          "id": "ffi.ffi_retention",
+          "arrange": "Pass a scoped buffer to C that retains it or calls back",
+          "action": "Return to Kawa and attempt deferred access",
+          "expect": "Wrapper must establish a valid ownership/lifetime contract; annotations alone are insufficient."
+        }
+      ]
+    },
+    {
+      "feature": "numerics",
+      "status": "planned",
+      "benchmark": "shaped_numerics",
+      "tests": [
+        {
+          "id": "numerics.shape_types",
+          "arrange": "Instantiate static matrices with compatible/incompatible dimensions",
+          "action": "Multiply, transpose, and index multidimensional views",
+          "expect": "Static shape errors rejected; dynamic shapes checked before writes."
+        },
+        {
+          "id": "numerics.destination_alias",
+          "arrange": "Prepare disjoint and overlapping input/output matrices",
+          "action": "Call destination-based matmul",
+          "expect": "Documented overlap policy enforced; result matches independent oracle."
+        },
+        {
+          "id": "numerics.hidden_temporary",
+          "arrange": "Prepare large dynamic matrices",
+          "action": "Evaluate chained operations under a noalloc boundary",
+          "expect": "Allocation explicit or rejected; output/temp byte counters match actual execution."
+        },
+        {
+          "id": "numerics.fp_permissions",
+          "arrange": "Use cancellation-sensitive values, signed zero, NaN and infinity",
+          "action": "Enable contraction/reassociation/finite assumptions separately",
+          "expect": "Strict mode matches its rounding contract; each permission affects only its declared scope."
+        },
+        {
+          "id": "numerics.complex_values",
+          "arrange": "Prepare complex zero, unit, conjugate pairs, and extreme magnitudes",
+          "action": "Perform add/multiply/divide/conjugate",
+          "expect": "Library implementation matches high-precision oracle within specified tolerance."
+        }
+      ]
+    },
+    {
+      "feature": "tooling",
+      "status": "planned",
+      "benchmark": "compiler_tools",
+      "tests": [
+        {
+          "id": "tooling.formatter",
+          "arrange": "Prepare valid syntax variants and invalid syntax",
+          "action": "Format twice and parse again",
+          "expect": "Idempotent canonical output; valid semantics preserved; invalid input reported, not silently blessed."
+        },
+        {
+          "id": "tooling.diagnostics",
+          "arrange": "Prepare errors at UTF-8 spans and across imports",
+          "action": "Request text/JSON/explain output",
+          "expect": "Stable codes, valid JSON, correct source spans and nonzero exit on error."
+        },
+        {
+          "id": "tooling.check_only",
+          "arrange": "Prepare valid and invalid multi-module programs",
+          "action": "Run check without a linker",
+          "expect": "No machine-code artifacts or runtime execution; correct exit status."
+        },
+        {
+          "id": "tooling.reproducibility",
+          "arrange": "Build identical inputs in clean workspaces with normalized paths",
+          "action": "Repeat using the same pinned toolchain/settings",
+          "expect": "Identical declared artifacts; all nondeterministic fields accounted for."
+        },
+        {
+          "id": "tooling.optimization_report",
+          "arrange": "Prepare removable/retained bounds, lifetime checks and allocations",
+          "action": "Request optimization explanation",
+          "expect": "Reports agree with emitted IR and instrumentation, including why a check remains."
+        }
+      ]
+    }
+  ]
+}

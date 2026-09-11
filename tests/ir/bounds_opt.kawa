@@ -1,17 +1,9 @@
-// Bounds check policy: in release / safe mode, static constant accesses within
-// array bounds and loop-carried ranges within array length emit NO bounds check trap.
-//
+// Constant in-range access remains check-free with safety explicitly enabled.
+// The argument is unknown at compilation: retain an observable load/result.
 // OPT: 2
-import stdc;
-
-fn i32 main() {
-    [10]i32 arr;
-    for (let i = 0; i < 10; i += 1) {
-        arr[i] = i * 10;
-    }
-    arr[0] = 99;
-    arr[9] = 88;
-    return arr[0] + arr[9];
-}
-
-// CHECK-NOT: kawa_trap
+// FLAGS: --bounds-check=safe
+fn i64 last([16]i64 values) { return values[15]; }
+fn i32 main() { [16]i64 a; for (i64 i=0;i<16;i+=1) { a[i]=i; } println("{last(a)}"); return 0; }
+// CHECK-LABEL: define i64 @last(
+// CHECK-NOT: call void @kawa_trap
+// CHECK: ret i64

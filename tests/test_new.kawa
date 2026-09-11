@@ -32,9 +32,10 @@ fn i32 main() {
     stdc.printf("Car2: %d\n", car2->speed);
     (*car2).create(car2, 5.98);
     stdc.printf("Car2: %d\n", (*car2).speed);
-    stdc.free(car2);
+    // Inspect the pointer-to-pointer while the allocation is still alive.
     Car** p = &car2;
     stdc.printf("Car2: %d\n", (*p)->speed);
 
+    stdc.free(car2);
     return 0;
 }

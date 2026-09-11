@@ -1,0 +1,9 @@
+{
+  "kind": "reject",
+  "diagnostic": "error\\[E0004\\]",
+  "xfail": {
+    "phase": "diagnostic",
+    "pattern": "error\\[E0007\\]: LLVM module verification failed",
+    "reason": "ARITY-DIAG: invalid call reaches LLVM verification instead of E0004."
+  }
+}

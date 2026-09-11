@@ -1,0 +1,7 @@
+arith: 26 14 120 3 2
+bitwise: 4 22 18 32 2
+unary: -20 -1 1 0
+cmp: 1 1 1 1 1 0
+compound arith: 3
+compound bitwise: 21
+generic box op: 125 75

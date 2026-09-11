@@ -31,7 +31,7 @@ fn main() {
         let a = p.get_first();
         let b = p.get_second();
         let na = (a ^ (r.wrapping_mul(16777619))) & 2147483647;
-        let nb = (b.wrapping_mul(31).wrapping_add((r & 255) as i32)) ^ ((a & 65535) as i32);
+        let nb = ((((b as i64) * 31 + (r & 255)) ^ (a & 65535)) & 65535) as i32;
         p = Pair::new(na, nb).swap().swap();
         acc = (acc.wrapping_add(p.get_first()).wrapping_add(p.get_second() as i64)) & 2147483647;
     }
