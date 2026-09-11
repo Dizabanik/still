@@ -1,0 +1,50 @@
+// 1. Multi-return function with prefix tuple return type
+fn (i32, i32) divmod(i32 a, i32 b) {
+    return (a / b, a % b);
+}
+
+// 2. Multi-return function with arrow return type
+fn minmax(i32 a, i32 b) -> (i32, i32) {
+    if (a < b) {
+        return (a, b);
+    }
+    return (b, a);
+}
+
+// 3. Tuple as parameter
+fn i32 sum_pair((i32, i32) pair) {
+    return pair.0 + pair.1;
+}
+
+// 4. Multi-element tuple return
+fn (i32, i32, i32) split3(i32 n) {
+    return (n, n * 2, n * 3);
+}
+
+fn int main() {
+    // Tuple literal and indexing with .0, .1
+    let t = (10, 20);
+    stdc.printf("tuple indexing: %d %d\n", t.0, t.1);
+    stdc.printf("tuple underscore: %d %d\n", t._0, t._1);
+
+    // Multi-return function call and destructuring
+    let (q, r) = divmod(23, 5);
+    stdc.printf("divmod: %d %d\n", q, r);
+
+    let (mn, mx) = minmax(100, 42);
+    stdc.printf("minmax: %d %d\n", mn, mx);
+
+    // Tuple passed to function
+    let s = sum_pair((15, 25));
+    stdc.printf("sum: %d\n", s);
+
+    // 3-tuple destructuring
+    let (a, b, c) = split3(7);
+    stdc.printf("split3: %d %d %d\n", a, b, c);
+
+    // Explicit typed tuple declaration
+    let (i32, i32) explicit_t = (88, 99);
+    stdc.printf("explicit: %d %d\n", explicit_t.0, explicit_t.1);
+
+    return 0;
+}

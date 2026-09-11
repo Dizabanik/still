@@ -1,0 +1,39 @@
+import stdc;
+
+struct Pair(A, B) {
+    A first;
+    B second;
+}
+
+impl(A, B) Pair(A, B) {
+    fn Pair(A, B) new(A f, B s) {
+        return Pair(A, B) { first: f, second: s };
+    }
+    fn A get_first(self) {
+        return self.first;
+    }
+    fn B get_second(self) {
+        return self.second;
+    }
+    fn Pair(B, A) swap(self) {
+        return Pair(B, A) { first: self.second, second: self.first };
+    }
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 20000000;
+    let p = Pair(i64, i32).new(123456789, 42);
+    i64 acc = 0;
+
+    for (i64 r = 0; r < ROUNDS; r += 1) {
+        let a = p.get_first();
+        let b = p.get_second();
+        let na = (a ^ (r * 16777619)) & 2147483647;
+        let nb = (b * 31 + (i32)(r & 255)) ^ (i32)(a & 65535);
+        p = Pair(i64, i32).new(na, nb).swap().swap();
+        acc = (acc + p.get_first() + (i64)p.get_second()) & 2147483647;
+    }
+
+    stdc.printf("acc=%lld a=%lld b=%d\n", acc, p.get_first(), p.get_second());
+    return 0;
+}

@@ -1,0 +1,17 @@
+// Bounds check policy: in release / safe mode, static constant accesses within
+// array bounds and loop-carried ranges within array length emit NO bounds check trap.
+//
+// OPT: 2
+import stdc;
+
+fn i32 main() {
+    [10]i32 arr;
+    for (let i = 0; i < 10; i += 1) {
+        arr[i] = i * 10;
+    }
+    arr[0] = 99;
+    arr[9] = 88;
+    return arr[0] + arr[9];
+}
+
+// CHECK-NOT: kawa_trap

@@ -1,0 +1,34 @@
+// String interpolation desugared to preformatted printf at compile time
+struct User {
+    i32 id;
+    i32 score;
+}
+
+fn i32 compute(i32 x, i32 y) {
+    return x * 10 + y;
+}
+
+fn i32 main() {
+    let acc = 42;
+    let words = 100;
+    let val = 3.14159;
+    let s = "kawa";
+    let u = User { .id = 7, .score = 99 };
+
+    println("acc={acc} words={words}");
+    println("val={val:.2f}");
+    println("val4={val:.4f}");
+    println("hex={acc:x}");
+    println("lead={acc:04d}");
+    println("str={s}");
+    println("calc={compute(3, 4)}");
+    println("user=#{u.id} pts={u.score}");
+    println("escaped: {{acc}} and {acc}");
+    println("100% completed, rate={acc}%");
+    print("partial ");
+    println("line");
+    println(777);
+    println();
+    println("done");
+    return 0;
+}

@@ -86,6 +86,7 @@ typedef struct {
 	// Test mode (--test): @main runs #[test] functions instead of user
 	// main. Collected during the program walk, runner synthesized after.
 	int test_mode;
+	int uses_print;
 	ASTNode *test_fns[256];
 	struct ASTNode *program_root; // for comptime fn lookup
 	int test_fn_count;
@@ -142,6 +143,7 @@ typedef struct {
 
 	LLVMValueRef current_func;
 	LLVMTypeRef current_ret_type;
+	Type *current_ret_node_type;
 
 	// Track the current coroutine handle & promise for use in 'drop'
 	LLVMValueRef current_coro_hdl;
@@ -213,6 +215,21 @@ typedef struct {
 	LLVMTypeRef coro_alloc_type;
 	LLVMValueRef coro_done;
 	LLVMTypeRef coro_done_type;
+
+	// Optimization & code generation flags (IDEAS 4.1, 4.3, 4.4)
+	int enable_lto;
+	const char *pgo_gen;
+	const char *pgo_use;
+	int bounds_check_mode; // 0 = default (debug only), 1 = always, 2 = safe, -1 = never
+	int emit_hash;
+
+	// Loop range tracking for bounds check elimination
+	struct LoopRange {
+		const char *var_name;
+		long long upper_bound;
+		int is_inclusive;
+		struct LoopRange *parent;
+	} *loop_ranges;
 
 } KawaCompiler;
 

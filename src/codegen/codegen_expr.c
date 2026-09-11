@@ -322,6 +322,12 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 							lit_s);
 	}
 
+	case NODE_BLOCK: {
+		for (ASTNode *s = n->data.block.stmts; s; s = s->next)
+			codegen_stmt(c, s);
+		return LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0);
+	}
+
 	case NODE_SIZEOF: {
 		LLVMTypeRef measured = NULL;
 		if (n->data.size_of.type_val)
@@ -893,7 +899,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			// resolution so user-defined sum(x) etc still work.
 		}
 		if (!fn) {
-			if (strcmp(func_name, "printf") == 0) {
+			if ((fn = declare_kawa_runtime_fn(c, func_name)) != NULL) {
+				// Internal Kawa runtime I/O helper
+			} else if (strcmp(func_name, "printf") == 0) {
 				LLVMTypeRef args[] = {
 					LLVMPointerType(LLVMInt8TypeInContext(c->context), 0)};
 				fn = LLVMAddFunction(
@@ -2000,6 +2008,62 @@ static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name) {
 		return LLVMAddFunction(
 			c->module, name,
 			LLVMFunctionType(table[k].ret, table[k].params, table[k].n, 0));
+	}
+	return NULL;
+}
+
+LLVMValueRef declare_kawa_runtime_fn(KawaCompiler *c, const char *name) {
+	if (strncmp(name, "__kawa_", 7) != 0)
+		return NULL;
+	if (LLVMGetNamedFunction(c->module, name))
+		return LLVMGetNamedFunction(c->module, name);
+
+	LLVMContextRef ctx = c->context;
+	LLVMTypeRef void_t = LLVMVoidTypeInContext(ctx);
+	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+	LLVMTypeRef i8 = LLVMInt8TypeInContext(ctx);
+	LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx);
+	LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx);
+	LLVMTypeRef f64 = LLVMDoubleTypeInContext(ctx);
+
+	if (strcmp(name, "__kawa_flush") == 0 || strcmp(name, "__kawa_print_nl") == 0) {
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, NULL, 0, 0));
+	}
+	if (strcmp(name, "__kawa_print_str") == 0) {
+		LLVMTypeRef args[] = {i8ptr, i64};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 2, 0));
+	}
+	if (strcmp(name, "__kawa_print_cstr") == 0) {
+		LLVMTypeRef args[] = {i8ptr};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 1, 0));
+	}
+	if (strcmp(name, "__kawa_print_char") == 0) {
+		LLVMTypeRef args[] = {i8};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 1, 0));
+	}
+	if (strcmp(name, "__kawa_print_bool") == 0) {
+		LLVMTypeRef args[] = {i32};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 1, 0));
+	}
+	if (strcmp(name, "__kawa_print_i64") == 0 || strcmp(name, "__kawa_print_u64") == 0) {
+		LLVMTypeRef args[] = {i64};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 1, 0));
+	}
+	if (strcmp(name, "__kawa_print_f64") == 0) {
+		LLVMTypeRef args[] = {f64};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 1, 0));
+	}
+	if (strcmp(name, "__kawa_print_f64_prec") == 0) {
+		LLVMTypeRef args[] = {f64, i32};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 2, 0));
+	}
+	if (strcmp(name, "__kawa_print_hex") == 0) {
+		LLVMTypeRef args[] = {i64, i32};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 2, 0));
+	}
+	if (strcmp(name, "__kawa_print_pad_i64") == 0) {
+		LLVMTypeRef args[] = {i64, i32, i8};
+		return LLVMAddFunction(c->module, name, LLVMFunctionType(void_t, args, 3, 0));
 	}
 	return NULL;
 }

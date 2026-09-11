@@ -394,7 +394,30 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMPositionBuilderAtEnd(c->builder, body_bb);
 		struct LoopTargets targets = {exit_bb, step_bb, c->defer_stack, c->loop_stack};
 		c->loop_stack = &targets;
+
+		struct LoopRange lr = {0};
+		int has_lr = 0;
+		if (n->data.for_stmt.cond && n->data.for_stmt.cond->type == NODE_BINARY_OP) {
+			ASTNode *left = n->data.for_stmt.cond->data.bin_op.left;
+			ASTNode *right = n->data.for_stmt.cond->data.bin_op.right;
+			int op = n->data.for_stmt.cond->data.bin_op.op;
+			if (left && left->type == NODE_VAR_REF && right && right->type == NODE_LITERAL) {
+				if (op == TOK_LANGLE || op == TOK_LEQ) {
+					lr.var_name = left->data.var_ref.name;
+					lr.upper_bound = right->data.literal.i64_val;
+					lr.is_inclusive = (op == TOK_LEQ);
+					lr.parent = c->loop_ranges;
+					c->loop_ranges = &lr;
+					has_lr = 1;
+				}
+			}
+		}
+
 		codegen_stmt(c, n->data.for_stmt.body);
+
+		if (has_lr)
+			c->loop_ranges = lr.parent;
+
 		c->loop_stack = targets.next;
 
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
@@ -678,6 +701,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_RETURN: {
+		if (n->data.ret_stmt.expr &&
+			n->data.ret_stmt.expr->type == NODE_STRUCT_LITERAL &&
+			!n->data.ret_stmt.expr->data_type) {
+			n->data.ret_stmt.expr->data_type = c->current_ret_node_type;
+		}
 		LLVMValueRef ret_val = NULL;
 		if (n->data.ret_stmt.expr != NULL) {
 			ret_val = codegen_expr(c, n->data.ret_stmt.expr);
@@ -716,6 +744,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			}
 			LLVMBuildBr(c->builder, c->coro_cleanup_block);
 		} else {
+			if (c->uses_print && c->current_func && strcmp(LLVMGetValueName(c->current_func), "main") == 0) {
+				LLVMValueRef flush_fn = declare_kawa_runtime_fn(c, "__kawa_flush");
+				if (flush_fn)
+					LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn), flush_fn, NULL, 0, "");
+			}
 			if (LLVMGetTypeKind(c->current_ret_type) == LLVMVoidTypeKind)
 				LLVMBuildRetVoid(c->builder);
 			else {

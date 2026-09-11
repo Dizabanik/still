@@ -31,7 +31,7 @@ execute_process(COMMAND llvm-config --cflags
 separate_arguments(LLVM_CFLAGS NATIVE_COMMAND "${LLVM_CFLAGS}")
 
 execute_process(COMMAND llvm-config --ldflags --link-shared --libs --system-libs
-	core executionengine analysis native passes coroutines bitwriter
+	core executionengine analysis native passes coroutines bitwriter bitreader linker
 	OUTPUT_VARIABLE LLVM_LIBS OUTPUT_STRIP_TRAILING_WHITESPACE
 	COMMAND_ERROR_IS_FATAL ANY)
 separate_arguments(LLVM_LIBS NATIVE_COMMAND "${LLVM_LIBS}")

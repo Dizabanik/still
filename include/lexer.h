@@ -121,7 +121,7 @@ typedef enum {
 	TOK_XOR_EQ,	 // ^=
 	TOK_SHL_EQ,	 // <<=
 	TOK_SHR_EQ,  // >>=
-
+	TOK_PERCENT_EQ, // %=
 } TokenType;
 
 typedef struct {

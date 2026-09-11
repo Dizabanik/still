@@ -14,6 +14,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+#include <llvm-c/Support.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -216,4 +217,8 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name);
 void run_defer_frame(KawaCompiler *c, DeferFrame *d);
 void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeRef res_type);
 
+// --- Kawa Fast Runtime Declarations ---
+LLVMValueRef declare_kawa_runtime_fn(KawaCompiler *c, const char *name);
+
 #endif
+

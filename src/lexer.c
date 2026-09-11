@@ -285,8 +285,13 @@ Token lexer_next(Lexer *l) {
 			}
 			return make_token(l, TOK_RANGLE, ">");
 		}
-		if (c == '%')
+		if (c == '%') {
+			if (peek(l) == '=') {
+				advance(l);
+				return make_token(l, TOK_PERCENT_EQ, "%=");
+			}
 			return make_token(l, TOK_PERCENT, "%");
+		}
 
 		if (c == '?')
 			return make_token(l, TOK_QUESTION, "?");

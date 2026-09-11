@@ -1,4 +1,7 @@
 #include "codegen_internal.h"
+#include <llvm-c/BitReader.h>
+#include <llvm-c/Linker.h>
+#include "kawa_runtime_bc.h"
 
 // Runtime-initialized globals can't emit their kawa_globals_init body during
 // pass 3 -- user functions don't exist yet, so a call like `let g = make();`
@@ -445,6 +448,11 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		}
 		LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
 					   test_runner, NULL, 0, "");
+		if (c->uses_print) {
+			LLVMValueRef flush_fn1 = declare_kawa_runtime_fn(c, "__kawa_flush");
+			if (flush_fn1)
+				LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn1), flush_fn1, NULL, 0, "");
+		}
 		LLVMBuildRet(c->builder,
 					 LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0));
 	} else if (renamed) {
@@ -470,6 +478,11 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			LLVMBuildCall2(
 				c->builder, LLVMGlobalGetValueType(renamed), renamed, NULL,
 				0, "");
+		if (c->uses_print) {
+			LLVMValueRef flush_fn2 = declare_kawa_runtime_fn(c, "__kawa_flush");
+			if (flush_fn2)
+				LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn2), flush_fn2, NULL, 0, "");
+		}
 		LLVMBuildRet(c->builder, LLVMConstNull(i32_t));
 	}
 
@@ -535,6 +548,95 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			LLVMDisposeBuilder(tmp);
 		}
 	}
+
+	if (c->uses_print) {
+		LLVMMemoryBufferRef rt_mem = LLVMCreateMemoryBufferWithMemoryRange(
+			(const char *)kawa_runtime_bc, kawa_runtime_bc_len, "kawa_runtime", 0);
+		LLVMModuleRef rt_mod = NULL;
+		if (!LLVMParseBitcodeInContext2(c->context, rt_mem, &rt_mod)) {
+			LLVMLinkModules2(c->module, rt_mod);
+		}
+	}
+}
+
+static const uint32_t K256[64] = {
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
+
+static inline uint32_t sha256_rotr(uint32_t x, uint32_t n) {
+	return (x >> n) | (x << (32 - n));
+}
+
+static void sha256_transform(uint32_t state[8], const uint8_t data[64]) {
+	uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+	uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
+	uint32_t w[64];
+	for (int i = 0; i < 16; i++) {
+		w[i] = ((uint32_t)data[i * 4] << 24) | ((uint32_t)data[i * 4 + 1] << 16) |
+			   ((uint32_t)data[i * 4 + 2] << 8) | ((uint32_t)data[i * 4 + 3]);
+	}
+	for (int i = 16; i < 64; i++) {
+		uint32_t s0 = sha256_rotr(w[i - 15], 7) ^ sha256_rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+		uint32_t s1 = sha256_rotr(w[i - 2], 17) ^ sha256_rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+		w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+	}
+	for (int i = 0; i < 64; i++) {
+		uint32_t S1 = sha256_rotr(e, 6) ^ sha256_rotr(e, 11) ^ sha256_rotr(e, 25);
+		uint32_t ch = (e & f) ^ ((~e) & g);
+		uint32_t temp1 = h + S1 + ch + K256[i] + w[i];
+		uint32_t S0 = sha256_rotr(a, 2) ^ sha256_rotr(a, 13) ^ sha256_rotr(a, 22);
+		uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+		uint32_t temp2 = S0 + maj;
+
+		h = g;
+		g = f;
+		f = e;
+		e = d + temp1;
+		d = c;
+		c = b;
+		b = a;
+		a = temp1 + temp2;
+	}
+	state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+	state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+}
+
+static void compute_sha256_hex(const unsigned char *data, size_t len, char out_hex[65]) {
+	uint32_t state[8] = {
+		0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+		0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+	};
+	size_t rem = len;
+	const uint8_t *p = data;
+	while (rem >= 64) {
+		sha256_transform(state, p);
+		p += 64;
+		rem -= 64;
+	}
+	uint8_t buf[128];
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, p, rem);
+	buf[rem] = 0x80;
+	size_t pad_len = (rem < 56) ? 64 : 128;
+	uint64_t total_bits = (uint64_t)len * 8;
+	for (int i = 0; i < 8; i++) {
+		buf[pad_len - 1 - i] = (uint8_t)(total_bits >> (i * 8));
+	}
+	sha256_transform(state, buf);
+	if (pad_len == 128)
+		sha256_transform(state, buf + 64);
+
+	for (int i = 0; i < 8; i++) {
+		snprintf(out_hex + i * 8, 9, "%08x", state[i]);
+	}
+	out_hex[64] = '\0';
 }
 
 void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
@@ -589,23 +691,39 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	// aggressive vectorization + unrolling on top.
 	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
 	if (!getenv("KAWA_NO_OPT")) {
-		const char *pipeline;
+		if (c->pgo_use) {
+			char pgo_opt[1024];
+			snprintf(pgo_opt, sizeof(pgo_opt), "-pgo-test-profile-file=%s", c->pgo_use);
+			const char *pgo_argv[] = { "kawac", pgo_opt };
+			LLVMParseCommandLineOptions(2, pgo_argv, "");
+		}
+
+		char pipeline[2048] = "";
+		if (c->pgo_gen) {
+			strcat(pipeline, "pgo-instr-gen,instrprof,");
+		} else if (c->pgo_use) {
+			strcat(pipeline, "pgo-instr-use,");
+		}
+		strcat(pipeline, "coro-early,coro-split,coro-elide,coro-cleanup");
+
 		switch (c->opt_level) {
 		case 0:
-			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup";
 			break;
 		case 1:
-			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
-					   "default<O1>";
+			strcat(pipeline, ",default<O1>");
 			break;
 		case 3:
-			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
-					   "default<O3>,lto<O3>";
+			strcat(pipeline, ",default<O3>");
 			break;
 		default:
-			pipeline = "coro-early,coro-split,coro-elide,coro-cleanup,"
-					   "default<O2>";
+			strcat(pipeline, ",default<O2>");
 			break;
+		}
+		if (c->enable_lto || c->opt_level == 3) {
+			int lto_lvl = c->opt_level > 0 ? c->opt_level : 2;
+			char lto_buf[32];
+			snprintf(lto_buf, sizeof(lto_buf), ",lto<O%d>", lto_lvl);
+			strcat(pipeline, lto_buf);
 		}
 		LLVMRunPasses(c->module, pipeline, machine, opts);
 	}
@@ -636,6 +754,23 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 					   c->source_filename ? c->source_filename : "<kawa>", NULL,
 					   0, "emitting object failed: %s", error_msg);
 		LLVMDisposeMessage(error_msg);
+	}
+
+	if (c->emit_hash) {
+		FILE *f = fopen(obj_path, "rb");
+		if (f) {
+			fseek(f, 0, SEEK_END);
+			long sz = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			unsigned char *buf = malloc(sz);
+			if (buf && fread(buf, 1, sz, f) == (size_t)sz) {
+				char hash_hex[65];
+				compute_sha256_hex(buf, (size_t)sz, hash_hex);
+				printf("hash: %s\n", hash_hex);
+			}
+			free(buf);
+			fclose(f);
+		}
 	}
 
 	LLVMDisposeTargetMachine(machine);

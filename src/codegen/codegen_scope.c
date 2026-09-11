@@ -547,13 +547,45 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 // Debug-build bounds check for array indexing: branch to a trap block when
 // idx >= len. Release builds never call this -- zero cost by construction,
 // not by optimizer mercy.
-static void emit_bounds_check(KawaCompiler *c, LLVMValueRef idx_i64,
+static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
+							  LLVMValueRef idx_i64,
 							  long long array_len, const char *file,
 							  int line) {
-	// Policy (IDEAS 2.3): checks in debug builds only -- unless an
-	// `unchecked { }` block suppresses them at any opt level.
-	if (!c->debug_build || c->unchecked_depth > 0)
+	// Policy (IDEAS 4.3):
+	// - bounds_check_mode == -1: never emit checks
+	// - bounds_check_mode == 1: always emit checks (no elision)
+	// - bounds_check_mode == 2 (safe) or default (debug_build): emit checks only when not provably safe!
+	int check_enabled = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
+						 (c->debug_build && c->bounds_check_mode != -1));
+	if (!check_enabled || c->unchecked_depth > 0)
 		return;
+
+	// Optimization & Redundancy Elimination (IDEAS 4.3):
+	if (c->bounds_check_mode != 1) {
+		// 1. Constant index folding:
+		if (LLVMIsConstant(idx_i64)) {
+			unsigned long long cval = LLVMConstIntGetZExtValue(idx_i64);
+			if (cval < (unsigned long long)array_len) {
+				// Statically proven safe!
+				return;
+			}
+		}
+
+		// 2. Loop-carried range analysis:
+		if (idx_node && idx_node->type == NODE_VAR_REF) {
+			const char *vname = idx_node->data.var_ref.name;
+			for (struct LoopRange *lr = c->loop_ranges; lr; lr = lr->parent) {
+				if (lr->var_name && strcmp(lr->var_name, vname) == 0 && lr->upper_bound > 0) {
+					long long max_val = lr->upper_bound - (lr->is_inclusive ? 0 : 1);
+					if (max_val < array_len) {
+						// Statically proven safe by induction loop bounds!
+						return;
+					}
+				}
+			}
+		}
+	}
+
 	LLVMContextRef ctx = c->context;
 	LLVMValueRef len_const =
 		LLVMConstInt(LLVMInt64TypeInContext(ctx), (unsigned long long)array_len, 0);
@@ -608,7 +640,9 @@ static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
 	idx = coerce_value(c, idx, n->data.index.index->data_type, i64_t,
 					   &idx64t);
 
-	if (c->debug_build && c->unchecked_depth == 0) {
+	int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
+					  (c->debug_build && c->bounds_check_mode != -1));
+	if (need_check && c->unchecked_depth == 0) {
 		LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx, slen,
 										"bounds_ok");
 		LLVMBasicBlockRef cont_bb =
@@ -989,7 +1023,9 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			idx = coerce_value(c, idx, n->data.index.index->data_type,
 							   i64_t, &idx64t);
 
-			if (c->debug_build && c->unchecked_depth == 0) {
+			int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
+							  (c->debug_build && c->bounds_check_mode != -1));
+			if (need_check && c->unchecked_depth == 0) {
 				// Dynamic-length twin of emit_bounds_check: trap when
 				// idx >= slice.len. Release never reaches this branch,
 				// and `unchecked {}` suppresses it everywhere.
@@ -1128,11 +1164,13 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		// Debug builds trap on out-of-bounds fixed-array indexing. The
 		// bound comes from the AST declaration ([N]T), not LLVM -- opaque
 		// pointers carry no length.
-		if (c->debug_build && obj->type == NODE_VAR_REF) {
+		int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
+						  (c->debug_build && c->bounds_check_mode != -1));
+		if (need_check && obj->type == NODE_VAR_REF) {
 			Scope *s_chk = scope_find(c, obj->data.var_ref.name);
 			if (s_chk && s_chk->node && s_chk->node->data_type &&
 				s_chk->node->data_type->kind == TYPE_ARRAY) {
-				emit_bounds_check(c, idx,
+				emit_bounds_check(c, n->data.index.index, idx,
 								  s_chk->node->data_type->array_len,
 								  c->source_filename, n->line);
 			}
@@ -1327,6 +1365,14 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 	}
 	if (sk == LLVMPointerTypeKind && dk == LLVMStructTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
+	if (sk == LLVMStructTypeKind && dk == LLVMStructTypeKind) {
+		if (src == dst)
+			return v;
+		LLVMValueRef slot = create_entry_block_alloca(c, src, "struct_coerce_src");
+		LLVMBuildStore(c->builder, v, slot);
+		LLVMValueRef cast_ptr = LLVMBuildPointerCast(c->builder, slot, LLVMPointerType(dst, 0), "struct_coerce_cast");
+		return LLVMBuildLoad2(c->builder, dst, cast_ptr, "struct_coerce_val");
+	}
 	if (sk == dk)
 		return v;
 	// Last resort: bitcast between same-sized types; otherwise the value is

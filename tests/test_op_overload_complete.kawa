@@ -1,0 +1,146 @@
+struct Num {
+    i32 val;
+}
+
+impl Num {
+    fn Num self_add(Num a, Num b) {
+        return Num { val: a.val + b.val };
+    }
+    fn Num self_sub(Num a, Num b) {
+        return Num { val: a.val - b.val };
+    }
+    fn Num self_mul(Num a, Num b) {
+        return Num { val: a.val * b.val };
+    }
+    fn Num self_div(Num a, Num b) {
+        return Num { val: a.val / b.val };
+    }
+    fn Num self_rem(Num a, Num b) {
+        return Num { val: a.val % b.val };
+    }
+    fn Num self_bitand(Num a, Num b) {
+        return Num { val: a.val & b.val };
+    }
+    fn Num self_bitor(Num a, Num b) {
+        return Num { val: a.val | b.val };
+    }
+    fn Num self_bitxor(Num a, Num b) {
+        return Num { val: a.val ^ b.val };
+    }
+    fn Num self_shl(Num a, Num b) {
+        return Num { val: a.val << b.val };
+    }
+    fn Num self_shr(Num a, Num b) {
+        return Num { val: a.val >> b.val };
+    }
+
+    // Unary operators
+    fn Num self_neg(Num a) {
+        return Num { val: -a.val };
+    }
+    fn Num self_bitnot(Num a) {
+        return Num { val: ~a.val };
+    }
+    fn bool self_not(Num a) {
+        return a.val == 0;
+    }
+
+    // Comparisons
+    fn bool self_eq(Num a, Num b) {
+        return a.val == b.val;
+    }
+    fn bool self_ne(Num a, Num b) {
+        return a.val != b.val;
+    }
+    fn bool self_lt(Num a, Num b) {
+        return a.val < b.val;
+    }
+    fn bool self_le(Num a, Num b) {
+        return a.val <= b.val;
+    }
+    fn bool self_gt(Num a, Num b) {
+        return a.val > b.val;
+    }
+    fn bool self_ge(Num a, Num b) {
+        return a.val >= b.val;
+    }
+}
+
+// Operator overloading on generic types
+struct Box(T) {
+    T item;
+}
+
+impl(T) Box(T) {
+    fn Box(T) self_add(Box(T) a, Box(T) b) {
+        return Box(T) { item: a.item + b.item };
+    }
+    fn Box(T) self_sub(Box(T) a, Box(T) b) {
+        return Box(T) { item: a.item - b.item };
+    }
+}
+
+fn int main() {
+    let a = Num { val: 20 };
+    let b = Num { val: 6 };
+
+    // 1. Arithmetic
+    let c_add = a + b;
+    let c_sub = a - b;
+    let c_mul = a * b;
+    let c_div = a / b;
+    let c_rem = a % b;
+    stdc.printf("arith: %d %d %d %d %d\n", c_add.val, c_sub.val, c_mul.val, c_div.val, c_rem.val);
+
+    // 2. Bitwise
+    let c_and = a & b;
+    let c_or = a | b;
+    let c_xor = a ^ b;
+    let s1 = Num { val: 8 };
+    let s2 = Num { val: 2 };
+    let c_shl = s1 << s2;
+    let c_shr = s1 >> s2;
+    stdc.printf("bitwise: %d %d %d %d %d\n", c_and.val, c_or.val, c_xor.val, c_shl.val, c_shr.val);
+
+    // 3. Unary
+    let u_neg = -a;
+    let u_not = ~Num { val: 0 };
+    let b_not1 = !Num { val: 0 };
+    let b_not2 = !Num { val: 42 };
+    stdc.printf("unary: %d %d %d %d\n", u_neg.val, u_not.val, (i32)b_not1, (i32)b_not2);
+
+    // 4. Comparisons
+    let eq1 = a == Num { val: 20 };
+    let ne1 = a != b;
+    let lt1 = b < a;
+    let le1 = a <= Num { val: 20 };
+    let gt1 = a > b;
+    let ge1 = b >= a;
+    stdc.printf("cmp: %d %d %d %d %d %d\n", (i32)eq1, (i32)ne1, (i32)lt1, (i32)le1, (i32)gt1, (i32)ge1);
+
+    // 5. Compound assignments
+    let m = Num { val: 10 };
+    m += Num { val: 5 };
+    m -= Num { val: 3 };
+    m *= Num { val: 4 };
+    m /= Num { val: 6 };
+    m %= Num { val: 5 };
+    stdc.printf("compound arith: %d\n", m.val);
+
+    let bw = Num { val: 0xFF };
+    bw &= Num { val: 0x0F };
+    bw |= Num { val: 0x20 };
+    bw ^= Num { val: 0x05 };
+    bw <<= Num { val: 1 };
+    bw >>= Num { val: 2 };
+    stdc.printf("compound bitwise: %d\n", bw.val);
+
+    // 6. Overloaded operators on generic types
+    let b1 = Box(i32) { item: 100 };
+    let b2 = Box(i32) { item: 25 };
+    let b3 = b1 + b2;
+    let b4 = b1 - b2;
+    stdc.printf("generic box op: %d %d\n", b3.item, b4.item);
+
+    return 0;
+}

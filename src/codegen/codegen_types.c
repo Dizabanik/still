@@ -132,9 +132,21 @@ int has_direct_field(KawaCompiler *c, LLVMTypeRef struct_type,
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd)
 		return 0;
-	for (int i = 0; i < sd->field_count; i++)
+	for (int i = 0; i < sd->field_count; i++) {
 		if (strcmp(sd->fields[i].name, field) == 0)
 			return 1;
+		if (field && field[0] >= '0' && field[0] <= '9') {
+			char alt[32];
+			snprintf(alt, sizeof(alt), "_%s", field);
+			if (strcmp(sd->fields[i].name, alt) == 0)
+				return 1;
+		}
+	}
+	if (field && field[0] >= '0' && field[0] <= '9') {
+		int idx = atoi(field);
+		if (idx >= 0 && idx < sd->field_count)
+			return 1;
+	}
 	return 0;
 }
 
@@ -176,6 +188,17 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 	for (int i = 0; i < sd->field_count; i++) {
 		if (strcmp(sd->fields[i].name, field_name) == 0)
 			return i;
+		if (field_name && field_name[0] >= '0' && field_name[0] <= '9') {
+			char alt[32];
+			snprintf(alt, sizeof(alt), "_%s", field_name);
+			if (strcmp(sd->fields[i].name, alt) == 0)
+				return i;
+		}
+	}
+	if (field_name && field_name[0] >= '0' && field_name[0] <= '9') {
+		int idx = atoi(field_name);
+		if (idx >= 0 && idx < sd->field_count)
+			return idx;
 	}
 	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
 				   "no field `%s` on struct", // internal
@@ -194,6 +217,17 @@ LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 	for (int i = 0; i < sd->field_count; i++) {
 		if (strcmp(sd->fields[i].name, field_name) == 0)
 			return sd->fields[i].type;
+		if (field_name && field_name[0] >= '0' && field_name[0] <= '9') {
+			char alt[32];
+			snprintf(alt, sizeof(alt), "_%s", field_name);
+			if (strcmp(sd->fields[i].name, alt) == 0)
+				return sd->fields[i].type;
+		}
+	}
+	if (field_name && field_name[0] >= '0' && field_name[0] <= '9') {
+		int idx = atoi(field_name);
+		if (idx >= 0 && idx < sd->field_count)
+			return sd->fields[idx].type;
 	}
 	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
 				   "no field `%s` on struct", // internal

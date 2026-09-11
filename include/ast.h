@@ -158,7 +158,9 @@ struct ASTNode {
 			char *name;
 			ASTNode *fields;
 			int is_soa; // #[soa]: fields stored as parallel arrays
-			char *type_param; // e.g. "T" for generic struct Box(T)
+			char *type_param; // e.g. "T" for generic struct Box(T) (points to type_params[0])
+			char *type_params[8];
+			int type_param_count;
 		} struct_decl;
 		struct {
 			char *name;
@@ -172,7 +174,9 @@ struct ASTNode {
 		struct {
 			char *struct_name;
 			ASTNode *methods;
-			char *type_param; // e.g. "T" for generic impl Box(T)
+			char *type_param; // e.g. "T" for generic impl Box(T) (points to type_params[0])
+			char *type_params[8];
+			int type_param_count;
 		} impl;
 		struct {
 			char *name;

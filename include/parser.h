@@ -50,8 +50,11 @@ typedef struct {
 	struct {
 		char *name;
 		char *type_param;
+		char *type_params[8];
+		int type_param_count;
 		ASTNode *node;
-		Type *instantiations[16];
+		Type *instantiations[32]; // for 1-param compat
+		Type *instantiations_multi[32][8];
 		int inst_count;
 	} generic_structs[32];
 	int generic_struct_count;
@@ -59,6 +62,8 @@ typedef struct {
 	struct {
 		char *struct_name;
 		char *type_param;
+		char *type_params[8];
+		int type_param_count;
 		ASTNode *node;
 	} generic_impls[32];
 	int generic_impl_count;
@@ -72,6 +77,7 @@ typedef struct {
 	int enum_count;
 
 	ASTNode ***prog_tail;
+	int uses_print;
 } Parser;
 
 void parser_init(Parser *p, Lexer *l, Arena *a);

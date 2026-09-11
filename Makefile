@@ -33,7 +33,7 @@ CFLAGS  = -g -O3 -Wall -Wno-unused-parameter -march=native -funroll-loops -std=c
 DEPS = $(patsubst %.o,%.d,$(filter %.o,$(OBJS)))
 
 LDFLAGS = $(shell llvm-config --ldflags --link-shared --libs --system-libs \
-            core executionengine analysis native passes coroutines bitwriter)
+            core executionengine analysis native passes coroutines bitwriter bitreader linker)
 
 # Files
 SRCS      = $(wildcard $(SRC_DIR)/*.c) $(TIMBR_DIR)/timbr.c

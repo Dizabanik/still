@@ -1,0 +1,21 @@
+import stdc;
+
+fn i32 main() {
+    const i64 ROUNDS = 50000;
+    let buf: [1024]i64;
+    for (i in 0..1024) {
+        buf[i] = (i * 19 + 7) & 65535;
+    }
+
+    i64 acc = 0;
+    for (r in 0..ROUNDS) {
+        for (i in 0..1024) {
+            buf[i] = (buf[i] * 3 + (r & 15)) & 65535;
+            acc = (acc + buf[i]) & 2147483647;
+        }
+        acc = (acc ^ buf[0] ^ buf[1023]) & 2147483647;
+    }
+
+    stdc.printf("acc=%lld\n", acc);
+    return 0;
+}

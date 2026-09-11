@@ -70,6 +70,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
 	c->current_ret_type = ret_t;
+	c->current_ret_node_type = cur->data.func.ret_type;
 
 	// Debug info: attach a DISubprogram so stacks/profiles show real names.
 	// fn_node line isn't tracked at decl granularity; use 1 (file scope).

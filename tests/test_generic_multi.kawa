@@ -1,0 +1,63 @@
+struct Pair(A, B) {
+    A first;
+    B second;
+}
+
+impl(A, B) Pair(A, B) {
+    fn Pair(A, B) new(A f, B s) {
+        return Pair(A, B) { first: f, second: s };
+    }
+
+    fn A get_first(self) {
+        return self.first;
+    }
+
+    fn B get_second(self) {
+        return self.second;
+    }
+
+    fn Pair(B, A) swap(self) {
+        return Pair(B, A) { first: self.second, second: self.first };
+    }
+}
+
+struct Triple(X, Y, Z) {
+    X x;
+    Y y;
+    Z z;
+}
+
+impl Triple(X, Y, Z) {
+    fn Triple(X, Y, Z) make(X x, Y y, Z z) {
+        return Triple(X, Y, Z) { x: x, y: y, z: z };
+    }
+    fn X get_x(self) {
+        return self.x;
+    }
+    fn Y get_y(self) {
+        return self.y;
+    }
+    fn Z get_z(self) {
+        return self.z;
+    }
+}
+
+fn int main() {
+    // 1. Multi-parameter struct with associated function constructor
+    let p1 = Pair(i32, i64).new(42, (i64)100);
+    stdc.printf("p1: %d %lld\n", p1.get_first(), p1.get_second());
+
+    // 2. Chained method calls & swapped types
+    let p2 = p1.swap();
+    stdc.printf("p2 swapped: %lld %d\n", p2.get_first(), p2.get_second());
+
+    // 3. Different type combination
+    let p3 = Pair(i32, f64).new(7, 3.14);
+    stdc.printf("p3: %d %.2f\n", p3.first, p3.second);
+
+    // 4. Three-parameter generic struct
+    let t = Triple(i32, i32, i32).make(1, 2, 3);
+    stdc.printf("triple: %d %d %d\n", t.get_x(), t.get_y(), t.get_z());
+
+    return 0;
+}

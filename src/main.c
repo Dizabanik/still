@@ -184,9 +184,14 @@ static void usage(const char *prog) {
 		   "Options:\n"
 		   "  -o <name>    output executable name (default: source stem)\n"
 		   "  -c           compile to output.bc only, don't link\n"
-			   "  --debug/-g   runtime bounds checks (trap on violation)\n"
-			   "  --test       run #[test] functions instead of main\n"
+		   "  --debug/-g   runtime bounds checks (trap on violation)\n"
+		   "  --test       run #[test] functions instead of main\n"
 		   "  -O0/-O1/-O2/-O3  optimization level passed through (default -O2)\n"
+		   "  --lto        enable link-time optimization (LTO)\n"
+		   "  --pgo-gen[=file]  instrument binary for profile generation\n"
+		   "  --pgo-use=<file>  use profile data for optimization\n"
+		   "  --bounds-check=<safe|always|never> bounds checking policy\n"
+		   "  --emit-hash  emit deterministic SHA-256 hash of output module\n"
 		   "  --color=<when>   diagnostics color: auto|always|never (default auto)\n"
 		   "  --version    print version and exit\n"
 		   "  -h, --help   show this help\n",
@@ -200,6 +205,11 @@ int main(int argc, char **argv) {
 	int link_exe = 1;
 	int debug_build = 0;
 	int test_mode = 0;
+	int enable_lto = 0;
+	const char *pgo_gen = NULL;
+	const char *pgo_use = NULL;
+	int bounds_check_mode = 0; // 0 = default (debug only), 1 = always, 2 = safe, -1 = never
+	int emit_hash = 0;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -210,6 +220,28 @@ int main(int argc, char **argv) {
 			debug_build = 1;
 		} else if (strcmp(argv[i], "--test") == 0) {
 			test_mode = 1;
+		} else if (strcmp(argv[i], "--lto") == 0) {
+			enable_lto = 1;
+		} else if (strncmp(argv[i], "--pgo-gen", 9) == 0) {
+			if (argv[i][9] == '=')
+				pgo_gen = &argv[i][10];
+			else
+				pgo_gen = "default.profraw";
+		} else if (strncmp(argv[i], "--pgo-use", 9) == 0) {
+			if (argv[i][9] == '=')
+				pgo_use = &argv[i][10];
+			else if (i + 1 < argc && argv[i + 1][0] != '-')
+				pgo_use = argv[++i];
+		} else if (strncmp(argv[i], "--bounds-check=", 15) == 0) {
+			const char *bm = &argv[i][15];
+			if (strcmp(bm, "always") == 0)
+				bounds_check_mode = 1;
+			else if (strcmp(bm, "safe") == 0)
+				bounds_check_mode = 2;
+			else if (strcmp(bm, "never") == 0)
+				bounds_check_mode = -1;
+		} else if (strcmp(argv[i], "--emit-hash") == 0) {
+			emit_hash = 1;
 		} else if (strcmp(argv[i], "--color=always") == 0 ||
 				   strcmp(argv[i], "--color=auto") == 0) {
 			timbr_color_override =
@@ -266,8 +298,14 @@ int main(int argc, char **argv) {
 	KawaCompiler kc;
 	kawa_init(&kc, "kawa_main", &a);
 	kc.test_mode = test_mode;
+	kc.uses_print = p.uses_print;
 	kawa_set_debug(&kc, debug_build);
 	kawa_set_source_file(&kc, src_path);
+	kc.enable_lto = enable_lto;
+	kc.pgo_gen = pgo_gen;
+	kc.pgo_use = pgo_use;
+	kc.bounds_check_mode = bounds_check_mode;
+	kc.emit_hash = emit_hash;
 	// Codegen errors only know a line number; the source text lets them
 	// render caret snippets like parser errors do.
 	kdiag_set_source(expanded, (int)strlen(expanded));
@@ -294,13 +332,19 @@ int main(int argc, char **argv) {
 		out_name = def;
 	}
 
+	char extra_link_flags[256] = "";
+	if (enable_lto)
+		strcat(extra_link_flags, " -flto");
+	if (pgo_gen)
+		strcat(extra_link_flags, " -fprofile-instr-generate");
+
 	char cmd[4096];
 	// Link the kawac-emitted object (output.o) rather than recompiling the
 	// bitcode: keeps debug sections intact and skips redundant codegen.
 	snprintf(cmd, sizeof(cmd),
-			 "clang output.o -o '%s' 2>/dev/null || "
-			 "cc output.o -o '%s'",
-			 out_name, out_name);
+			 "clang %s output.o -o '%s' 2>/dev/null || "
+			 "cc %s output.o -o '%s'",
+			 extra_link_flags, out_name, extra_link_flags, out_name);
 	int rc = system(cmd);
 	if (rc != 0) {
 		fprintf(stderr, "kawac: linking failed\n");

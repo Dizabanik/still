@@ -1,0 +1,28 @@
+import stdc;
+
+fn (u64, u64) lcg_step(u64 x, u64 y) {
+    let nx = (x * 6364136223846793005 + 1442695040888963407) & 9223372036854775807;
+    let ny = (y * 2862933555777941757 + 3037000493) & 9223372036854775807;
+    return (nx, ny);
+}
+
+fn (u64, u64) mix((u64, u64) p) {
+    let q = p.0 / 65536;
+    let r = p.1 % 65536;
+    return (p.0 ^ r, (p.1 + q) & 9223372036854775807);
+}
+
+fn i32 main() {
+    const i64 ROUNDS = 20000000;
+    let (x: u64, y: u64) = ((u64)123456789, (u64)987654321);
+    u64 acc = 0;
+    for (i64 r = 0; r < ROUNDS; r += 1) {
+        let (nx, ny) = lcg_step(x, y);
+        let (mx, my) = mix((nx, ny));
+        x = mx;
+        y = my;
+        acc = (acc + x + y) & 2147483647;
+    }
+    stdc.printf("acc=%llu x=%llu y=%llu\n", acc, x, y);
+    return 0;
+}

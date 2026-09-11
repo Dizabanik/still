@@ -1,0 +1,10 @@
+fn i32 main() {
+    const i64 N = 1000000;
+    i64 acc = 0;
+    for (i in 0..N) {
+        acc = (acc * 31 + i) & 1048575;
+        let val = ((f64)(i % 1000)) * 0.001;
+        println("i={i} acc={acc} val={val:.2f}");
+    }
+    return 0;
+}
