@@ -14,7 +14,7 @@ fn i32 main() {
     return 0;
 }
 
-// CHECK: @.strlit.0 = private constant [6 x i8] c"kawa\00\00"
+// CHECK: @.strlit.0 = private unnamed_addr constant [5 x i8] c"kawa\00"
 // CHECK-NOT: call {{.*}} @strlen
 // CHECK-LABEL: define i32 @kawa_main
 // CHECK: call i32 @memcmp

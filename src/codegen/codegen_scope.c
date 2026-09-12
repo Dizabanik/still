@@ -190,57 +190,23 @@ int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
 // requested type. Only called after global_init_is_constant() returned true.
 LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 									LLVMTypeRef dst, Type *dst_ast) {
-	// String literal as a str/[]u8 view initializer (`const str s = "...";`):
-	// const_eval_expr has no string case (returns NULL), so handle the view
-	// BEFORE that call -- a constant {ptr,len} pair over the literal bytes
-	// (kept NUL-terminated so C-variadic decay keeps working). Without this
-	// the global silently became zeroinitializer -- a null view that
-	// segfaulted on first .data access.
-	if (n->type == NODE_STRING_LIT && dst_ast &&
-		dst_ast->kind == TYPE_SLICE &&
-		LLVMGetTypeKind(dst) == LLVMStructTypeKind) {
-		size_t blen = strlen(n->data.str_lit.s_val);
-		LLVMValueRef data = LLVMConstStringInContext(
-			c->context, n->data.str_lit.s_val, (unsigned)blen + 1, 0);
-		LLVMTypeRef arr_t = LLVMTypeOf(data); // sized by ConstString rules
-		LLVMValueRef str_g =
-			LLVMAddGlobal(c->module, arr_t, ".gstrview");
-		LLVMSetInitializer(str_g, data);
-		LLVMSetGlobalConstant(str_g, 1);
-		LLVMValueRef p0 = LLVMConstInBoundsGEP2(
-			arr_t, str_g, (LLVMValueRef[]){LLVMConstInt(
-							   LLVMInt32TypeInContext(c->context), 0, 0)},
-			1);
-		p0 = LLVMConstBitCast(
-			p0, LLVMPointerType(LLVMInt8TypeInContext(c->context), 0));
-		LLVMValueRef len_v =
-			LLVMConstInt(LLVMInt64TypeInContext(c->context),
-						 (unsigned long long)blen, 0);
-		return LLVMConstNamedStruct(dst, (LLVMValueRef[]){p0, len_v}, 2);
+	if (n->type == NODE_STRING_LIT) {
+		// One terminated storage object; lengths always count decoded bytes.
+		LLVMValueRef bytes = LLVMConstStringInContext(c->context,
+			n->data.str_lit.s_val, (unsigned)n->data.str_lit.len, 0);
+		LLVMValueRef storage = LLVMAddGlobal(c->module, LLVMTypeOf(bytes), ".gstr");
+		LLVMSetInitializer(storage, bytes);
+		LLVMSetGlobalConstant(storage, 1);
+		LLVMSetLinkage(storage, LLVMPrivateLinkage);
+		LLVMSetUnnamedAddress(storage, LLVMGlobalUnnamedAddr);
+		if (LLVMGetTypeKind(dst) == LLVMPointerTypeKind) return storage;
+		if (dst_ast && dst_ast->kind == TYPE_SLICE) {
+			LLVMValueRef len = LLVMConstInt(LLVMInt64TypeInContext(c->context), n->data.str_lit.len, 0);
+			return LLVMConstNamedStruct(dst, (LLVMValueRef[]){storage, len}, 2);
+		}
 	}
-
 	LLVMValueRef v = const_eval_expr(c, n, dst);
-	if (!v)
-		return LLVMConstNull(dst);
-
-	// String literal in pointer position: build the @.str global directly
-	// (no builder available on this path).
-	if (n->type == NODE_STRING_LIT &&
-		LLVMGetTypeKind(dst) == LLVMPointerTypeKind) {
-		size_t len = strlen(n->data.str_lit.s_val);
-		LLVMValueRef data =
-			LLVMConstString(n->data.str_lit.s_val, (unsigned)len, 1);
-		LLVMValueRef str_g = LLVMAddGlobal(
-			c->module, LLVMArrayType(LLVMInt8TypeInContext(c->context),
-									 (unsigned)len + 1),
-			"gstr");
-		str_g = LLVMConstBitCast(str_g, dst);
-		LLVMSetInitializer(str_g, data);
-		LLVMSetGlobalConstant(str_g, 1);
-		LLVMSetAlignment(str_g, 1);
-		return str_g;
-	}
-
+	if (!v) return LLVMConstNull(dst);
 
 	// Integer literal -> FP destination (e.g. `f64 x = 5;`): the folder
 	// emits i32 for int literals regardless of the destination kind.
@@ -491,7 +457,7 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 	LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
 	LLVMValueRef saved_func = c->current_func;
 
-	LLVMBasicBlockRef bb = LLVMAppendBasicBlock(fn, "entry");
+	LLVMBasicBlockRef bb = kawa_append_block(fn, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, bb);
 
 	// declare i32 @snprintf(ptr, i64, ptr, ...)
@@ -544,9 +510,8 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 	return fn;
 }
 
-// Debug-build bounds check for array indexing: branch to a trap block when
-// idx >= len. Release builds never call this -- zero cost by construction,
-// not by optimizer mercy.
+// Array bounds checks reject both negative and oversized indices. LLVM
+// removes checks when it can prove the access safe.
 static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 							  LLVMValueRef idx_i64,
 							  long long array_len, const char *file,
@@ -554,16 +519,15 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 	// Policy (IDEAS 4.3):
 	// - bounds_check_mode == -1: never emit checks
 	// - bounds_check_mode == 1: always emit checks (no elision)
-	// - bounds_check_mode == 2 (safe) or default (debug_build): emit checks only when not provably safe!
-	int check_enabled = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
-						 (c->debug_build && c->bounds_check_mode != -1));
+	// - default/safe: omit proven constant checks; LLVM handles loop proofs.
+	int check_enabled = (c->bounds_check_mode != -1);
 	if (!check_enabled || c->unchecked_depth > 0)
 		return;
 
 	// Optimization & Redundancy Elimination (IDEAS 4.3):
 	if (c->bounds_check_mode != 1) {
 		// 1. Constant index folding:
-		if (LLVMIsConstant(idx_i64)) {
+		if (LLVMIsAConstantInt(idx_i64)) {
 			unsigned long long cval = LLVMConstIntGetZExtValue(idx_i64);
 			if (cval < (unsigned long long)array_len) {
 				// Statically proven safe!
@@ -571,19 +535,9 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 			}
 		}
 
-		// 2. Loop-carried range analysis:
-		if (idx_node && idx_node->type == NODE_VAR_REF) {
-			const char *vname = idx_node->data.var_ref.name;
-			for (struct LoopRange *lr = c->loop_ranges; lr; lr = lr->parent) {
-				if (lr->var_name && strcmp(lr->var_name, vname) == 0 && lr->upper_bound > 0) {
-					long long max_val = lr->upper_bound - (lr->is_inclusive ? 0 : 1);
-					if (max_val < array_len) {
-						// Statically proven safe by induction loop bounds!
-						return;
-					}
-				}
-			}
-		}
+		// LLVM proves induction ranges after mem2reg. Name-only range facts
+		// are invalid when the body mutates or aliases the iterator.
+
 	}
 
 	LLVMContextRef ctx = c->context;
@@ -592,9 +546,9 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 	LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx_i64,
 									len_const, "bounds_ok");
 	LLVMBasicBlockRef cont_bb =
-		LLVMAppendBasicBlock(c->current_func, "idx_in_bounds");
+		kawa_append_block(c->current_func, "idx_in_bounds");
 	LLVMBasicBlockRef trap_bb =
-		LLVMAppendBasicBlock(c->current_func, "idx_oob");
+		kawa_append_block(c->current_func, "idx_oob");
 	LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
 
 	LLVMPositionBuilderAtEnd(c->builder, trap_bb);
@@ -614,7 +568,7 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 }
 
 // Index into a COMPUTED slice value (`argv[0][i]`, `s.data[i]`): the pair
-// is already evaluated; extract data + len, bounds-check in debug builds,
+// is already evaluated; extract data + len, bounds-check by default,
 // and return the element address. Shared by get_address's NODE_INDEX.
 static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
 									 LLVMValueRef pair_val,
@@ -640,15 +594,14 @@ static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
 	idx = coerce_value(c, idx, n->data.index.index->data_type, i64_t,
 					   &idx64t);
 
-	int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
-					  (c->debug_build && c->bounds_check_mode != -1));
+	int need_check = (c->bounds_check_mode != -1);
 	if (need_check && c->unchecked_depth == 0) {
 		LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx, slen,
 										"bounds_ok");
 		LLVMBasicBlockRef cont_bb =
-			LLVMAppendBasicBlock(c->current_func, "idx_in_bounds");
+			kawa_append_block(c->current_func, "idx_in_bounds");
 		LLVMBasicBlockRef trap_bb =
-			LLVMAppendBasicBlock(c->current_func, "idx_oob");
+			kawa_append_block(c->current_func, "idx_oob");
 		LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
 
 		LLVMPositionBuilderAtEnd(c->builder, trap_bb);
@@ -788,7 +741,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 							0)) {
 				vt = n->data.member_access.object->data_type;
 				LLVMValueRef pair_val =
-					value_of_lvalue(c, n->data.member_access.object);
+					codegen_expr(c, n->data.member_access.object);
 				pair_addr = create_entry_block_alloca(
 					c, LLVMTypeOf(pair_val), "slice_pair_tmp");
 				LLVMBuildStore(c->builder, pair_val, pair_addr);
@@ -989,7 +942,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMTypeRef elem = elem_type;
 
 		// Slice indexing xs[i]: load {data,len}, bounds-check against len
-		// in debug builds, then GEP data[i]. Release builds pay nothing --
+		// by default, then GEP data[i]. Proven checks are folded away --
 		// the load of data and one GEP, same as a pointer index.
 		Scope *s_slice =
 			(obj->type == NODE_VAR_REF)
@@ -1023,8 +976,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			idx = coerce_value(c, idx, n->data.index.index->data_type,
 							   i64_t, &idx64t);
 
-			int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
-							  (c->debug_build && c->bounds_check_mode != -1));
+			int need_check = (c->bounds_check_mode != -1);
 			if (need_check && c->unchecked_depth == 0) {
 				// Dynamic-length twin of emit_bounds_check: trap when
 				// idx >= slice.len. Release never reaches this branch,
@@ -1037,9 +989,9 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				attach_tbaa(c, slen, i64_t);
 				LLVMValueRef ok = LLVMBuildICmp(
 					c->builder, LLVMIntULT, idx, slen, "bounds_ok");
-				LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlock(
+				LLVMBasicBlockRef cont_bb = kawa_append_block(
 					c->current_func, "idx_in_bounds");
-				LLVMBasicBlockRef trap_bb = LLVMAppendBasicBlock(
+				LLVMBasicBlockRef trap_bb = kawa_append_block(
 					c->current_func, "idx_oob");
 				LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
 
@@ -1164,8 +1116,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		// Debug builds trap on out-of-bounds fixed-array indexing. The
 		// bound comes from the AST declaration ([N]T), not LLVM -- opaque
 		// pointers carry no length.
-		int need_check = (c->bounds_check_mode == 1 || c->bounds_check_mode == 2 ||
-						  (c->debug_build && c->bounds_check_mode != -1));
+		int need_check = (c->bounds_check_mode != -1);
 		if (need_check && obj->type == NODE_VAR_REF) {
 			Scope *s_chk = scope_find(c, obj->data.var_ref.name);
 			if (s_chk && s_chk->node && s_chk->node->data_type &&
@@ -1323,6 +1274,9 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 		LLVMValueRef up = LLVMBuildFPExt(c->builder, v, f32_t, "fpmeet");
 		return LLVMBuildFPTrunc(c->builder, up, dst, "fpnarrow");
 	}
+	if (sk == LLVMStructTypeKind && dk == LLVMPointerTypeKind &&
+		src_ast && src_ast->kind == TYPE_SLICE)
+		return LLVMBuildExtractValue(c->builder, v, 0, "slice_decay");
 	if (sk == LLVMPointerTypeKind && dk == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "ptr_cast");
 	if (sk == LLVMArrayTypeKind && dk == LLVMStructTypeKind &&
@@ -1384,4 +1338,22 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
 				   "cannot coerce value in codegen"); // internal
 	exit(1);
+}
+
+// Keep unlikely error handling out of the hot path. LLVM folds proven checks.
+void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message) {
+	if (LLVMIsAConstantInt(ok) && LLVMConstIntGetZExtValue(ok)) return;
+	LLVMBasicBlockRef cont = kawa_append_block(c->current_func, "checked");
+	LLVMBasicBlockRef trap = kawa_append_block(c->current_func, "out_of_bounds");
+	LLVMValueRef br = LLVMBuildCondBr(c->builder, ok, cont, trap);
+	set_branch_weights(c, br, 2000, 1);
+	LLVMPositionBuilderAtEnd(c->builder, trap);
+	LLVMValueRef fn = get_or_declare_trap_fn(c);
+	LLVMValueRef args[] = {
+		LLVMBuildGlobalStringPtr(c->builder, message, "trap_msg"),
+		LLVMBuildGlobalStringPtr(c->builder, c->source_filename ? c->source_filename : "?", "trap_file"),
+		LLVMConstInt(LLVMInt32TypeInContext(c->context), n ? n->line : 0, 0)};
+	LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, args, 3, "");
+	LLVMBuildUnreachable(c->builder);
+	LLVMPositionBuilderAtEnd(c->builder, cont);
 }

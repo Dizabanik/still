@@ -1,0 +1,8 @@
+{
+  "kind": "run",
+  "stdout": "3|abc|0\n",
+  "args": [
+    "abc",
+    ""
+  ]
+}

@@ -52,8 +52,8 @@ typedef struct {
 	LLVMBuilderRef builder;
 	LLVMContextRef context;
 
-	// Debug build: emit runtime checks (bounds traps). Release builds pay
-	// literally nothing -- no check instructions are generated at all.
+	// Debug build enables source-level debug information. Bounds checks
+	// are controlled separately and default to safe in every build.
 	int debug_build;
 	// >0 while emitting an `unchecked { ... }` block: bounds checks are
 	// suppressed regardless of debug_build. Nested blocks just count.
@@ -86,6 +86,8 @@ typedef struct {
 	// Test mode (--test): @main runs #[test] functions instead of user
 	// main. Collected during the program walk, runner synthesized after.
 	int test_mode;
+	int main_argv_views;
+	Type *main_ret_ast;
 	int uses_print;
 	ASTNode *test_fns[256];
 	struct ASTNode *program_root; // for comptime fn lookup
@@ -220,7 +222,7 @@ typedef struct {
 	int enable_lto;
 	const char *pgo_gen;
 	const char *pgo_use;
-	int bounds_check_mode; // 0 = default (debug only), 1 = always, 2 = safe, -1 = never
+	int bounds_check_mode; // 0/2 = safe, 1 = always, -1 = never
 	int emit_hash;
 
 	// Loop range tracking for bounds check elimination

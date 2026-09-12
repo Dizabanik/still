@@ -1,0 +1,3 @@
+fn i32* identity(i32* p) { return p; }
+fn i32* bad() { i32 x=2; return identity(&x); }
+fn i32 main() { return 0; }

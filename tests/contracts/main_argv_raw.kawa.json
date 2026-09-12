@@ -1,0 +1,8 @@
+{
+  "kind": "run",
+  "stdout": "2 h\n",
+  "args": [
+    "hello"
+  ],
+  "exit": 5
+}

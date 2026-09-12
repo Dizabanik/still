@@ -1,9 +1,4 @@
 {
   "kind": "reject",
-  "diagnostic": "error\\[E0008\\]",
-  "xfail": {
-    "phase": "diagnostic",
-    "pattern": "error\\[E0007\\]: no field",
-    "reason": "MEMBER-DIAG: missing field reports E0007 instead of E0008."
-  }
+  "diagnostic": "error\\[E0008\\]"
 }

@@ -1,7 +1,7 @@
 import stdc;
 // Inputs are runtime decimal integers: iterations, seed, active length (1..4096).
 fn i64 input(i32 arg) {
-    // arg_at currently returns a raw C string; the UTF-8 view API has a separate failing contract.
+    // Decay the sized argv view to a C pointer for decimal parsing.
     char* text = std.process.arg_at(arg);
     i64 value = 0;
     for (i64 i = 0; text[i] != 0; i += 1) { value = value * 10 + ((i64)text[i]) - 48; }

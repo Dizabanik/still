@@ -306,9 +306,16 @@ Token lexer_next(Lexer *l) {
 
 		// Strings with Escape Sequences
 		if (c == '"') {
-			char buffer[1024];
-			int idx = 0;
+			size_t capacity = 64;
+			char *buffer = arena_alloc(l->arena, capacity);
+			size_t idx = 0;
 			while (peek(l) != '"' && !is_at_end(l)) {
+				if (idx + 1 >= capacity) {
+					capacity *= 2;
+					char *grown = arena_alloc(l->arena, capacity);
+					memcpy(grown, buffer, idx);
+					buffer = grown;
+				}
 				char ch = advance(l);
 				if (ch == '\\') {
 					char esc = advance(l);
@@ -364,8 +371,9 @@ Token lexer_next(Lexer *l) {
 				return error_token(l, "Unterminated string");
 			advance(l);
 			buffer[idx] = '\0';
-			return make_token(l, TOK_STRING_LIT,
-							  arena_strdup(l->arena, buffer));
+			Token token = make_token(l, TOK_STRING_LIT, buffer);
+			token.string_len = idx;
+			return token;
 		}
 
 		// FIX: Character Literals ('x')

@@ -1,0 +1,2 @@
+fn bool same(str value) { return value == "1234567890123456"; }
+fn i32 main() { str empty; bool a=same(empty); bool b=same("1234567890123456"); bool c=same("1"); println("{a} {b} {c}"); return 0; }

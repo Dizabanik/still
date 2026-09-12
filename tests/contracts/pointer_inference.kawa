@@ -1,0 +1,2 @@
+fn i32* identity(i32* p) { return p; }
+fn i32 main() { i32 x=3; let p=&x; let q=identity(p); *q=11; println("{x} {*p}"); return 0; }

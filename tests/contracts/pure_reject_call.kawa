@@ -1,0 +1,3 @@
+fn i32 effect(i32* p) { *p=9; return 0; }
+pure fn i32 bad(i32* p) { return effect(p); }
+fn i32 main() { return 0; }

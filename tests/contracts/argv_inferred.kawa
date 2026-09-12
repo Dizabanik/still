@@ -1,0 +1,1 @@
+fn i32 main() { let s=std.process.arg_at(1); println("{s.len}|{s}|{std.process.arg_at(2).len}"); return 0; }

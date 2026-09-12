@@ -1,0 +1,3 @@
+fn bool equal(str a,str b) { return a==b; }
+fn bool less(str a,str b) { return a<b; }
+fn i32 main() { str e; str a="a"; bool x=equal(e,e); bool y=equal(e,a); bool z=less(e,a); bool w=less(a,e); println("{x} {y} {z} {w}"); return 0; }

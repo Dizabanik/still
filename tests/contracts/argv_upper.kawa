@@ -1,0 +1,1 @@
+fn i32 main() { str s=std.process.arg_at(std.process.arg_count()); println("{s.len}"); return 0; }

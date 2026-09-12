@@ -21,7 +21,8 @@ enum {
 	KAWA_E_ARGS,		 // E0005 invalid arguments
 	KAWA_E_SCOPE,		 // E0006 duplicate declaration
 	KAWA_E_SEMANTIC,	 // E0007 other semantic constraint
-	KAWA_W_UNREACHABLE,	 // W0011 code after return is unreachable
+	KAWA_E_MEMBER = 8,    // E0008 unknown field
+	KAWA_W_UNREACHABLE = 11,	 // W0011 code after return is unreachable
 	KAWA_W_UNUSED,		 // W0012 unused local
 };
 

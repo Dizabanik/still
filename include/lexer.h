@@ -134,6 +134,7 @@ typedef struct {
 	// Float literal suffix: 0=none, 1=f16, 2=f32, 3=f64, 4=bf16.
 	// Set only on TOK_FLOAT_LIT / TOK_INT_LIT with an explicit suffix.
 	int float_suffix;
+	size_t string_len; // decoded bytes, including embedded NULs
 	const char *filename;
 } Token;
 

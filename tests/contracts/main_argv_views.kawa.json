@@ -1,0 +1,9 @@
+{
+  "kind": "run",
+  "stdout": "3|hello world|11|0\n",
+  "args": [
+    "hello world",
+    ""
+  ],
+  "exit": 7
+}

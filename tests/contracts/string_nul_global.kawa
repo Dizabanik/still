@@ -1,0 +1,2 @@
+const str a="a\0b";
+fn i32 main() { str b="a\0c"; println("{a.len} {b.len} {a==b} {a<b}"); print("x\0y"); print("z\0{a.len}"); return 0; }

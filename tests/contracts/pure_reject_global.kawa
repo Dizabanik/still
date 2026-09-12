@@ -1,0 +1,3 @@
+i32 value=0;
+pure fn i32 bad() { value=4; return value; }
+fn i32 main() { return 0; }

@@ -1,9 +1,4 @@
 {
   "kind": "run",
-  "stdout": "3\ndifferent\n",
-  "xfail": {
-    "phase": "output",
-    "pattern": "actual bytes: b'1",
-    "reason": "STRING-NUL: literal length and comparison truncate at an embedded zero."
-  }
+  "stdout": "3\ndifferent\n"
 }

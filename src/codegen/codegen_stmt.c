@@ -315,11 +315,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef cond_val =
 			cond_to_bool(c, codegen_expr(c, n->data.if_stmt.cond));
 		LLVMValueRef func = c->current_func;
-		LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "then");
+		LLVMBasicBlockRef then_bb = kawa_append_block(func, "then");
 		LLVMBasicBlockRef else_bb = n->data.if_stmt.else_block
-										? LLVMAppendBasicBlock(func, "else")
+										? kawa_append_block(func, "else")
 										: NULL;
-		LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "if_cont");
+		LLVMBasicBlockRef merge_bb = kawa_append_block(func, "if_cont");
 		LLVMValueRef br_instr = LLVMBuildCondBr(c->builder, cond_val, then_bb,
 												else_bb ? else_bb : merge_bb);
 		set_branch_weights(c, br_instr, 1, 1);
@@ -339,11 +339,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_WHILE: {
 		LLVMBasicBlockRef cond_bb =
-			LLVMAppendBasicBlock(c->current_func, "while_cond");
+			kawa_append_block(c->current_func, "while_cond");
 		LLVMBasicBlockRef body_bb =
-			LLVMAppendBasicBlock(c->current_func, "while_body");
+			kawa_append_block(c->current_func, "while_body");
 		LLVMBasicBlockRef exit_bb =
-			LLVMAppendBasicBlock(c->current_func, "while_exit");
+			kawa_append_block(c->current_func, "while_exit");
 		LLVMBuildBr(c->builder, cond_bb);
 		LLVMPositionBuilderAtEnd(c->builder, cond_bb);
 		LLVMValueRef cond_val =
@@ -371,13 +371,13 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			codegen_stmt(c, n->data.for_stmt.init);
 
 		LLVMBasicBlockRef cond_bb =
-			LLVMAppendBasicBlock(c->current_func, "for_cond");
+			kawa_append_block(c->current_func, "for_cond");
 		LLVMBasicBlockRef body_bb =
-			LLVMAppendBasicBlock(c->current_func, "for_body");
+			kawa_append_block(c->current_func, "for_body");
 		LLVMBasicBlockRef step_bb =
-			LLVMAppendBasicBlock(c->current_func, "for_step");
+			kawa_append_block(c->current_func, "for_step");
 		LLVMBasicBlockRef exit_bb =
-			LLVMAppendBasicBlock(c->current_func, "for_exit");
+			kawa_append_block(c->current_func, "for_exit");
 
 		LLVMBuildBr(c->builder, cond_bb);
 		LLVMPositionBuilderAtEnd(c->builder, cond_bb);
@@ -445,7 +445,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 		LLVMContextRef ctx = c->context;
 		LLVMBasicBlockRef exit_bb =
-			LLVMAppendBasicBlock(c->current_func, "switch_exit");
+			kawa_append_block(c->current_func, "switch_exit");
 
 		// One body block per case, in source order -- fallthrough is then
 		// just "no terminator at the end of the previous body".
@@ -459,7 +459,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		LLVMBasicBlockRef default_bb = NULL;
 		int i = 0;
 		for (ASTNode *cs = n->data.switch_stmt.cases; cs; cs = cs->next, i++) {
-			body_bbs[i] = LLVMAppendBasicBlock(c->current_func, "case_body");
+			body_bbs[i] = kawa_append_block(c->current_func, "case_body");
 			if (!cs->data.case_stmt.expr)
 				default_bb = body_bbs[i];
 		}
@@ -651,11 +651,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 		LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
 		LLVMBasicBlockRef loop_bb =
-			LLVMAppendBasicBlock(c->current_func, "batch_loop");
+			kawa_append_block(c->current_func, "batch_loop");
 		LLVMBasicBlockRef body_bb =
-			LLVMAppendBasicBlock(c->current_func, "batch_body");
+			kawa_append_block(c->current_func, "batch_body");
 		LLVMBasicBlockRef exit_bb =
-			LLVMAppendBasicBlock(c->current_func, "batch_exit");
+			kawa_append_block(c->current_func, "batch_exit");
 
 		LLVMValueRef zero = LLVMConstInt(i64_t, 0, 0);
 		LLVMBuildBr(c->builder, loop_bb);
@@ -795,15 +795,15 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		}
 
 		LLVMBasicBlockRef retry_bb =
-			LLVMAppendBasicBlock(c->current_func, "sel_retry");
+			kawa_append_block(c->current_func, "sel_retry");
 		LLVMBasicBlockRef none_bb =
-			LLVMAppendBasicBlock(c->current_func, "sel_none");
+			kawa_append_block(c->current_func, "sel_none");
 		LLVMBasicBlockRef done_bb =
-			LLVMAppendBasicBlock(c->current_func, "sel_done");
+			kawa_append_block(c->current_func, "sel_done");
 		LLVMBasicBlockRef case_bbs[8];
 		for (int k = 0; k < ncases; k++)
 			case_bbs[k] =
-				LLVMAppendBasicBlock(c->current_func, "sel_case");
+				kawa_append_block(c->current_func, "sel_case");
 
 		LLVMBuildBr(c->builder, retry_bb);
 
@@ -819,7 +819,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				c->builder, LLVMIntUGT, cnt,
 				LLVMConstInt(i64_t, 0, 0), "sel_ready");
 			LLVMBasicBlockRef next_poll =
-				(k + 1 < ncases) ? LLVMAppendBasicBlock(
+				(k + 1 < ncases) ? kawa_append_block(
 									   c->current_func, "sel_poll")
 								 : none_bb;
 			LLVMValueRef br = LLVMBuildCondBr(c->builder, ready,
@@ -877,7 +877,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 									 LLVMInt1TypeInContext(ctx), 0, 0)},
 				2, "yield");
 			LLVMBasicBlockRef resume_bb2 =
-				LLVMAppendBasicBlock(c->current_func, "sel_resume");
+				kawa_append_block(c->current_func, "sel_resume");
 			LLVMValueRef sw = LLVMBuildSwitch(c->builder, susp,
 											  c->coro_suspend_block, 2);
 			LLVMAddCase(sw,
@@ -915,7 +915,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		FilterFrame frame;
 		frame.err_slot = create_entry_block_alloca(c, slot_t, "filter.err");
 		frame.err_type = payload;
-		frame.catch_bb = LLVMAppendBasicBlock(c->current_func, "dregs");
+		frame.catch_bb = kawa_append_block(c->current_func, "dregs");
 
 		FilterFrame *saved_filters = c->filter_stack;
 		frame.next = saved_filters;
@@ -936,7 +936,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 		c->filter_stack = saved_filters;
 		LLVMBasicBlockRef merge_bb =
-			LLVMAppendBasicBlock(c->current_func, "filter_merge");
+			kawa_append_block(c->current_func, "filter_merge");
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 			LLVMBuildBr(c->builder, merge_bb);
 		LLVMPositionBuilderAtEnd(c->builder, frame.catch_bb);
@@ -1035,7 +1035,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				LLVMConstInt(LLVMInt1TypeInContext(c->context), 0, 0)},
 			2, "yield");
 		LLVMBasicBlockRef resume_bb =
-			LLVMAppendBasicBlock(c->current_func, "resume");
+			kawa_append_block(c->current_func, "resume");
 		LLVMValueRef sw =
 			LLVMBuildSwitch(c->builder, suspend, c->coro_suspend_block, 2);
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
@@ -1134,13 +1134,13 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 			arm_count++;
 	}
 
-	LLVMBasicBlockRef exit_bb = LLVMAppendBasicBlock(c->current_func, "match_exit");
+	LLVMBasicBlockRef exit_bb = kawa_append_block(c->current_func, "match_exit");
 	LLVMBasicBlockRef default_bb = NULL;
-	LLVMBasicBlockRef else_bb = else_arm ? LLVMAppendBasicBlock(c->current_func, "match_else") : NULL;
+	LLVMBasicBlockRef else_bb = else_arm ? kawa_append_block(c->current_func, "match_else") : NULL;
 
 	LLVMBasicBlockRef trap_bb = NULL;
 	if (!else_bb) {
-		trap_bb = LLVMAppendBasicBlock(c->current_func, "match_trap");
+		trap_bb = kawa_append_block(c->current_func, "match_trap");
 		default_bb = trap_bb;
 	} else {
 		default_bb = else_bb;
@@ -1152,7 +1152,7 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 		if (a->data.match_arm.is_else)
 			continue;
 
-		LLVMBasicBlockRef arm_bb = LLVMAppendBasicBlock(c->current_func, "match_arm");
+		LLVMBasicBlockRef arm_bb = kawa_append_block(c->current_func, "match_arm");
 		EnumVariant *ev = enum_decl ? find_enum_variant(enum_decl, a->data.match_arm.variant_name) : NULL;
 		if (!ev && a->data.match_arm.variant_name) {
 			for (ASTNode *s = c->program_root; s; s = s->next) {

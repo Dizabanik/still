@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "3 3 false true\nx\u0000yz\u00003"
+}

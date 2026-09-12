@@ -1,0 +1,1 @@
+fn i32 main() { [4]i32 a; let s=a[0..-1]; println("{s.len}"); return 0; }

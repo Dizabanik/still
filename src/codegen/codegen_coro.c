@@ -55,8 +55,8 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 		// arm pointing at a bare ret without coro.end gets mangled into
 		// `unreachable` during splitting -- which silently deleted our
 		// mid-body suspends (the channel-blocking bug).
-		*suspend_bb = LLVMAppendBasicBlock(fn, "suspend");
-		*cleanup_bb = LLVMAppendBasicBlock(fn, "cleanup");
+		*suspend_bb = kawa_append_block(fn, "suspend");
+		*cleanup_bb = kawa_append_block(fn, "cleanup");
 		LLVMValueRef hdl0 = LLVMBuildCall2(
 			c->builder, c->coro_begin_type, c->coro_begin,
 			(LLVMValueRef[]){id, buf}, 2, "hdl");
@@ -72,7 +72,7 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 		LLVMValueRef sw =
 			LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
-					LLVMAppendBasicBlock(fn, "resume"));
+					kawa_append_block(fn, "resume"));
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
 					*suspend_bb);
 		return hdl0;
@@ -83,8 +83,8 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 	LLVMValueRef size = LLVMBuildCall2(c->builder, c->coro_size_type,
 									   c->coro_size, NULL, 0, "size");
 
-	LLVMBasicBlockRef alloc_bb = LLVMAppendBasicBlock(fn, "alloc");
-	LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlock(fn, "alloc_cont");
+	LLVMBasicBlockRef alloc_bb = kawa_append_block(fn, "alloc");
+	LLVMBasicBlockRef cont_bb = kawa_append_block(fn, "alloc_cont");
 	LLVMBuildCondBr(c->builder, need_alloc, alloc_bb, cont_bb);
 	LLVMPositionBuilderAtEnd(c->builder, alloc_bb);
 	LLVMValueRef malloc_ptr = LLVMBuildCall2(
@@ -109,11 +109,11 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 
 	// Same clang contract as the elided path: the shared exit block holds
 	// coro.end(false); case 1 (destroy) funnels through it too.
-	*suspend_bb = LLVMAppendBasicBlock(fn, "suspend");
-	*cleanup_bb = LLVMAppendBasicBlock(fn, "cleanup");
+	*suspend_bb = kawa_append_block(fn, "suspend");
+	*cleanup_bb = kawa_append_block(fn, "cleanup");
 	LLVMValueRef sw = LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
-				LLVMAppendBasicBlock(fn, "resume"));
+				kawa_append_block(fn, "resume"));
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
 				*suspend_bb);
 	return hdl;
@@ -318,7 +318,7 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
 	c->current_ret_type = ret_type;
 	c->in_coroutine = 1;
 	LLVMPositionBuilderAtEnd(c->builder,
-							 LLVMAppendBasicBlock(task_func, "entry"));
+							 kawa_append_block(task_func, "entry"));
 
 	LLVMBasicBlockRef cleanup_bb, suspend_bb;
 	LLVMValueRef hdl = build_coro_frame_ex(c, task_func, c->brew_promise_index,

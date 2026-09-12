@@ -57,10 +57,10 @@ LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
 	LLVMValueRef fn = LLVMAddFunction(c->module, fname, fn_t);
 	LLVMSetLinkage(fn, LLVMInternalLinkage);
 
-	LLVMBasicBlockRef entry = LLVMAppendBasicBlock(fn, "entry");
-	LLVMBasicBlockRef loop = LLVMAppendBasicBlock(fn, "loop");
-	LLVMBasicBlockRef body = LLVMAppendBasicBlock(fn, "body");
-	LLVMBasicBlockRef exit = LLVMAppendBasicBlock(fn, "exit");
+	LLVMBasicBlockRef entry = kawa_append_block(fn, "entry");
+	LLVMBasicBlockRef loop = kawa_append_block(fn, "loop");
+	LLVMBasicBlockRef body = kawa_append_block(fn, "body");
+	LLVMBasicBlockRef exit = kawa_append_block(fn, "exit");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
 
 	LLVMValueRef len0 = LLVMGetParam(fn, 1);

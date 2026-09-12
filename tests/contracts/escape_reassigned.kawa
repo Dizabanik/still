@@ -1,0 +1,3 @@
+struct Box { i32* p; }
+fn Box bad(i32* outer) { Box b={.p=outer}; i32 x=2; b.p=&x; return b; }
+fn i32 main() { return 0; }

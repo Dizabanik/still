@@ -4,10 +4,5 @@
     "hello world",
     ""
   ],
-  "stdout": "3\nhello world||11|0\n",
-  "xfail": {
-    "phase": "output",
-    "pattern": "actual bytes: b'3",
-    "reason": "ARGV-VIEW: arg_at returns a C pointer; conversion to str loses length."
-  }
+  "stdout": "3\nhello world||11|0\n"
 }

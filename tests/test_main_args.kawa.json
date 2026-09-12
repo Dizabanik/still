@@ -1,8 +1,3 @@
 {
-  "kind": "run",
-  "xfail": {
-    "phase": "exit",
-    "pattern": "slice index out of bounds",
-    "reason": "ARGV-ABI: main str* argv is not adapted from C char**; checked indexing exposes the invalid view."
-  }
+  "kind": "run"
 }

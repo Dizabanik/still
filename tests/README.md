@@ -46,7 +46,11 @@ IR files accept `// OPT: 2` and `// FLAGS: --bounds-check=safe`. In particular, 
 
 An `xfail` object must state the reason, failure phase, and (where appropriate) a narrow identifying pattern. It may apply to specific optimization levels. A different failure is **FAIL**, and a newly successful contract is **XPASS**, which fails the suite until the obsolete expectation is removed. Results preserve each optimization separately in JSON. `--strict` makes documented XFAILs fail too.
 
-Current contracts expose aliasing/noalias, unchecked purity, stack escapes, slice construction, default bounds policy, main exit codes, argv view/ABI conversion, embedded NUL strings, and diagnostic-quality gaps. The compiler has not been changed to make these tests pass. Do not replace their expected results with current broken output.
+The original aliasing, purity, local escape, slice construction, default bounds, main/argv, embedded NUL, and diagnostic contracts are now required passes. No checked-in executable contract currently uses XFAIL. CTest runs with `--strict`.
+
+Additional regression cases cover pointer inference and returns, purity through aliases/calls, escaped aggregate fields and slices, invalid argument indices, empty string comparisons, 5,000-byte literals, debug builds, mutated loop indices, and malformed signatures. The matrix test checks both independently calculated output and removal of redundant stack copies.
+
+The lifetime check analyzes local address flow through SSA values and aggregates, rejecting returned local addresses and direct stores into escaping memory. It conservatively treats pointer-returning calls as potentially returning an argument. This is not the future ownership/checked-pointer system: raw pointer arithmetic, arbitrary FFI retention, heap use-after-free, and data races still require the planned model. Purity permits pointer reads and local mutation; external writes and calls without verified effects are rejected. LLVM infers optimization attributes from bodies.
 
 Legacy tests without output oracles now have explicit expected outputs (generic parameters, operator coverage, tuples). `test_new.kawa` no longer reads freed memory: pointer-to-pointer access occurs before free. A future invalid-access test must demand a checked failure, never a particular value from freed memory.
 

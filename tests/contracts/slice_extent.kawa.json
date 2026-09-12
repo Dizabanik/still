@@ -3,10 +3,5 @@
   "diagnostic": "kawa: trap: .*bounds",
   "flags": [
     "--bounds-check=always"
-  ],
-  "xfail": {
-    "phase": "trap",
-    "pattern": "exit=0.*1000",
-    "reason": "SLICE-RANGE: construction does not validate the source extent."
-  }
+  ]
 }

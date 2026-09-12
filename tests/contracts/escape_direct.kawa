@@ -1,0 +1,2 @@
+fn i32* bad() { i32 x=9; let p=&x; return p; }
+fn i32 main() { return 0; }

@@ -180,9 +180,8 @@ static LLVMTypeRef kawa_std_fn_type(KawaCompiler *c, const char *qualified) {
 	if (strcmp(qualified, "std.process.arg_count") == 0)
 		return LLVMFunctionType(i32, NULL, 0, 0);
 	if (strcmp(qualified, "std.process.arg_at") == 0)
-		// Returns ptr<char> (a Kawa str); bounds check happens at the
-		// call site in debug builds.
-		return LLVMFunctionType(ptr, (LLVMTypeRef[]){i32}, 1, 0);
+		return LLVMFunctionType(LLVMStructTypeInContext(ctx,
+			(LLVMTypeRef[]){ptr, i64}, 2, 0), (LLVMTypeRef[]){i32}, 1, 0);
 	return NULL;
 }
 
@@ -280,7 +279,7 @@ static void chan_yield(KawaCompiler *c) {
 									  0, 0)},
 		2, "yield");
 	LLVMBasicBlockRef resume_bb =
-		LLVMAppendBasicBlock(c->current_func, "chan_resume");
+		kawa_append_block(c->current_func, "chan_resume");
 	LLVMValueRef sw =
 		LLVMBuildSwitch(c->builder, suspend, c->coro_suspend_block, 2);
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
@@ -353,27 +352,17 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMContextRef ctx = c->context;
 		Type u8t = {0};
 		u8t.kind = TYPE_U8;
-		size_t slen = strlen(n->data.str_lit.s_val);
+		size_t slen = n->data.str_lit.len;
 		static int str_lit_counter = 0;
 		char gname[32];
 		snprintf(gname, sizeof(gname), ".strlit.%d", str_lit_counter++);
-		char *init = arena_alloc(c->arena, slen + 2);
-		memcpy(init, n->data.str_lit.s_val, slen);
-		init[slen] = '\0';
-		init[slen + 1] = '\0';
-		// NUL-terminated storage: the view's len excludes the terminator,
-		// but decaying to char* at C boundaries stays valid. The global's
-		// type is derived FROM the constant -- LLVMConstStringInContext
-		// sizes by its own strlen rules (the Len arg only matters for
-		// embedded NULs), so hand-computing the array type can mismatch.
-		LLVMValueRef cstr_init =
-			LLVMConstStringInContext(c->context, init,
-									 (unsigned)(slen + 1),
-									 /*DontNullTerminate*/ 0);
+		LLVMValueRef cstr_init = LLVMConstStringInContext(c->context,
+			n->data.str_lit.s_val, (unsigned)slen, 0);
 		LLVMTypeRef arr_t = LLVMTypeOf(cstr_init);
 		LLVMValueRef global = LLVMAddGlobal(c->module, arr_t, gname);
 		LLVMSetGlobalConstant(global, 1);
 		LLVMSetLinkage(global, LLVMPrivateLinkage);
+		LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
 		LLVMSetInitializer(global, cstr_init);
 		LLVMValueRef data = LLVMBuildGEP2(
 			c->builder, arr_t, global,
@@ -485,6 +474,15 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			end_val = total_len;
 		}
 
+		if (c->bounds_check_mode != -1 && c->unchecked_depth == 0) {
+			LLVMValueRef ordered = LLVMBuildICmp(c->builder, LLVMIntULE,
+				start_val, end_val, "slice_ordered");
+			LLVMValueRef fits = LLVMBuildICmp(c->builder,
+				n->data.slice_index.is_inclusive ? LLVMIntULT : LLVMIntULE,
+				end_val, total_len, "slice_fits");
+			LLVMValueRef ok = LLVMBuildAnd(c->builder, ordered, fits, "slice_bounds_ok");
+			emit_check_or_trap(c, n, ok, "slice range out of bounds");
+		}
 		LLVMValueRef slice_len = LLVMBuildSub(c->builder, end_val, start_val, "slice_len_raw");
 		if (n->data.slice_index.is_inclusive) {
 			slice_len = LLVMBuildAdd(c->builder, slice_len, LLVMConstInt(i64_t, 1, 0), "slice_len_inc");
@@ -1023,6 +1021,13 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 
 		LLVMTypeRef func_type = LLVMGlobalGetValueType(fn);
 		int param_count = LLVMCountParamTypes(func_type);
+		if (arg_count < param_count ||
+			(!LLVMIsFunctionVarArg(func_type) && arg_count != param_count)) {
+			kerr(KAWA_E_ARITY, n, "function `%s` expects %s%d arguments, got %d",
+				 func_name, LLVMIsFunctionVarArg(func_type) ? "at least " : "",
+				 param_count, arg_count);
+			exit(1);
+		}
 
 		// Named arguments: `f(y: 2, x: 1)` -- match labels to parameter
 		// names and reorder into positional slots. Mixed positional/named
@@ -1426,11 +1431,11 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef cond =
 			cond_to_bool(c, codegen_expr(c, n->data.ternary.cond));
 		LLVMBasicBlockRef then_bb =
-			LLVMAppendBasicBlock(func, "tern_then");
+			kawa_append_block(func, "tern_then");
 		LLVMBasicBlockRef else_bb =
-			LLVMAppendBasicBlock(func, "tern_else");
+			kawa_append_block(func, "tern_else");
 		LLVMBasicBlockRef merge_bb =
-			LLVMAppendBasicBlock(func, "tern_merge");
+			kawa_append_block(func, "tern_merge");
 		LLVMBuildCondBr(c->builder, cond, then_bb, else_bb);
 
 		LLVMPositionBuilderAtEnd(c->builder, then_bb);
@@ -1498,9 +1503,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			LLVMBuildICmp(c->builder, LLVMIntUGE, cur_cnt, cur_cap, "is_full");
 
 		LLVMBasicBlockRef grow_bb =
-			LLVMAppendBasicBlock(c->current_func, "set_grow");
+			kawa_append_block(c->current_func, "set_grow");
 		LLVMBasicBlockRef append_bb =
-			LLVMAppendBasicBlock(c->current_func, "set_append");
+			kawa_append_block(c->current_func, "set_append");
 
 		LLVMValueRef br =
 			LLVMBuildCondBr(c->builder, is_full, grow_bb, append_bb);
@@ -1648,13 +1653,13 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		// it, so capacity is re-read fresh after each suspension -- no
 		// volatiles needed, the CFG carries the ordering.
 		LLVMBasicBlockRef check_bb =
-			LLVMAppendBasicBlock(c->current_func, "send_check");
+			kawa_append_block(c->current_func, "send_check");
 		LLVMBasicBlockRef retry_bb =
-			LLVMAppendBasicBlock(c->current_func, "send_full");
+			kawa_append_block(c->current_func, "send_full");
 		LLVMBasicBlockRef do_send_bb =
-			LLVMAppendBasicBlock(c->current_func, "send_put");
+			kawa_append_block(c->current_func, "send_put");
 		LLVMBasicBlockRef done_bb =
-			LLVMAppendBasicBlock(c->current_func, "send_done");
+			kawa_append_block(c->current_func, "send_done");
 
 		LLVMBuildBr(c->builder, check_bb);
 		LLVMPositionBuilderAtEnd(c->builder, check_bb);
@@ -1768,13 +1773,13 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		// Same loop-header discipline as send: resume re-enters the check
 		// with freshly loaded count/head, never a stale snapshot.
 		LLVMBasicBlockRef check_bb =
-			LLVMAppendBasicBlock(c->current_func, "recv_check");
+			kawa_append_block(c->current_func, "recv_check");
 		LLVMBasicBlockRef retry_bb =
-			LLVMAppendBasicBlock(c->current_func, "recv_empty");
+			kawa_append_block(c->current_func, "recv_empty");
 		LLVMBasicBlockRef do_recv_bb =
-			LLVMAppendBasicBlock(c->current_func, "recv_get");
+			kawa_append_block(c->current_func, "recv_get");
 		LLVMBasicBlockRef done_bb =
-			LLVMAppendBasicBlock(c->current_func, "recv_done");
+			kawa_append_block(c->current_func, "recv_done");
 
 		LLVMBuildBr(c->builder, check_bb);
 		LLVMPositionBuilderAtEnd(c->builder, check_bb);
@@ -1849,9 +1854,9 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef is_done = LLVMBuildCall2(c->builder, c->coro_done_type,
 											  c->coro_done, &hdl, 1, "is_done");
 		LLVMBasicBlockRef resume_bb =
-			LLVMAppendBasicBlock(c->current_func, "sip_resume");
+			kawa_append_block(c->current_func, "sip_resume");
 		LLVMBasicBlockRef cont_bb =
-			LLVMAppendBasicBlock(c->current_func, "sip_cont");
+			kawa_append_block(c->current_func, "sip_cont");
 		LLVMBuildCondBr(c->builder, is_done, cont_bb, resume_bb);
 		LLVMPositionBuilderAtEnd(c->builder, resume_bb);
 		LLVMBuildCall2(c->builder, c->coro_resume_type, c->coro_resume, &hdl, 1,
@@ -1935,8 +1940,8 @@ static LLVMValueRef codegen_short_circuit(KawaCompiler *c, ASTNode *n) {
 
 	LLVMBasicBlockRef lhs_end = LLVMGetInsertBlock(c->builder);
 	LLVMBasicBlockRef rhs_bb =
-		LLVMAppendBasicBlock(func, is_and ? "and_rhs" : "or_rhs");
-	LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "bool_merge");
+		kawa_append_block(func, is_and ? "and_rhs" : "or_rhs");
+	LLVMBasicBlockRef merge_bb = kawa_append_block(func, "bool_merge");
 	LLVMBuildCondBr(c->builder, lhs, is_and ? rhs_bb : merge_bb,
 					is_and ? merge_bb : rhs_bb);
 
@@ -2109,12 +2114,22 @@ static LLVMValueRef declare_std_fn(KawaCompiler *c, const char *qualified) {
 		if (f)
 			return f;
 		if (strcmp(qualified, "std.process.arg_at") == 0) {
-			f = LLVMAddFunction(c->module, fname,
-								LLVMFunctionType(ptr, (LLVMTypeRef[]){i32},
-												 1, 0));
-			LLVMBasicBlockRef bb = LLVMAppendBasicBlock(f, "entry");
+			f = LLVMAddFunction(c->module, fname, t);
+			LLVMBasicBlockRef bb = kawa_append_block(f, "entry");
 			LLVMBuilderRef ab = LLVMCreateBuilderInContext(ctx);
 			LLVMPositionBuilderAtEnd(ab, bb);
+			LLVMValueRef argc_g = LLVMGetNamedGlobal(c->module, "__kawa_argc");
+			if (!argc_g) {
+				argc_g = LLVMAddGlobal(c->module, i32, "__kawa_argc");
+				LLVMSetInitializer(argc_g, LLVMConstNull(i32));
+				LLVMSetLinkage(argc_g, LLVMPrivateLinkage);
+			}
+			LLVMBuilderRef saved_builder = c->builder;
+			LLVMValueRef saved_fn = c->current_func;
+			c->builder = ab; c->current_func = f;
+			LLVMValueRef count = LLVMBuildLoad2(ab, i32, argc_g, "argc");
+			emit_check_or_trap(c, NULL, LLVMBuildICmp(ab, LLVMIntULT, LLVMGetParam(f, 0), count, "arg_ok"), "argument index out of bounds");
+			c->builder = saved_builder; c->current_func = saved_fn;
 			LLVMTypeRef argv_t =
 				LLVMPointerType(LLVMPointerType(i8t, 0), 0);
 			LLVMValueRef slot = LLVMBuildGEP2(
@@ -2123,7 +2138,12 @@ static LLVMValueRef declare_std_fn(KawaCompiler *c, const char *qualified) {
 				(LLVMValueRef[]){LLVMGetParam(f, 0)}, 1, "slot");
 			LLVMValueRef s = LLVMBuildLoad2(ab, LLVMPointerType(i8t, 0),
 											slot, "arg");
-			LLVMBuildRet(ab, s);
+			LLVMValueRef lenfn = LLVMGetNamedFunction(c->module, "strlen");
+			if (!lenfn) lenfn = LLVMAddFunction(c->module, "strlen", LLVMFunctionType(i64, &ptr, 1, 0));
+			LLVMValueRef len = LLVMBuildCall2(ab, LLVMGlobalGetValueType(lenfn), lenfn, &s, 1, "arg_len");
+			LLVMValueRef view = LLVMBuildInsertValue(ab, LLVMGetUndef(LLVMGetReturnType(t)), s, 0, "arg_data");
+			view = LLVMBuildInsertValue(ab, view, len, 1, "arg_view");
+			LLVMBuildRet(ab, view);
 			LLVMDisposeBuilder(ab);
 		} else {
 			f = LLVMAddFunction(c->module, fname,
@@ -2235,7 +2255,7 @@ static const unsigned char *literal_str_bytes(const ASTNode *node,
 	if (!node || node->type != NODE_STRING_LIT ||
 		!node->data.str_lit.s_val)
 		return NULL;
-	*out_len = strlen(node->data.str_lit.s_val);
+	*out_len = node->data.str_lit.len;
 	return (const unsigned char *)node->data.str_lit.s_val;
 }
 
@@ -2285,7 +2305,7 @@ static LLVMValueRef build_str_eq(KawaCompiler *c, LLVMTypeRef view_t,
 	size_t klen = 0;
 	const unsigned char *kb =
 		lbytes ? lbytes : rbytes ? rbytes : NULL;
-	if (const_len && kb) {
+	if (const_len && kb && LLVMIsAConstantInt(ll) && LLVMIsAConstantInt(rl)) {
 		LLVMValueRef var_ptr = lbytes ? rd : ld;
 		LLVMValueRef lens_eq = NULL;
 		if (!LLVMIsAConstantInt(ll) || !LLVMIsAConstantInt(rl)) {
@@ -2327,12 +2347,14 @@ static LLVMValueRef build_str_eq(KawaCompiler *c, LLVMTypeRef view_t,
 
 	LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(c->builder);
 	LLVMBasicBlockRef len_ok =
-		LLVMAppendBasicBlock(c->current_func, "str_len_ok");
+		kawa_append_block(c->current_func, "str_len_ok");
 	LLVMBasicBlockRef str_eq_done =
-		LLVMAppendBasicBlock(c->current_func, "str_eq_done");
+		kawa_append_block(c->current_func, "str_eq_done");
 	LLVMValueRef lens_eq =
 		LLVMBuildICmp(c->builder, LLVMIntEQ, ll, rl, "str_lens");
-	LLVMBuildCondBr(c->builder, lens_eq, len_ok, str_eq_done);
+	LLVMValueRef nonempty = LLVMBuildICmp(c->builder, LLVMIntNE, ll, LLVMConstNull(i64_t), "str_nonempty");
+	LLVMValueRef compare = LLVMBuildAnd(c->builder, lens_eq, nonempty, "str_compare");
+	LLVMBuildCondBr(c->builder, compare, len_ok, str_eq_done);
 
 	LLVMPositionBuilderAtEnd(c->builder, len_ok);
 	// Remaining cases (both lengths runtime, or constant length > 16):
@@ -2354,7 +2376,7 @@ static LLVMValueRef build_str_eq(KawaCompiler *c, LLVMTypeRef view_t,
 
 	LLVMPositionBuilderAtEnd(c->builder, str_eq_done);
 	LLVMValueRef incoming[2] = {
-		eq_bytes, LLVMConstInt(i1_t, 0, 0)};
+		eq_bytes, lens_eq};
 	LLVMBasicBlockRef preds[2] = {len_ok, entry_bb};
 	LLVMValueRef out = LLVMBuildPhi(c->builder, i1_t, "str_eq");
 	LLVMAddIncoming(out, incoming, preds, 2);
@@ -2387,10 +2409,18 @@ static LLVMValueRef build_str_memcmp(KawaCompiler *c, LLVMTypeRef view_t,
 	LLVMValueRef min_len =
 		LLVMBuildSelect(c->builder, ll_lt, ll, rl, "minlen");
 	LLVMValueRef args[3] = {ld, rd, min_len};
-	LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
-	(void)saved_bb;
-	LLVMValueRef cmp = LLVMBuildCall2(c->builder, fn_t, fn, args, 3,
-									  "str_bcmp");
+	LLVMBasicBlockRef start = LLVMGetInsertBlock(c->builder);
+	LLVMBasicBlockRef bytes = kawa_append_block(c->current_func, "str_compare_bytes");
+	LLVMBasicBlockRef done = kawa_append_block(c->current_func, "str_order");
+	LLVMValueRef nonempty = LLVMBuildICmp(c->builder, LLVMIntNE, min_len, LLVMConstNull(i64_t), "str_nonempty");
+	LLVMBuildCondBr(c->builder, nonempty, bytes, done);
+	LLVMPositionBuilderAtEnd(c->builder, bytes);
+	LLVMValueRef byte_cmp = LLVMBuildCall2(c->builder, fn_t, fn, args, 3, "str_bcmp");
+	LLVMBuildBr(c->builder, done);
+	LLVMPositionBuilderAtEnd(c->builder, done);
+	LLVMValueRef cmp = LLVMBuildPhi(c->builder, i32_t, "str_prefix_cmp");
+	LLVMAddIncoming(cmp, (LLVMValueRef[]){LLVMConstNull(i32_t), byte_cmp},
+		(LLVMBasicBlockRef[]){start, bytes}, 2);
 	// memcmp result sign: convert to the strcmp-style three-way value.
 	LLVMValueRef neg = LLVMBuildICmp(c->builder, LLVMIntSLT, cmp,
 									 LLVMConstInt(i32_t, 0, 0), "lt0");

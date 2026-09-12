@@ -200,7 +200,7 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 		if (idx >= 0 && idx < sd->field_count)
 			return idx;
 	}
-	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+	kdiag_error_at(KAWA_E_MEMBER, c->source_filename, NULL, 0,
 				   "no field `%s` on struct", // internal
 				   field_name);
 	exit(1);
@@ -229,7 +229,7 @@ LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 		if (idx >= 0 && idx < sd->field_count)
 			return sd->fields[idx].type;
 	}
-	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+	kdiag_error_at(KAWA_E_MEMBER, c->source_filename, NULL, 0,
 				   "no field `%s` on struct", // internal
 				   field_name);
 	exit(1);
@@ -417,7 +417,7 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	case TYPE_SLICE:
 		// []T is a fat pointer { T* data, i64 len }: a view with no
 		// ownership and no capacity. Passed by value like a C struct;
-		// bounds-checked on index in debug builds only.
+		// bounds-checked on index by default.
 		t->is_signed = 0;
 		{
 			LLVMTypeRef elem = t->inner ? get_llvm_type(c, t->inner)

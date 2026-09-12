@@ -350,7 +350,7 @@ static Type *parse_type(Parser *p) {
 		}
 		Type *tuple_elems[16];
 		int elem_count = 0;
-		while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 			if (elem_count < 16) {
 				tuple_elems[elem_count++] = parse_type(p);
 			}
@@ -378,7 +378,7 @@ static Type *parse_type(Parser *p) {
 			consume(p, TOK_LPAREN, "Expected '(' after generic struct name");
 			Type *concretes[8];
 			int concrete_count = 0;
-			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 				if (concrete_count < 8) {
 					concretes[concrete_count++] = parse_type(p);
 				}
@@ -703,10 +703,12 @@ static ASTNode *parse_unary(Parser *p) {
 		n->type = NODE_AMP;
 		n->data.deref.expr = parse_unary(p); // Recurse for &&var
 
-		// Type Inference: If expr is T*, this node is T
-		if (n->data.deref.expr->data_type &&
-			n->data.deref.expr->data_type->kind == TYPE_AMP) {
-			n->data_type = n->data.deref.expr->data_type->inner;
+		Type *inner = n->data.deref.expr->data_type;
+		if (inner) {
+			Type *ptr = arena_alloc(p->arena, sizeof(Type));
+			ptr->kind = TYPE_PTR;
+			ptr->inner = inner;
+			n->data_type = ptr;
 		}
 		return n;
 	} else if (p->cur.type == TOK_MINUS || p->cur.type == TOK_BANG ||
@@ -1220,9 +1222,7 @@ static ASTNode *clone_and_subst_node(Parser *p, ASTNode *src, int param_count,
 		dst->data.literal = src->data.literal;
 		break;
 	case NODE_STRING_LIT:
-		dst->data.str_lit.s_val = src->data.str_lit.s_val
-									  ? arena_strdup(p->arena, src->data.str_lit.s_val)
-									  : NULL;
+		dst->data.str_lit = src->data.str_lit; // immutable arena bytes
 		break;
 	case NODE_CAST:
 		dst->data.cast.val = clone_and_subst_node(
@@ -1501,7 +1501,7 @@ static ASTNode *parse_struct_literal(Parser *p) {
 	StructInitItem *head = NULL;
 	StructInitItem **tail = &head;
 
-	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		StructInitItem *item = arena_alloc(p->arena, sizeof(StructInitItem));
 		item->field_name = NULL;
 		item->spread_from = NULL;
@@ -1654,6 +1654,7 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_STRING_LIT) {
 		n->type = NODE_STRING_LIT;
 		n->data.str_lit.s_val = p->cur.text;
+		n->data.str_lit.len = p->cur.string_len;
 		// A string literal IS a str: a fat {ptr,len} view over the
 		// constant's bytes (IDEAS 3). The storage keeps a trailing NUL so
 		// decaying to char* at C boundaries stays valid. len/data members,
@@ -1768,7 +1769,7 @@ static ASTNode *parse_primary(Parser *p) {
 				consume(p, TOK_LPAREN, "Expected '(' after generic struct name");
 				Type *concretes[8];
 				int concrete_count = 0;
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					if (concrete_count < 8) {
 						concretes[concrete_count++] = parse_type(p);
 					}
@@ -1791,6 +1792,9 @@ static ASTNode *parse_primary(Parser *p) {
 		}
 		n->type = NODE_VAR_REF;
 		n->data.var_ref.name = p->cur.text;
+		ASTNode *bound_decl = find_decl(p, p->cur.text);
+		if (bound_decl && (bound_decl->type == NODE_VAR_DECL || bound_decl->type == NODE_CONST_DECL))
+			n->data_type = bound_decl->data_type;
 		n->line = p->cur.line; // diagnostics: undefined-variable carets
 		advance(p);
 	} else if (p->cur.type == TOK_LPAREN) {
@@ -1835,7 +1839,7 @@ static ASTNode *parse_primary(Parser *p) {
 				types[0] = deduce_node_type(p, first_expr);
 
 				advance(p); // eat ','
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					ASTNode *elem_expr = parse_expr(p);
 					StructInitItem *item = arena_alloc(p->arena, sizeof(StructInitItem));
 					char fld[32];
@@ -1915,7 +1919,7 @@ static ASTNode *parse_primary(Parser *p) {
 		ASTNode *body = arena_alloc(p->arena, sizeof(ASTNode));
 		body->type = NODE_BLOCK;
 		ASTNode **tail = &body->data.block.stmts;
-		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			*tail = parse_statement(p);
 			while (*tail)
 				tail = &(*tail)->next;
@@ -1942,7 +1946,7 @@ static ASTNode *parse_primary(Parser *p) {
 		ASTNode **tail = &head;
 		Type *inner_type = NULL;
 
-		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			ASTNode *item = parse_expr(p);
 			if (!inner_type && item->data_type)
 				inner_type = item->data_type;
@@ -2060,6 +2064,7 @@ static ASTNode *make_str_lit_node(Parser *p, int line, const char *s) {
 	n->type = NODE_STRING_LIT;
 	n->line = line;
 	n->data.str_lit.s_val = arena_strdup(p->arena, s);
+	n->data.str_lit.len = strlen(s);
 	Type *ch = arena_alloc(p->arena, sizeof(Type));
 	ch->kind = TYPE_U8;
 	Type *st = arena_alloc(p->arena, sizeof(Type));
@@ -2123,7 +2128,9 @@ static void append_print_str_lit(Parser *p, int line, ASTNode **head, ASTNode **
 	char *s = arena_alloc(p->arena, len + 1);
 	memcpy(s, str, len);
 	s[len] = '\0';
-	ASTNode *s_node = make_str_lit_node(p, line, s);
+	ASTNode *s_node = make_str_lit_node(p, line, "");
+	s_node->data.str_lit.s_val = s;
+	s_node->data.str_lit.len = len;
 	ASTNode *len_node = make_i64_lit_node(p, line, (int64_t)len);
 	s_node->next = len_node;
 	ASTNode *call = make_call_node(p, line, "__kawa_print_str", s_node);
@@ -2277,7 +2284,7 @@ static void desugar_print_call(Parser *p, ASTNode *call, ASTNode *head, int is_p
 
 	// Case 3: first argument is a string literal.
 	const char *s = head->data.str_lit.s_val;
-	size_t slen = strlen(s);
+	size_t slen = head->data.str_lit.len;
 
 	int has_interp = 0;
 	for (size_t ci = 0; ci < slen; ci++) {
@@ -2973,7 +2980,7 @@ static ASTNode *parse_postfix(Parser *p) {
 			// codegen matches them to parameters by name and reorders.
 			ASTNode *head = NULL;
 			ASTNode **tail = &head;
-			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 				ASTNode *arg = NULL;
 				if (p->cur.type == TOK_IDENTIFIER &&
 					lexer_peek(p->lexer).type == TOK_COLON) {
@@ -3165,6 +3172,19 @@ static ASTNode *parse_postfix(Parser *p) {
 					}
 				}
 			}
+			// The process API returns a sized byte view, including for inferred locals.
+			ASTNode *std_call = call->type == NODE_CALL ? call->data.call.callee : NULL;
+			if (std_call && std_call->type == NODE_MEMBER_ACCESS &&
+				strcmp(std_call->data.member_access.member, "arg_at") == 0) {
+				ASTNode *mid = std_call->data.member_access.object;
+				if (mid && mid->type == NODE_MEMBER_ACCESS && strcmp(mid->data.member_access.member, "process") == 0 &&
+					mid->data.member_access.object->type == NODE_VAR_REF &&
+					strcmp(mid->data.member_access.object->data.var_ref.name, "std") == 0) {
+					Type *byte = arena_alloc(p->arena, sizeof(Type)); byte->kind = TYPE_U8;
+					Type *view = arena_alloc(p->arena, sizeof(Type)); view->kind = TYPE_SLICE; view->inner = byte;
+					call->data_type = view;
+				}
+			}
 			// -----------------------------------------
 
 			expr = call;
@@ -3309,7 +3329,7 @@ static ASTNode *parse_block(Parser *p) {
 	ASTNode *block = arena_alloc(p->arena, sizeof(ASTNode));
 	block->type = NODE_BLOCK;
 	ASTNode **tail = &block->data.block.stmts;
-	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		*tail = parse_statement(p);
 		while (*tail)
 			tail = &(*tail)->next;
@@ -3395,7 +3415,7 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 	int item_count = 0;
 
 	if (is_tuple) {
-		while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 			char *vname = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected variable name in tuple destructuring");
 			Type *vtype = NULL;
@@ -3416,7 +3436,7 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 		}
 		consume(p, TOK_RPAREN, "Expected ')' in tuple destructuring");
 	} else {
-		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			char *fname = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected field name in struct destructuring");
 			char *vname = fname;
@@ -3659,7 +3679,7 @@ static ASTNode *parse_match(Parser *p) {
 	ASTNode **arms_tail = &arms_head;
 	Type *inferred_arm_type = NULL;
 
-	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		ASTNode *arm = arena_alloc(p->arena, sizeof(ASTNode));
 		arm->type = NODE_MATCH_ARM;
 		arm->line = p->cur.line;
@@ -3690,7 +3710,7 @@ static ASTNode *parse_match(Parser *p) {
 				ASTNode *bhead = NULL;
 				ASTNode **btail = &bhead;
 				int bi = 0;
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					char *bname = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Expected identifier in pattern");
 					ASTNode *bdecl = arena_alloc(p->arena, sizeof(ASTNode));
@@ -3835,7 +3855,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			body->type = NODE_BLOCK;
 			body->data.block.stmts = NULL;
 			ASTNode **tail = &body->data.block.stmts;
-			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 				*tail = parse_statement(p);
 				while (*tail)
 					tail = &(*tail)->next;
@@ -4204,7 +4224,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		ASTNode **cases_tail = &cases_head;
 
 		int seen_default = 0;
-		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			int case_line = p->cur.line; // `case`/`default` keyword line
 			int is_default = 0;
 			ASTNode *case_expr = NULL;
@@ -4297,7 +4317,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		ASTNode **cap_tail = &captures;
 		if (p->cur.type == TOK_LPAREN) {
 			advance(p); // eat '('
-			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 				char *cname = p->cur.text;
 				consume(p, TOK_IDENTIFIER, "Expected variable name in defer capture list");
 				ASTNode *cnode = arena_alloc(p->arena, sizeof(ASTNode));
@@ -4338,7 +4358,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
 		n->type = NODE_SELECT;
 		struct SelectCase *head = NULL, **tail = &head;
-		while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+		while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 			if (p->cur.type == TOK_DEFAULT) {
 				advance(p);
 				consume(p, TOK_COLON, ":");
@@ -4621,7 +4641,8 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 		}
 	} else if (is_type_token(p->cur.type)) {
 		Token next = lexer_peek(p->lexer);
-		if (next.type == TOK_IDENTIFIER || is_ident_like(next.type)) {
+		if (p->cur.type == TOK_LBRACKET || next.type == TOK_STAR || next.type == TOK_AMP ||
+			next.type == TOK_IDENTIFIER || is_ident_like(next.type)) {
 			ret_type = parse_type(p);
 		} else if (next.type == TOK_LPAREN) {
 			int is_gen_struct = 0;
@@ -4675,7 +4696,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 
 	ASTNode *args_head = NULL;
 	ASTNode **args_tail = &args_head;
-	while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 		Type *arg_type = NULL;
 		char *arg_name = NULL;
 
@@ -4825,7 +4846,7 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 	en_t->kind = TYPE_ENUM;
 	en_t->name = name;
 
-	while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 		char *member = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Expected enum member name");
 
@@ -4835,7 +4856,7 @@ static void parse_enum(Parser *p, ASTNode ***tail) {
 
 		if (p->cur.type == TOK_LPAREN) {
 			advance(p); // eat '('
-			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 				Type *pt = parse_type(p);
 				char *pname = NULL;
 				if (p->cur.type == TOK_IDENTIFIER) {
@@ -4973,7 +4994,7 @@ ASTNode *parse_program(Parser *p) {
 	ASTNode **tail = &prog->next;
 	p->prog_tail = &tail;
 
-	while (p->cur.type != TOK_EOF) {
+	while (!p->had_error && p->cur.type != TOK_EOF) {
 		if (p->cur.type == TOK_ERROR) {
 			synchronize(p);
 			continue;
@@ -5026,7 +5047,7 @@ ASTNode *parse_program(Parser *p) {
 			ASTNode *args_head = NULL;
 			ASTNode **args_tail = &args_head;
 			int is_variadic = 0;
-			while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 				if (p->cur.type == TOK_DOT || p->cur.type == TOK_DOTDOT) {
 					// `...` lexes as DOTDOT+DOT (since `..` became the
 					// spread token) or, before that change, three DOTs.
@@ -5120,7 +5141,7 @@ parse_soa_struct:;
 			int type_param_count = 0;
 			if (p->cur.type == TOK_LPAREN) {
 				advance(p);
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					char *tp = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Expected type parameter");
 					if (type_param_count < 8) {
@@ -5153,7 +5174,7 @@ parse_soa_struct:;
 			ASTNode *fields_head = NULL;
 			ASTNode **fields_tail = &fields_head;
 
-			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 				int f_pub = 0;
 				if (p->cur.type == TOK_PUB) {
 					f_pub = 1;
@@ -5270,7 +5291,7 @@ parse_soa_struct:;
 			int type_param_count = 0;
 			if (p->cur.type == TOK_LPAREN) {
 				advance(p);
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					char *tp = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Expected type parameter");
 					if (type_param_count < 8) {
@@ -5289,7 +5310,7 @@ parse_soa_struct:;
 				advance(p);
 				int count2 = 0;
 				char *params2[8];
-				while (p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
+				while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 					char *tp = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Expected type parameter");
 					if (count2 < 8)
@@ -5312,7 +5333,7 @@ parse_soa_struct:;
 			ASTNode *methods_head = NULL;
 			ASTNode **methods_tail = &methods_head;
 
-			while (p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
+			while (!p->had_error && p->cur.type != TOK_RBRACE && p->cur.type != TOK_EOF) {
 				int item_pub = 0;
 				if (p->cur.type == TOK_PUB) {
 					item_pub = 1;

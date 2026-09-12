@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
 	int enable_lto = 0;
 	const char *pgo_gen = NULL;
 	const char *pgo_use = NULL;
-	int bounds_check_mode = 0; // 0 = default (debug only), 1 = always, 2 = safe, -1 = never
+	int bounds_check_mode = 2; // safe by default; 1 = always, -1 = never
 	int emit_hash = 0;
 
 	for (int i = 1; i < argc; i++) {

@@ -1,0 +1,7 @@
+{
+  "kind": "run",
+  "stdout": "8\n",
+  "flags": [
+    "--debug"
+  ]
+}

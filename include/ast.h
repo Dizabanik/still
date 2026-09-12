@@ -212,6 +212,7 @@ struct ASTNode {
 		} literal;
 		struct {
 			char *s_val;
+			size_t len;
 		} str_lit;
 		struct {
 			char *name;

@@ -1,0 +1,2 @@
+pure fn i32 sum(i32 n) { i32 s=0; for(i32 i=0;i<n;i+=1) { s+=i; } return s; }
+fn i32 main() { println("{sum(10)}"); return 0; }

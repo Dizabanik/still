@@ -1,6 +1,7 @@
 #include "codegen_internal.h"
 #include <llvm-c/BitReader.h>
 #include <llvm-c/Linker.h>
+#include <llvm-c/Error.h>
 #include "kawa_runtime_bc.h"
 
 // Runtime-initialized globals can't emit their kawa_globals_init body during
@@ -100,7 +101,7 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 	LLVMAddAttributeAtIndex(*init_fn, LLVMAttributeFunctionIndex,
 							LLVMCreateEnumAttribute(c->context, nw_id, 0));
 	LLVMPositionBuilderAtEnd(c->builder,
-							 LLVMAppendBasicBlock(*init_fn, "entry"));
+							 kawa_append_block(*init_fn, "entry"));
 
 	LLVMValueRef saved_func = c->current_func;
 	LLVMTypeRef saved_ret = c->current_ret_type;
@@ -149,7 +150,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
 
 			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
-			LLVMBasicBlockRef entry = LLVMAppendBasicBlock(fn, "entry");
+			LLVMBasicBlockRef entry = kawa_append_block(fn, "entry");
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
@@ -183,7 +184,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMAddAttributeAtIndex(bare_fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
 
 			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
-			LLVMBasicBlockRef entry = LLVMAppendBasicBlock(bare_fn, "entry");
+			LLVMBasicBlockRef entry = kawa_append_block(bare_fn, "entry");
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
@@ -391,7 +392,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMTypeRef runner_t = LLVMFunctionType(i32_t, NULL, 0, 0);
 		LLVMValueRef runner =
 			LLVMAddFunction(c->module, "kawa__run_all_tests", runner_t);
-		LLVMBasicBlockRef rb = LLVMAppendBasicBlock(runner, "entry");
+		LLVMBasicBlockRef rb = kawa_append_block(runner, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, rb);
 
 		for (int ti = 0; ti < c->test_fn_count; ti++) {
@@ -439,7 +440,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMValueRef wrapper = LLVMAddFunction(
 			c->module, "main",
 			LLVMFunctionType(i32_t, (LLVMTypeRef[]){i32_t, i8ptr}, 2, 0));
-		LLVMBasicBlockRef bb = LLVMAppendBasicBlock(wrapper, "entry");
+		LLVMBasicBlockRef bb = kawa_append_block(wrapper, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 		if (globals_init_fn) {
 			LLVMBuildCall2(c->builder, globals_init_type, globals_init_fn,
@@ -462,7 +463,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMTypeRef params[] = {i32_t, i8ptr};
 		LLVMTypeRef main_t = LLVMFunctionType(i32_t, params, 2, 0);
 		LLVMValueRef wrapper = LLVMAddFunction(c->module, "main", main_t);
-		LLVMBasicBlockRef bb = LLVMAppendBasicBlock(wrapper, "entry");
+		LLVMBasicBlockRef bb = kawa_append_block(wrapper, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 		// The globals-init injection below targets @main's entry; build the
 		// call AFTER positioning so it lands inside this new block.
@@ -471,19 +472,52 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 						   NULL, 0, "");
 			wrapper_handled_globals_init = 1;
 		}
-		if (test_runner)
-			LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
-						   test_runner, NULL, 0, "");
-		else
-			LLVMBuildCall2(
-				c->builder, LLVMGlobalGetValueType(renamed), renamed, NULL,
-				0, "");
+		LLVMValueRef result;
+		if (test_runner) {
+			result = LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
+				test_runner, NULL, 0, "tests_result");
+		} else {
+			LLVMValueRef args[] = {LLVMGetParam(wrapper, 0), LLVMGetParam(wrapper, 1)};
+			unsigned argc = LLVMCountParams(renamed);
+			if (argc == 2 && c->main_argv_views) {
+				LLVMTypeRef i64_t = LLVMInt64TypeInContext(c->context);
+				LLVMTypeRef view_t = LLVMStructTypeInContext(c->context, (LLVMTypeRef[]){i8ptr, i64_t}, 2, 0);
+				LLVMValueRef count = LLVMBuildZExt(c->builder, args[0], i64_t, "argc64");
+				LLVMValueRef views = LLVMBuildArrayAlloca(c->builder, view_t, count, "argv_views");
+				LLVMBasicBlockRef start = LLVMGetInsertBlock(c->builder);
+				LLVMBasicBlockRef loop = kawa_append_block(wrapper, "argv_loop");
+				LLVMBasicBlockRef body = kawa_append_block(wrapper, "argv_body");
+				LLVMBasicBlockRef done = kawa_append_block(wrapper, "argv_done");
+				LLVMBuildBr(c->builder, loop);
+				LLVMPositionBuilderAtEnd(c->builder, loop);
+				LLVMValueRef idx = LLVMBuildPhi(c->builder, i64_t, "argv_i");
+				LLVMValueRef zero = LLVMConstNull(i64_t);
+				LLVMAddIncoming(idx, &zero, &start, 1);
+				LLVMBuildCondBr(c->builder, LLVMBuildICmp(c->builder, LLVMIntULT, idx, count, "argv_more"), body, done);
+				LLVMPositionBuilderAtEnd(c->builder, body);
+				LLVMValueRef slot = LLVMBuildGEP2(c->builder, i8ptr, args[1], &idx, 1, "arg_slot");
+				LLVMValueRef str = LLVMBuildLoad2(c->builder, i8ptr, slot, "arg");
+				LLVMValueRef lenfn = LLVMGetNamedFunction(c->module, "strlen");
+				if (!lenfn) lenfn = LLVMAddFunction(c->module, "strlen", LLVMFunctionType(i64_t, &i8ptr, 1, 0));
+				LLVMValueRef len = LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(lenfn), lenfn, &str, 1, "arg_len");
+				LLVMValueRef view = LLVMBuildInsertValue(c->builder, LLVMGetUndef(view_t), str, 0, "arg_data");
+				view = LLVMBuildInsertValue(c->builder, view, len, 1, "arg_view");
+				LLVMValueRef dest = LLVMBuildGEP2(c->builder, view_t, views, &idx, 1, "view_slot");
+				LLVMBuildStore(c->builder, view, dest);
+				LLVMValueRef next = LLVMBuildAdd(c->builder, idx, LLVMConstInt(i64_t, 1, 0), "argv_next");
+				LLVMBuildBr(c->builder, loop);
+				LLVMAddIncoming(idx, &next, &body, 1);
+				LLVMPositionBuilderAtEnd(c->builder, done);
+				args[1] = views;
+			}
+			result = LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(renamed), renamed, args, argc, "");
+		}
 		if (c->uses_print) {
 			LLVMValueRef flush_fn2 = declare_kawa_runtime_fn(c, "__kawa_flush");
 			if (flush_fn2)
 				LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn2), flush_fn2, NULL, 0, "");
 		}
-		LLVMBuildRet(c->builder, LLVMConstNull(i32_t));
+		LLVMBuildRet(c->builder, LLVMGetTypeKind(LLVMTypeOf(result)) == LLVMVoidTypeKind ? LLVMConstNull(i32_t) : coerce_value(c, result, c->main_ret_ast, i32_t, NULL));
 	}
 
 	// Capture OS argc/argv for std.process.arg_count/arg_at. If a user
@@ -640,6 +674,7 @@ static void compute_sha256_hex(const unsigned char *data, size_t len, char out_h
 }
 
 void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
+	kawa_di_finalize(c); // Finish metadata before verification or optimization.
 
 	// Verify the module *before* any optimization runs. This catches
 	// malformed metadata, type mismatches, and structural IR errors with
@@ -683,6 +718,7 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	// Set the data layout first -- vectorization needs a concrete layout.
 	LLVMSetModuleDataLayout(c->module, LLVMCreateTargetDataLayout(machine));
 	LLVMSetTarget(c->module, triple);
+	kawa_verify_safety(c, machine);
 
 	// Coroutine transforms must run before the main pipeline so coro-split
 	// lowers the frame before inlining decisions are made. The pass
@@ -725,13 +761,18 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 			snprintf(lto_buf, sizeof(lto_buf), ",lto<O%d>", lto_lvl);
 			strcat(pipeline, lto_buf);
 		}
-		LLVMRunPasses(c->module, pipeline, machine, opts);
+		if (c->opt_level >= 2)
+			strcat(pipeline, ",function(sroa,instcombine,simplifycfg)");
+		LLVMErrorRef pass_error = LLVMRunPasses(c->module, pipeline, machine, opts);
+		if (pass_error) {
+			char *message = LLVMGetErrorMessage(pass_error);
+			kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL, 0, "optimization failed: %s", message);
+			LLVMDisposeErrorMessage(message);
+			exit(1);
+		}
 	}
 	LLVMDisposePassBuilderOptions(opts);
 
-	// Finalize debug info BEFORE optimization runs -- DIBuilder must see
-	// its subprograms intact.
-	kawa_di_finalize(c);
 
 	if (LLVMWriteBitcodeToFile(c->module, filename) != 0)
 		kdiag_error_at(KAWA_E_SEMANTIC,

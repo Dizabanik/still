@@ -1,8 +1,4 @@
 {
   "kind": "reject",
-  "diagnostic": "error\\[E\\d+\\].*(pure|effect|write)",
-  "xfail": {
-    "phase": "acceptance",
-    "reason": "EFFECTS: pure annotations are not verified against pointer writes."
-  }
+  "diagnostic": "error\\[E\\d+\\].*(pure|effect|write)"
 }

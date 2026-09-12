@@ -20,6 +20,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The context-free C APIs use LLVM's global context, even when the function
+// belongs to our private context. Mixing them leaves non-canonical types in
+// optimization passes (e.g. a bitcast from i64 to a different i64 object).
+static inline LLVMBasicBlockRef kawa_append_block(LLVMValueRef fn, const char *name) {
+	return LLVMAppendBasicBlockInContext(LLVMGetTypeContext(LLVMTypeOf(fn)), fn, name);
+}
+
 // --- Diagnostics helpers ---
 // Coded errors anchored to the AST node's source line (rendered through
 // kdiag_line from the driver-provided source text). `knerr` anchors the
@@ -143,6 +150,8 @@ void kawa_di_attach_subprogram(KawaCompiler *c, const char *name,
 							   ASTNode *fn_node);
 void kawa_di_set_location(KawaCompiler *c, int line);
 
+void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message);
+
 // --- codegen_scope.c ---
 char *get_var_path(KawaCompiler *c, const char *s);
 const char *resolve_type_name(KawaCompiler *c, ASTNode *n);
@@ -190,6 +199,7 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 void codegen_stmt(KawaCompiler *c, ASTNode *n);
 
 // --- codegen_func.c ---
+void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine);
 void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 					   const char *implicit_self_struct);
 

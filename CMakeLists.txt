@@ -71,7 +71,7 @@ add_test(NAME smoke
 # No dependency on a particular vendored lit/Python installation.
 add_test(NAME unit
 	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test.py
-		--kawac $<TARGET_FILE:kawac>
+		--kawac $<TARGET_FILE:kawac> --strict
 		--json ${CMAKE_BINARY_DIR}/unit-results.json)
 set_tests_properties(unit PROPERTIES TIMEOUT 600)
 

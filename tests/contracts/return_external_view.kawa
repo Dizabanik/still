@@ -1,0 +1,3 @@
+struct Box { i32* p; }
+fn Box wrap(i32* p) { Box b={.p=p}; return b; }
+fn i32 main() { i32 x=7; Box b=wrap(&x); println("{*b.p}"); return 0; }

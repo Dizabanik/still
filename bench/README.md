@@ -37,7 +37,7 @@ Build policies are explicit:
 | C | `-O3 -march=native -std=c11 -ffp-contract=off`; dynamic index guards are written explicitly where needed. |
 | Rust | `--edition=2021`, O3, native CPU, one codegen unit, panic abort, overflow checks off; normal indexed accesses retain bounds semantics. |
 
-The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. No checked-pointer or temporal-safety guarantee is claimed for today's compiler. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor currently returns a raw C string, so its setup parser uses that representation explicitly; a compiler contract separately exposes the broken conversion to `str`.
+The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. No checked-pointer or temporal-safety guarantee is claimed for today's compiler. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor returns a checked, sized byte view. The setup parser explicitly decays that view to a C pointer to parse the controlled, NUL-terminated decimal arguments; this keeps the workload algorithm unchanged.
 
 ## New matched workloads
 

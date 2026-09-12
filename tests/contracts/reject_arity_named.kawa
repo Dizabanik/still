@@ -1,0 +1,2 @@
+fn i32 f(i32 a,i32 b) { return a+b; }
+fn i32 main() { return f(b:2); }

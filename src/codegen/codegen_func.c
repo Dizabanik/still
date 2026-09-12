@@ -36,21 +36,25 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	LLVMTypeRef func_t = LLVMFunctionType(ret_t, param_types, total_arg_cnt, 0);
 
-	// `main` adaptation: the OS entry point is `i32 @main(i32 argc,
-	// ptr argv)`. A user main declared with those two params maps straight
-	// onto it; any other shape gets renamed to kawa_main with a thin
-	// synthesized @main wrapper calling it.
+	// A wrapper owns the C entry ABI, converts argv views when requested,
+	// flushes output, and forwards the user main's integer result.
 	const char *llvm_name = cur->data.func.name;
 	int is_user_main = strcmp(llvm_name, "main") == 0 && !implicit_self_struct;
 	if (is_user_main) {
-		int args_ok = explicit_arg_cnt == 2 &&
-					  cur->data.func.args->data_type &&
-					  cur->data.func.args->data_type->kind == TYPE_I32 &&
-					  cur->data.func.args->next &&
-					  cur->data.func.args->next->data_type &&
-					  cur->data.func.args->next->data_type->kind == TYPE_PTR;
-		if (!args_ok)
-			llvm_name = "kawa_main";
+		Type *a = cur->data.func.args ? cur->data.func.args->data_type : NULL;
+		Type *b = explicit_arg_cnt == 2 ? cur->data.func.args->next->data_type : NULL;
+		int argv_ok = b && b->kind == TYPE_PTR && b->inner &&
+			((b->inner->kind == TYPE_PTR && b->inner->inner &&
+			  (b->inner->inner->kind == TYPE_CHAR || b->inner->inner->kind == TYPE_U8)) ||
+			 (b->inner->kind == TYPE_SLICE && b->inner->inner && b->inner->inner->kind == TYPE_U8));
+		if ((explicit_arg_cnt != 0 && !(explicit_arg_cnt == 2 && a && a->kind == TYPE_I32 && argv_ok)) ||
+			(LLVMGetTypeKind(ret_t) != LLVMIntegerTypeKind && LLVMGetTypeKind(ret_t) != LLVMVoidTypeKind) || cur->data.func.is_drip) {
+			kerr(KAWA_E_TYPE, cur, "main expects no arguments or (i32, str*/char**), and returns an integer or void");
+			exit(1);
+		}
+		llvm_name = "kawa_main";
+		c->main_argv_views = argv_ok && b->inner->kind == TYPE_SLICE;
+		c->main_ret_ast = cur->data.func.ret_type;
 	}
 
 	// Overloaded declarations emit under their mangled symbol so distinct
@@ -69,6 +73,11 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	}
 
 	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
+	char line_buf[32];
+	snprintf(line_buf, sizeof(line_buf), "%d", cur->line);
+	LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.source", line_buf);
+	if (cur->data.func.is_pure)
+		LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.pure", "true");
 	c->current_ret_type = ret_t;
 	c->current_ret_node_type = cur->data.func.ret_type;
 
@@ -77,8 +86,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	kawa_di_attach_subprogram(c, llvm_name, cur);
 
 	// Optimization attributes: nounwind enables exception-free codegen and
-	// better scheduling; willreturn + memory(none) on pure functions lets
-	// the optimizer hoist/delete calls. noinline keeps drip coroutines from
+	// better scheduling. LLVM infers memory effects; noinline keeps drips from
 	// being inlined into their spawner before coro-split runs.
 	unsigned nounwind_id = LLVMGetEnumAttributeKindForName("nounwind", 8);
 	LLVMAddAttributeAtIndex(
@@ -118,19 +126,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			LLVMCreateEnumAttribute(c->context, presplit_id, 0));
 	}
 
-	// `pure fn`: declared side-effect-free. memory(none) lets the optimizer
-	// hoist calls out of loops, CSE repeated calls and delete dead ones --
-	// the single biggest lever for making Kawa beat naive C output.
-	if (cur->data.func.is_pure) {
-		const char *mem = "memory";
-		unsigned mem_id = LLVMGetEnumAttributeKindForName(mem, strlen(mem));
-		// memory(none) == no reads, no writes. The raw value encodes the
-		// MemoryEffects bitfield; 0 is `none`.
-		LLVMAddAttributeAtIndex(c->current_func, LLVMAttributeFunctionIndex,
-								LLVMCreateEnumAttribute(c->context, mem_id, 0));
-	}
+	// LLVM infers memory effects from verified bodies; a pure function may
+	// still read through pointers, so it must not promise memory(none).
 
-	LLVMBasicBlockRef entry = LLVMAppendBasicBlock(c->current_func, "entry");
+	LLVMBasicBlockRef entry = kawa_append_block(c->current_func, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
 
 	// Clear any debug location left over from the previous function --
@@ -158,22 +157,8 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 						  strlen(a->data.var_decl.name));
 		LLVMTypeRef arg_type = get_llvm_type(c, a->data_type);
 
-		// Pointer parameters: `noalias` (Kawa has no address-taken
-		// parameters escaping through globals) and `readonly` when the fn
-		// is pure -- both feed alias analysis and vectorization. Parameter
-		// attribute indices are 1-based; 0 means the return value.
-		if (LLVMGetTypeKind(arg_type) == LLVMPointerTypeKind) {
-			unsigned na_id = LLVMGetEnumAttributeKindForName("noalias", 7);
-			LLVMAddAttributeAtIndex(c->current_func, arg_idx,
-									LLVMCreateEnumAttribute(c->context, na_id, 0));
-			if (cur->data.func.is_pure) {
-				unsigned ro_id =
-					LLVMGetEnumAttributeKindForName("readonly", 8);
-				LLVMAddAttributeAtIndex(
-					c->current_func, arg_idx,
-					LLVMCreateEnumAttribute(c->context, ro_id, 0));
-			}
-		}
+		// Ordinary pointers may alias, including two arguments to one call.
+		// Leave noalias/readonly inference to LLVM instead of asserting them.
 
 		LLVMValueRef p_alloc =
 			create_entry_block_alloca(c, arg_type, a->data.var_decl.name);
