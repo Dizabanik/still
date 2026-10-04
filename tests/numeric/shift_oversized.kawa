@@ -1,0 +1,1 @@
+fn main() { u64 a=1; u64 b=64; println("{a>>b}"); return 0; }

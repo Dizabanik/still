@@ -1,0 +1,1 @@
+fn main() { u64 a=18446744073709551615; u64 b=1; println("{checked_add(a,b)}"); return 0; }

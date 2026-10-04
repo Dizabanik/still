@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "E0004.*expects 1 bindings"
+}

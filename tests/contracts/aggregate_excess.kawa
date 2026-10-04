@@ -1,0 +1,3 @@
+struct Record { i32 a; }
+const Record value={1,2};
+fn main(){return 0;}

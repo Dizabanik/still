@@ -1,0 +1,1 @@
+fn main() { i8 a=127; i8 b=1; println("{checked_add(a,b)}"); return 0; }

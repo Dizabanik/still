@@ -1,0 +1,3 @@
+i32* saved;
+#[nocapture] fn void remember(i32** value){saved=*value;}
+fn main(){return 0;}

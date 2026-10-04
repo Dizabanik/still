@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "slice out of bounds"
+}

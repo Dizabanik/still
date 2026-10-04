@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "reference index out of bounds"
+}

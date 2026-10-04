@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64> = own(2); let p=ref_of(a); stable(p) { println("{p[2]}"); } return 0; }

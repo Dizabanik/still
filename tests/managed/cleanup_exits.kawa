@@ -1,0 +1,9 @@
+fn void early() { let x: owner<i64> = own(3); defer println("return {mem_metric(2)}"); return; }
+fn main() {
+ early(); println("after {mem_metric(2)}");
+ for (i64 i=0; i<3; i+=1) { let x: owner<i64> = own(1); if (i<2) { continue; } break; }
+ println("loop {mem_metric(2)}");
+ filter { let y: owner<i64> = own(2); defer println("error {mem_metric(2)}"); press e=7; }
+ dregs(e) { println("caught {e} {mem_metric(2)}"); }
+ println("{mem_metric(0)} {mem_metric(1)}"); return 0;
+}

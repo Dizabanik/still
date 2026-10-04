@@ -1,0 +1,7 @@
+{
+  "kind": "run",
+  "stdout": "10 0\n45 10 1\nabsent\n",
+  "flags": [
+    "--memory-metrics"
+  ]
+}

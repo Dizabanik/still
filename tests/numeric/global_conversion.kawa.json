@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "constant numeric conversion out of range"
+}

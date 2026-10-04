@@ -1,0 +1,36 @@
+fn T identity(T value) { return value; }
+fn T inner(T value) { return value+1; }
+fn T outer(T value) {
+    let first=inner(value);
+    let second=inner(first);
+    return second+1;
+}
+fn T recursive(T value,i32 remaining) {
+    if (remaining==0) { return value; }
+    return recursive(value+1,remaining-1);
+}
+fn T combine(T a,T b,T c) { return a*100+b*10+c; }
+fn T fixed([3]T values) { return values[0]+values[1]+values[2]; }
+fn T sliced([]T values) {
+    T total=0;
+    for (i64 i=0;i<values.len;i+=1) { total+=values[i]; }
+    return total;
+}
+i32 ticks=0;
+fn i32 tick() { ticks+=1; return ticks; }
+fn i64 tail_return(i64 value) {
+    let smaller=identity((u8)2);
+    return value+(i64)smaller;
+}
+fn main() {
+    i64 a=-10; i32 b=-20; u64 c=30; u32 d=40;
+    println("{outer(a)} {outer(b)} {outer(c)} {outer(d)}");
+    println("{recursive(a,4)} {recursive(b,4)} {recursive(c,4)} {recursive(d,4)}");
+    println("{identity(inner((i64)50))} {identity(inner((u8)60))}");
+    println("{combine(c:tick(),a:tick(),b:tick())} {ticks}");
+    [3]i64 signed_values={-3,2,7};
+    [3]u8 byte_values={1,2,3};
+    println("{fixed(signed_values)} {sliced(signed_values)} {fixed(byte_values)} {sliced(byte_values)}");
+    println("{tail_return(-100)}");
+    return 0;
+}

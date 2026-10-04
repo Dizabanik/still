@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "shadow 7 7\ndropped false 0\nbreak 12\nleft 21\nright 34\nend 5 5 0\n"
+}

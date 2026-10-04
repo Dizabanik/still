@@ -1,0 +1,6 @@
+struct Record { owner<i64> child; }
+fn main() {
+    let root: owner<Record> = own(1);
+    let duplicate = root[0];
+    return 0;
+}

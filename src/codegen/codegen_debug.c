@@ -159,6 +159,19 @@ LLVMMetadataRef kawa_di_subprogram(KawaCompiler *c, const char *name,
 								   unsigned line, ASTNode *fn_node) {
 	if (!c->di_builder)
 		return NULL;
+	const char *source_file=c->source_filename;
+	int original;
+	kdiag_location((int)line,&source_file,&original);
+	line=(unsigned)original;
+	const char *slash=source_file ? strrchr(source_file,'/') : NULL;
+	const char *basename=slash ? slash+1 : (source_file ? source_file : "<kawa>");
+	const char *directory=".";
+	if (slash) {
+		size_t size=(size_t)(slash-source_file);
+		char *copy=arena_alloc(c->arena,size+1); memcpy(copy,source_file,size); copy[size]=0;
+		directory=copy;
+	}
+	LLVMMetadataRef file=LLVMDIBuilderCreateFile(c->di_builder,basename,strlen(basename),directory,strlen(directory));
 
 	// Subroutine type: return type followed by parameter types (the C API
 	// wants them all in one array, void return included as the first slot).
@@ -189,11 +202,11 @@ LLVMMetadataRef kawa_di_subprogram(KawaCompiler *c, const char *name,
 	}
 
 	LLVMMetadataRef ty = LLVMDIBuilderCreateSubroutineType(
-		c->di_builder, c->di_file, params, pcount, 0);
+		c->di_builder, file, params, pcount, 0);
 
 	LLVMMetadataRef sp = LLVMDIBuilderCreateFunction(
-		c->di_builder, c->di_file, name, strlen(name), name, strlen(name),
-		c->di_file, line, ty, 1 /* IsLocalToUnit */, 1 /* IsDefinition */,
+		c->di_builder, file, name, strlen(name), name, strlen(name),
+		file, line, ty, 1 /* IsLocalToUnit */, 1 /* IsDefinition */,
 		line /* ScopeLine */, LLVMDIFlagZero, 0 /* IsOptimized */);
 	return sp;
 }
@@ -213,8 +226,11 @@ void kawa_di_attach_subprogram(KawaCompiler *c, const char *name,
 
 // Attach a source location to whatever instruction the builder emits next.
 void kawa_di_set_location(KawaCompiler *c, int line) {
+	if (line>0) c->source_line=line;
 	if (!c->di_builder || !c->current_func || line <= 0)
 		return;
+	const char *file=c->source_filename;
+	kdiag_location(line,&file,&line);
 	c->di_line = line;
 	LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
 		c->context, line, 0, LLVMGetSubprogram(c->current_func), NULL);

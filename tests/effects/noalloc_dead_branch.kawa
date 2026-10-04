@@ -1,0 +1,2 @@
+#[noalloc] fn void kernel() { if (false) { let a: owner<i64>=own(1); } }
+fn main() { return 0; }

@@ -1,0 +1,10 @@
+fn main(){
+ let a:owner<i64>=own(1); a[0]=31;
+ if (false) defer println("unexpected {a[0]}");
+ if (true) defer println("selected {a[0]}");
+ let b=move(a); println("{b[0]}");
+ i32 i=0;
+ while(i<3) {defer {println("loop {i}");i=i+1;}}
+ println("finished");
+ return 0;
+}

@@ -1,0 +1,3 @@
+pure fn i8 narrow_return(i32 x){return x;}
+const folded=narrow_return(300);
+fn main(){println("{folded}");return 0;}

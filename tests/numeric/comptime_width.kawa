@@ -1,0 +1,12 @@
+pure fn i32 widen(i8 x){return x;}
+pure fn i8 narrow(i32 x){return x;}
+pure fn i32 shift(i8 x){return x>>2;}
+pure fn i8 small_product(i8 x,i8 y){return x*y;}
+const a=widen(-17);
+const b=narrow(127);
+const c=shift(-16);
+const d=small_product(5,6);
+const logic=false && (1/0==1);
+const bits=(1<<5)|3;
+const float_value=1.5*2.0+0.25;
+fn main(){println("{a} {b} {c} {d} {logic} {bits} {float_value}");return 0;}

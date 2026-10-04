@@ -1,0 +1,8 @@
+struct Pair { i64 a; i64 b; }
+enum Access { Some(ref<Pair>, u8, f64), None }
+#[noalloc] fn i64 inspect(Access value) {
+ return match value { Some(p, flag, weight) => p[0].a+p[0].b+(i64)flag+(i64)weight, None=>-1 };
+}
+fn main() { let a: owner<Pair>=own(1); a[0].a=14; a[0].b=28;
+ let yes=Access.Some(ref_of(a),(u8)3,7.0); let no=Access.None;
+ println("{inspect(yes)} {inspect(no)}"); return 0; }

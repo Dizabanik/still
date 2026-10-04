@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64> = own(2); let p=ref_of(a); release(a); let b: owner<i64> = own(2); b[0]=99; println("{p[0]}"); return 0; }

@@ -1,0 +1,2 @@
+#[nocapture] fn i32* return_pointer(i32* p){return p;}
+fn main(){return 0;}

@@ -1,0 +1,16 @@
+fn void choose(owner<i64> a, i32 pick) {
+ if (pick==0) { let b=move(a); println("left {b[0]}"); return; }
+ println("right {a[0]}");
+}
+fn main() {
+ let a: owner<i64>=own(1); a[0]=7;
+ let r=ref_of(a);
+ { let a=move(a); println("shadow {a[0]} {r[0]}"); }
+ println("dropped {allocated(a)} {mem_metric(2)}");
+ let b: owner<i64>=own(1); b[0]=12;
+ while (true) { let c=move(b); println("break {c[0]}"); break; }
+ let x: owner<i64>=own(1); x[0]=21; choose(move(x),0);
+ let y: owner<i64>=own(1); y[0]=34; choose(move(y),1);
+ for (let loop: owner<i64>=own(2); allocated(loop);) { break; }
+ println("end {mem_metric(0)} {mem_metric(1)} {mem_metric(2)}"); return 0;
+}

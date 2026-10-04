@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64> = own(2); let p=ref_of(a); let q=ref_slice(p,2,2); println("{q[0]}"); return 0; }

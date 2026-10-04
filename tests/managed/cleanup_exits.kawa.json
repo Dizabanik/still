@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "return 24\nafter 0\nloop 0\nerror 16\ncaught 7 0\n5 5\n"
+}

@@ -1,0 +1,2 @@
+struct Byte { u8 value; }
+fn main(){i32 value=std.process.arg_count()+255;Byte narrowed={.value=value};return 0;}

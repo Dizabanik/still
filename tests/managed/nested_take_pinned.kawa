@@ -1,0 +1,7 @@
+fn main() {
+    let root: owner<owner<i64>> = own(1);
+    root[0] = own(1);
+    let view = ref_of(root);
+    stable(view) { let removed = move(root[0]); }
+    return 0;
+}

@@ -1,0 +1,7 @@
+import stdc;
+struct View { i32* pointer; }
+View saved;
+#[nocapture] fn void remember(View* value){
+    stdc.memcpy(&saved,value,sizeof(View));
+}
+fn main(){return 0;}

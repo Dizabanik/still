@@ -1,0 +1,7 @@
+fn main() {
+    let root: owner<owner<i64>> = own(2);
+    root[1] = own(1);
+    let removed = ref_of(root[1]);
+    stable(removed) { resize(root, 1); }
+    return 0;
+}

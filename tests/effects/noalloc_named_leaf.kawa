@@ -1,0 +1,7 @@
+fn i64 strlen(i64 value) {
+    let temporary:owner<i64>=own(1);
+    temporary[0]=value;
+    return temporary[0];
+}
+#[noalloc] fn i64 inspect(i64 value) { return strlen(value); }
+fn main() { return 0; }

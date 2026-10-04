@@ -1,0 +1,1 @@
+enum A { First } enum B { Second } fn main() { let a=A.First; match a { B.Second=>{} } return 0; }

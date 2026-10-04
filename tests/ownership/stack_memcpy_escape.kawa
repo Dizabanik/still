@@ -1,0 +1,9 @@
+import stdc;
+struct View { i32* pointer; }
+View saved;
+fn main(){
+    i32 local=42;
+    View base={.pointer=&local};
+    stdc.memcpy(&saved,&base,sizeof(View));
+    return 0;
+}

@@ -1,0 +1,23 @@
+struct Node { i64 value; ref<Node> next; }
+fn i64 read(ref<i64> p) { return p[0]; }
+fn void consume(owner<i64> p) { println("consume {p[0]}"); }
+fn main() {
+    let a = arena();
+    let x: ref<Node> = arena_new(a, 1);
+    let y: ref<Node> = arena_new(a, 1);
+    x[0].value = 8;
+    y[0].value = 9;
+    x[0].next = y;
+    y[0].next = x;
+    println("{x[0].next[0].value}");
+    remove(y);
+    let old = x[0].next;
+    try_stable(old) { println("bad"); } else { println("stale"); }
+    let b: owner<i64> = own(1);
+    b[0] = 4;
+    println("{read(ref_of(b))}");
+    consume(move(b));
+    println("{mem_metric(0)} {mem_metric(1)}");
+    return 0;
+}
+

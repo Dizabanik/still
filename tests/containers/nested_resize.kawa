@@ -1,0 +1,29 @@
+fn main() {
+    let root: owner<owner<i64>> = own(3);
+    root[0] = own(2);
+    root[0][0] = 103;
+    root[2] = own(1);
+    root[2][0] = 107;
+    let retained = ref_of(root[0]);
+    let removed = ref_of(root[2]);
+    let previous = ref_of(root);
+    mem_budget(0);
+    println("{try_resize(root, 5)} {root[0][0]} {root[2][0]}");
+    mem_budget(100000);
+    resize(root, 5);
+    println("{mem_len(root)} {mem_capacity(root)} {allocated(root[4])}");
+    try_stable(previous) { println("unexpected"); } else { println("invalidated"); }
+    stable(retained) { resize(root, 1); println("{retained[0]}"); }
+    try_stable(removed) { println("unexpected"); } else { println("dropped"); }
+    resize(root, 3);
+    println("{allocated(root[2])}");
+    let copy = clone(root);
+    copy[0][0] = 109;
+    println("{root[0][0]} {copy[0][0]}");
+    let detached = move(root[0]);
+    release(root); release(copy);
+    println("{detached[0]}");
+    release(detached);
+    println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}");
+    return 0;
+}

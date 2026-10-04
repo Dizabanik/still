@@ -1,0 +1,12 @@
+let counter:i32=0;
+fn i32 next(){counter=counter+1;return counter;}
+fn i32 digits(i32 a,i32 b,i32 c){return a*100+b*10+c;}
+struct Digits(T){T unused;}
+impl(T) Digits(T){fn T combine(T a,T b,T c){return a*100+b*10+c;}}
+fn main(){
+ println("{digits(c:next(),a:next(),b:next())}");
+ println("{digits(next(),c:next(),b:next())}");
+ println("{Digits(i32).combine(c:next(),a:next(),b:next())}");
+ println("{Digits(i64).combine(c:(i64)next(),a:(i64)next(),b:(i64)next())}");
+ return 0;
+}

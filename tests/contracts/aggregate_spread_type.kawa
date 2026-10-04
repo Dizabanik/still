@@ -1,0 +1,3 @@
+struct Small { i32 a; }
+struct Large { i32 a; i32 b; }
+fn main(){Small base={1};Large value={..base};return 0;}

@@ -50,6 +50,14 @@ RESET  := \033[0m
 
 all: $(TARGET)
 
+$(BUILD_DIR)/kawa_memory_bc.h: src/runtime/kawa_memory.c src/runtime/kawa_memory.h scripts/embed_runtime.py | $(BUILD_DIR)
+	python3 scripts/embed_runtime.py --clang "$(shell llvm-config --bindir)/clang" --source $< --output $@
+
+$(BUILD_DIR)/kawa_memory_metrics_bc.h: src/runtime/kawa_memory.c src/runtime/kawa_memory.h scripts/embed_runtime.py | $(BUILD_DIR)
+	python3 scripts/embed_runtime.py --clang "$(shell llvm-config --bindir)/clang" --source $< --output $@ --symbol kawa_memory_metrics_bc --metrics
+
+$(BUILD_DIR)/codegen_codegen_compile.o: $(BUILD_DIR)/kawa_memory_bc.h $(BUILD_DIR)/kawa_memory_metrics_bc.h
+
 -include $(DEPS)
 
 $(TARGET): $(OBJS)
@@ -65,7 +73,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 # Build codegen submodule files
 $(BUILD_DIR)/codegen_%.o: $(SRC_DIR)/codegen/%.c | $(BUILD_DIR)
 	@echo "$(YELLOW)[Compiling]$(RESET) $<"
-	@$(CC) $(CFLAGS) -I $(SRC_DIR)/codegen -c $< -o $@
+	@$(CC) $(CFLAGS) -I $(SRC_DIR)/codegen -I $(BUILD_DIR) -c $< -o $@
 
 # timbr lives outside src/; without an explicit rule make falls back to a
 # builtin pattern whose -MMD/-MP output confuses it.

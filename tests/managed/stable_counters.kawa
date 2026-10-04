@@ -1,0 +1,10 @@
+fn main() {
+ let a: owner<i64> = own(10); let p=ref_of(a);
+ for (i64 i=0; i<10; i+=1) { p[i]=i; }
+ println("{mem_metric(7)} {mem_metric(8)}");
+ i64 total=0;
+ stable(p) { for (i64 i=0; i<10; i+=1) { total+=p[i]; } }
+ println("{total} {mem_metric(7)} {mem_metric(8)}");
+ release(a); try_stable(p) { println("bad"); } else { println("absent"); }
+ return 0;
+}

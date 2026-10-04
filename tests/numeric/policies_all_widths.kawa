@@ -1,0 +1,626 @@
+fn main() {
+{
+u8 a=0; u8 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=255; u8 b=255;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=0; u8 b=255;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=255; u8 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=0; u8 b=255;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=0; u8 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=255; u8 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=178; u8 b=170;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=10; u8 b=145;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=103; u8 b=214;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=219; u8 b=57;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=177; u8 b=251;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u8 a=57; u8 b=188;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-128; i8 b=-128;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=127; i8 b=127;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-128; i8 b=127;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=127; i8 b=-128;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=0; i8 b=127;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-128; i8 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=127; i8 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=101; i8 b=78;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-44; i8 b=-17;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-71; i8 b=127;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-15; i8 b=-105;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=2; i8 b=127;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i8 a=-47; i8 b=30;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=0; u16 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=65535; u16 b=65535;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=0; u16 b=65535;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=65535; u16 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=0; u16 b=65535;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=0; u16 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=65535; u16 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=20507; u16 b=29102;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=64653; u16 b=19387;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=955; u16 b=2035;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=23298; u16 b=46829;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=13369; u16 b=54526;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u16 a=43778; u16 b=29603;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-32768; i16 b=-32768;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=32767; i16 b=32767;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-32768; i16 b=32767;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=32767; i16 b=-32768;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=0; i16 b=32767;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-32768; i16 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=32767; i16 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-32529; i16 b=-9721;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=15539; i16 b=-21282;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-20657; i16 b=1897;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=-11394; i16 b=-22226;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=4714; i16 b=-31213;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i16 a=16627; i16 b=17376;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=0; u32 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=4294967295; u32 b=4294967295;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=0; u32 b=4294967295;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=4294967295; u32 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=0; u32 b=4294967295;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=0; u32 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=4294967295; u32 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=2064702975; u32 b=3333645940;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=4117404713; u32 b=1684835275;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=2133671162; u32 b=4171706344;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=1964230614; u32 b=853306797;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=2613585615; u32 b=2313633429;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u32 a=2213484003; u32 b=3691912408;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=-2147483648; i32 b=-2147483648;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=2147483647; i32 b=2147483647;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=-2147483648; i32 b=2147483647;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=2147483647; i32 b=-2147483648;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=0; i32 b=2147483647;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=-2147483648; i32 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=2147483647; i32 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=1958724804; i32 b=722257645;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=1364966262; i32 b=-480639155;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=1072831458; i32 b=-838326299;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=-199933020; i32 b=653051192;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=-354043267; i32 b=-444183111;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i32 a=1547254994; i32 b=-675827094;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=0; u64 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=18446744073709551615; u64 b=18446744073709551615;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=0; u64 b=18446744073709551615;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=18446744073709551615; u64 b=0;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=0; u64 b=18446744073709551615;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=0; u64 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=18446744073709551615; u64 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=2558143774446278382; u64 b=10536299679227258063;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=8027981760627265976; u64 b=2962543836874490255;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=6948018205043794508; u64 b=9597901995295500898;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=11668523231508750240; u64 b=18070164056334791615;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=18133060795010329889; u64 b=12972028606125918095;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+u64 a=2496079520376961040; u64 b=7432464868493446169;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=(-9223372036854775807-1); i64 b=(-9223372036854775807-1);
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=9223372036854775807; i64 b=9223372036854775807;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=(-9223372036854775807-1); i64 b=9223372036854775807;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=9223372036854775807; i64 b=(-9223372036854775807-1);
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=0; i64 b=9223372036854775807;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=(-9223372036854775807-1); i64 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=9223372036854775807; i64 b=1;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=-1543434962981106669; i64 b=4123280750643943123;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=-2906486558406415170; i64 b=-4862834864865048039;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=5372719235519085090; i64 b=6883797918478756887;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=-1583784238530197388; i64 b=-1462576194737100746;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=-4997924419019650373; i64 b=-7489029261204697311;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+{
+i64 a=6235153596095900938; i64 b=-7019359786978720820;
+println("{wrap_add(a,b)} {sat_add(a,b)}");
+println("{wrap_sub(a,b)} {sat_sub(a,b)}");
+println("{wrap_mul(a,b)} {sat_mul(a,b)}");
+}
+return 0; }

@@ -1,0 +1,17 @@
+fn main() {
+    let a: owner<i64> = own(4);
+    a[0] = 42;
+    let r = ref_of(a);
+    let s = ref_slice(r, 0, 2);
+    s[1] = 7;
+    stable(r) {
+        r[0] = r[0] + r[1];
+    }
+    println("{r[0]} {mem_len(s)} {mem_metric(2)}");
+    let b = move(a);
+    let c = clone(b);
+    c[0] = 3;
+    println("{b[0]} {c[0]}");
+    return 0;
+}
+

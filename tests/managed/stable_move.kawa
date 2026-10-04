@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64> = own(2); stable(a) { let b=move(a); } return 0; }

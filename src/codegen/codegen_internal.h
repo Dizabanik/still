@@ -33,8 +33,8 @@ static inline LLVMBasicBlockRef kawa_append_block(LLVMValueRef fn, const char *n
 // caret to a whole-word name on that line; plain kdiag_* still work for
 // non-AST contexts.
 #define kerr(code, node, ...)                                                   \
-	kdiag_error_at(code, c->source_filename ? c->source_filename : "<kawa>",    \
-				   NULL, (node) && (node)->line > 0 ? (node)->line : 0,         \
+	kdiag_error_node(code, c->source_filename ? c->source_filename : "<kawa>",  \
+				   node,                                                        \
 				   __VA_ARGS__)
 #define knerr(code, node, name_, ...)                                           \
 	kdiag_error_named(code,                                                     \
@@ -42,8 +42,8 @@ static inline LLVMBasicBlockRef kawa_append_block(LLVMValueRef fn, const char *n
 					  (node) && (node)->line > 0 ? (node)->line : 0,            \
 					  name_, __VA_ARGS__)
 #define kwarn(code, node, ...)                                                  \
-	kdiag_warn_at(code, c->source_filename ? c->source_filename : "<kawa>",     \
-				  NULL, (node) && (node)->line > 0 ? (node)->line : 0,          \
+	kdiag_warn_node(code, c->source_filename ? c->source_filename : "<kawa>",  \
+				  node,                                                         \
 				  __VA_ARGS__)
 
 // --- Struct Registry ---
@@ -54,11 +54,20 @@ typedef struct StructDef {
 	struct {
 		char *name;
 		LLVMTypeRef type;
+		Type *ast_type;
 		ASTNode *default_expr; // field default (`f32 zoom = 1.0;`), or NULL
 	} fields[64];
 	int field_count;
 	struct StructDef *next;
 } StructDef;
+typedef struct {
+	unsigned *indices;
+	uint64_t provided;
+	StructInitItem *spread;
+} LiteralPlan;
+LiteralPlan kawa_literal_plan(KawaCompiler *c,ASTNode *n,LLVMTypeRef type);
+void kawa_literal_context(KawaCompiler *c,ASTNode *n,Type *type);
+LLVMValueRef kawa_codegen_literal(KawaCompiler *c,ASTNode *n);
 
 // --- Alias Registry ---
 // Allocated from the KawaCompiler's arena.
@@ -71,6 +80,8 @@ typedef struct AliasDef {
 // --- codegen_types.c ---
 void register_alias(KawaCompiler *c, const char *name, Type *target);
 Type *resolve_alias_type(KawaCompiler *c, const char *name);
+Type *kawa_resolve_type(KawaCompiler *c, Type *type);
+Type *kawa_concrete_type(KawaCompiler *c, Type *type);
 void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 					 ASTNode *fields);
 Type *index_base_struct_type(KawaCompiler *c, ASTNode *obj);
@@ -115,7 +126,7 @@ static inline int is_fp_kind(LLVMTypeKind k) {
 // Shared integer folder (codegen_scope.c; used by comptime too). Returns 1
 // and writes *out on success. Wrap/UB semantics match build_int_binop.
 int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
-				   int lhs_signed, int rhs_signed, unsigned long long *out);
+				   int lhs_signed, int rhs_signed, unsigned width, unsigned long long *out);
 
 // --- codegen_intrinsics.c (built-in reductions) ---
 // Emits `internal <acc> @kawa.<op>(ptr data, i64 len[, ptr d2, i64 len2])`
@@ -139,7 +150,13 @@ void init_metadata(KawaCompiler *c);
 void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type);
 void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 						unsigned true_weight, unsigned false_weight);
-void set_fast_math(LLVMValueRef instr);
+void set_fast_math(KawaCompiler *c, LLVMValueRef instr);
+LLVMValueRef kawa_integer_op(KawaCompiler *c, ASTNode *n, int op,
+                            LLVMValueRef left, LLVMValueRef right,
+                            int is_signed, int policy);
+LLVMValueRef kawa_numeric_builtin(KawaCompiler *c, ASTNode *n, const char *name);
+void kawa_check_conversion(KawaCompiler *c, LLVMValueRef value, Type *source,
+                           LLVMTypeRef destination, Type *dest_ast);
 
 // --- codegen_debug.c (-g) ---
 void kawa_di_init(KawaCompiler *c, const char *source_filename);
@@ -151,6 +168,29 @@ void kawa_di_attach_subprogram(KawaCompiler *c, const char *name,
 void kawa_di_set_location(KawaCompiler *c, int line);
 
 void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message);
+
+// Managed memory has one lowering boundary and an opaque runtime descriptor.
+int kawa_is_managed(Type *t);
+int kawa_is_owner(Type *t);
+int kawa_contains_managed(KawaCompiler *c, Type *t, int owners_only);
+Type *kawa_expr_type(KawaCompiler *c, ASTNode *n);
+LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name);
+LLVMValueRef kawa_memory_binary(KawaCompiler *c, ASTNode *n);
+LLVMValueRef kawa_memory_address(KawaCompiler *c, ASTNode *n, ASTNode *base,
+                                ASTNode *index, LLVMTypeRef *out_type, LLVMValueRef *container);
+LLVMValueRef kawa_memory_lvalue(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type,
+                               LLVMValueRef *container);
+LLVMValueRef kawa_memory_write_address(KawaCompiler *c, LLVMValueRef slot,
+                                      LLVMTypeRef type, LLVMValueRef container);
+void kawa_memory_store_owner(KawaCompiler *c, LLVMValueRef slot,
+                             LLVMValueRef value, LLVMValueRef container);
+void kawa_check_value_type(KawaCompiler *c, ASTNode *n, Type *type);
+LLVMValueRef kawa_memory_value(KawaCompiler *c, ASTNode *n);
+void kawa_memory_cleanup(KawaCompiler *c, LLVMValueRef slot, int unpin);
+void kawa_memory_defer(KawaCompiler *c, LLVMValueRef slot, int unpin);
+void kawa_memory_stable(KawaCompiler *c, ASTNode *n);
+void kawa_verify_ownership(KawaCompiler *c, ASTNode *function);
+LLVMValueRef kawa_generic_function(KawaCompiler *c, ASTNode *call, const char *name);
 
 // --- codegen_scope.c ---
 char *get_var_path(KawaCompiler *c, const char *s);
@@ -200,6 +240,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n);
 
 // --- codegen_func.c ---
 void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine);
+void kawa_verify_effects(KawaCompiler *c);
 void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 					   const char *implicit_self_struct);
 
@@ -231,4 +272,3 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 LLVMValueRef declare_kawa_runtime_fn(KawaCompiler *c, const char *name);
 
 #endif
-

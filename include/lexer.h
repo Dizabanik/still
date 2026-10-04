@@ -135,6 +135,7 @@ typedef struct {
 	// Set only on TOK_FLOAT_LIT / TOK_INT_LIT with an explicit suffix.
 	int float_suffix;
 	size_t string_len; // decoded bytes, including embedded NULs
+	size_t *string_offsets; // decoded byte -> original source byte offset
 	const char *filename;
 } Token;
 
@@ -145,6 +146,9 @@ typedef struct {
 	int line;
 	size_t posA;
 	size_t posL;
+	int token_line;
+	size_t token_column;
+	const size_t *source_offsets; // present for parsed interpolation fragments
 	Arena *arena;
 	int had_error;
 	char *filename;

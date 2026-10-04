@@ -1,0 +1,10 @@
+fn main() {
+ let a: owner<i64>=own(2); a[0]=7; a[1]=9;
+ resize(a,3); println("{mem_len(a)} {mem_capacity(a)} {a[0]} {a[1]} {a[2]} {mem_metric(2)}");
+ a[2]=23; resize(a,1); resize(a,3);
+ println("{a[0]} {a[1]} {a[2]} {mem_capacity(a)} {mem_metric(9)} {mem_metric(10)}");
+ let r=ref_of(a); mem_budget(0);
+ println("{try_resize(a,9)} {try_resize(a,9223372036854775807)} {r[0]} {mem_len(a)}");
+ resize(a,0); println("{mem_len(a)} {mem_capacity(a)}");
+ release(a); println("{mem_metric(0)} {mem_metric(1)} {mem_metric(2)}"); return 0;
+}

@@ -104,9 +104,13 @@ void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 // Branch-probability weights (set_branch_weights) stay: those are facts
 // about our code shape, not guesses about the optimizer's tuning.
 
-// Mark an FP op with all-fast-math flags so the backend may reorder/assoc.
-void set_fast_math(LLVMValueRef instr) {
+// Permissions are independent; strict IEEE behavior is the default.
+void set_fast_math(KawaCompiler *c, LLVMValueRef instr) {
 	if (!instr)
 		return;
-	LLVMSetFastMathFlags(instr, LLVMFastMathAll);
+	LLVMFastMathFlags flags = LLVMFastMathNone;
+	if (c->fp_permissions & 1) flags |= LLVMFastMathAllowContract;
+	if (c->fp_permissions & 2) flags |= LLVMFastMathAllowReassoc;
+	if (c->fp_permissions & 4) flags |= LLVMFastMathNoNaNs | LLVMFastMathNoInfs;
+	LLVMSetFastMathFlags(instr, flags);
 }

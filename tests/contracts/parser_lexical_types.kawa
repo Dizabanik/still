@@ -1,0 +1,9 @@
+fn f64 unrelated(f64 value){return value;}
+fn main(){
+    i64 value=10000000000;
+    {u8 value=7;println("{value}");}
+    let from_outer=value;
+    if(false) u8 value=8; else println("{value}");
+    println("{from_outer}");
+    return 0;
+}

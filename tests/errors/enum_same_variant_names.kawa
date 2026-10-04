@@ -1,0 +1,15 @@
+enum First { Value(i64), Empty }
+enum Second { Value(ref<i64>), Empty }
+fn i64 first(First value) {
+    return match value { Value(number)=>number, Empty=>-1 };
+}
+fn i64 second(Second value) {
+    return match value { Value(borrowed)=>borrowed[0], Empty=>-2 };
+}
+fn main() {
+    let owned:owner<i64>=own(1);
+    owned[0]=42;
+    let borrowed=Second.Value(ref_of(owned));
+    println("{first(First.Value(19))} {second(borrowed)} {first(First.Empty)} {second(Second.Empty)}");
+    return 0;
+}

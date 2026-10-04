@@ -1,0 +1,39 @@
+enum Status { Some(i32), None }
+fn T inspected(ref<T> borrowed,Status status) {
+    stable(borrowed) {
+        return match status { Some(extra)=>borrowed[0]+(T)extra, None=>borrowed[0] };
+    }
+}
+fn owner<T> transferred(owner<T> value) { return move(value); }
+fn T cleanup(T value) {
+    let temporary:owner<T>=own(1);
+    temporary[0]=value;
+    defer { println("deferred {temporary[0]}"); }
+    filter { press error=value; } dregs (error:T) {
+        return error+1;
+    }
+    return value;
+}
+struct Signed(T) { i32 negative; T value; }
+impl(T) Signed(T) {
+    fn i64 sum(self) { return (i64)self.negative+(i64)self.value; }
+}
+fn main() {
+    {
+        let signed_owner:owner<i64>=own(1);
+        signed_owner[0]=-10;
+        let byte_owner:owner<u8>=own(1);
+        byte_owner[0]=20;
+        println("{inspected(ref_of(signed_owner),Status.Some(3))} {inspected(ref_of(byte_owner),Status.None)}");
+        let moved_signed=transferred(move(signed_owner));
+        let moved_byte=transferred(move(byte_owner));
+        println("{moved_signed[0]} {moved_byte[0]}");
+        let cleaned_signed=cleanup((i64)-5);
+        let cleaned_byte=cleanup((u8)6);
+        println("{cleaned_signed} {cleaned_byte}");
+        let record=Signed(u8){negative:-100,value:(u8)7};
+        println("{record.sum()}");
+    }
+    println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}");
+    return 0;
+}

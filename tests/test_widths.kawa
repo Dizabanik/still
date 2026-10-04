@@ -22,7 +22,7 @@ fn i32 main() {
     u8 bits = 0b1010_1010;
     printf("%u %d\n", h, bits);
 
-    u8 wrap = 200 + 100;      // unsigned arithmetic wraps (no poison)
+    u8 wrap = wrap_add((u8)200, (u8)100); // wrapping at the declared width
     printf("%d\n", wrap);
 
     i8 n = -5;

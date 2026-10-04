@@ -1,0 +1,4 @@
+i32* saved;
+fn void remember(i32* p){saved=p;}
+fn void forward(i32* p){remember(p);}
+fn main(){i32 x=7;forward(&x);return 0;}

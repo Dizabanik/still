@@ -1,0 +1,4 @@
+i32* saved;
+fn i32 strlen(i32* value){saved=value;return 0;}
+#[nocapture] fn i32 forward(i32* value){return strlen(value);}
+fn main(){return 0;}

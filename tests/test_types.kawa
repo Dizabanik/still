@@ -21,7 +21,7 @@ fn i32 main() {
     if (!b) { stdc.printf("bang-int works\n"); }
 
     let i: i32 = -5;
-    let u = (u32)i;
+    let u = lossy_u32(i); // explicitly preserve the two's-complement bit pattern
     let f = (f64)i;
     let back = (i32)f;
     stdc.printf("%u %f %d\n", u, f, back);

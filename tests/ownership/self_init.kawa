@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64>=move(a); return 0; }

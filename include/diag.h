@@ -22,6 +22,8 @@ enum {
 	KAWA_E_SCOPE,		 // E0006 duplicate declaration
 	KAWA_E_SEMANTIC,	 // E0007 other semantic constraint
 	KAWA_E_MEMBER = 8,    // E0008 unknown field
+	KAWA_E_EFFECT = 9,    // E0009 invalid effect contract
+	KAWA_E_OWNERSHIP = 10, // E0010 affine ownership violation
 	KAWA_W_UNREACHABLE = 11,	 // W0011 code after return is unreachable
 	KAWA_W_UNUSED,		 // W0012 unused local
 };
@@ -55,6 +57,13 @@ int kdiag_warn_count(void);
 // (which only know a line NUMBER off the AST node) can still render the
 // offending source line. Call once from the driver before compiling.
 void kdiag_set_source(const char *text, int len);
+void kdiag_set_json(int enabled);
+int kdiag_explain(const char *code);
+void kdiag_location(int expanded_line, const char **filename, int *source_line);
+void kdiag_offset_location(size_t offset, int *expanded_line, int *byte_column);
+struct ASTNode;
+void kdiag_error_node(int code,const char *filename,const struct ASTNode *node,const char *fmt,...);
+void kdiag_warn_node(int code,const char *filename,const struct ASTNode *node,const char *fmt,...);
 
 // Copy of source line `line_num` (1-based), tabs preserved. Returns a
 // malloc'd string; "" for out-of-range/unknown lines. Caller frees.

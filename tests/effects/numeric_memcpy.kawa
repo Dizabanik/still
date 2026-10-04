@@ -1,0 +1,11 @@
+import stdc;
+struct Numbers { i32 a; i32 b; }
+Numbers saved;
+fn Numbers copied(Numbers value){Numbers copy={..value};return copy;}
+fn main(){
+    Numbers input={.b=7,.a=42};
+    stdc.memcpy(&saved,&input,sizeof(Numbers));
+    Numbers result=copied(saved);
+    println("{result.a} {result.b}");
+    return 0;
+}

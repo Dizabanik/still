@@ -1,0 +1,10 @@
+enum Bits { Value(u64,u64,u64,u64) }
+enum Access { Value(ref<i64>) }
+fn i64 read(Access value) {
+    return match value { Value(borrowed)=>borrowed[0] };
+}
+fn main() {
+    let bits=Bits.Value((u64)1,(u64)1,(u64)0,(u64)8);
+    println("{read(bits)}");
+    return 0;
+}

@@ -17,6 +17,8 @@ typedef struct {
 		ASTNode *node;
 	} decls[1024];
 	int decl_count;
+	struct { char *name; Type *type; } aliases[128];
+	int alias_count;
 
 	// Function signatures seen so far (name -> declared return type +
 	// parameter count). Lets a `let x = f(...)` infer the call's type at
@@ -26,6 +28,7 @@ typedef struct {
 	struct {
 		char *name;
 		Type *ret;
+		ASTNode *parameters;
 		int nparams;
 	} fn_sigs[512];
 	int fn_sig_count;

@@ -1,4 +1,53 @@
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include "codegen_internal.h"
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
+
+static char *native_triple(KawaCompiler *c,const char *default_triple) {
+#ifdef __APPLE__
+	/* A Darwin kernel version is not a macOS deployment version. LLVM's
+	 * kernel-to-product mapping can lag a new OS; use the product version
+	 * directly and honor the same deployment override as the C linker. */
+	char product[64]={0};
+	size_t size=sizeof(product);
+	const char *version=getenv("MACOSX_DEPLOYMENT_TARGET");
+	if (!version) {
+		if (sysctlbyname("kern.osproductversion",product,&size,NULL,0))
+			return arena_strdup(c->arena,default_triple);
+		version=product;
+	}
+	unsigned components[3]={0};
+	const char *part=version;
+	int valid=1;
+	for (unsigned i=0;i<3;++i) {
+		if (*part<'0' || *part>'9') { valid=0; break; }
+		char *end;
+		unsigned long value=strtoul(part,&end,10);
+		if (value>999) { valid=0; break; }
+		components[i]=(unsigned)value;
+		if (!*end) break;
+		if (*end!='.' || i==2) { valid=0; break; }
+		part=end+1;
+	}
+	if (!valid || !components[0]) {
+		kdiag_error_at(KAWA_E_SEMANTIC,"<kawa>",NULL,0,"invalid macOS deployment version");
+		exit(1);
+	}
+	if (!getenv("MACOSX_DEPLOYMENT_TARGET")) components[2]=0;
+	const char *apple=strstr(default_triple,"-apple-");
+	if (apple) {
+		size_t architecture=(size_t)(apple-default_triple);
+		char *out=arena_alloc(c->arena,architecture+64);
+		snprintf(out,architecture+64,"%.*s-apple-macosx%u.%u.%u",(int)architecture,
+			default_triple,components[0],components[1],components[2]);
+		return out;
+	}
+#endif
+	return arena_strdup(c->arena,default_triple);
+}
 
 void kawa_set_debug(KawaCompiler *c, int debug) { c->debug_build = debug; }
 
@@ -27,6 +76,27 @@ void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
 	c->context = LLVMContextCreate();
 	c->module = LLVMModuleCreateWithNameInContext(module_name, c->context);
 	c->builder = LLVMCreateBuilderInContext(c->context);
+
+	// Layout is needed while declaring enum payloads, before optimization.
+	// Use the same native target for layout, verification and object emission.
+	char *default_triple = LLVMGetDefaultTargetTriple();
+	char *triple = native_triple(c,default_triple);
+	char *cpu = LLVMGetHostCPUName(), *features = LLVMGetHostCPUFeatures();
+	LLVMTargetRef target;
+	char *target_error = NULL;
+	if (LLVMGetTargetFromTriple(triple, &target, &target_error)) {
+		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0, "target selection failed: %s", target_error);
+		LLVMDisposeMessage(target_error);
+		exit(1);
+	}
+	c->target_machine = LLVMCreateTargetMachine(target, triple, cpu, features,
+		LLVMCodeGenLevelAggressive, LLVMRelocDefault, LLVMCodeModelDefault);
+	c->target_data = LLVMCreateTargetDataLayout(c->target_machine);
+	LLVMSetModuleDataLayout(c->module, c->target_data);
+	LLVMSetTarget(c->module, triple);
+	LLVMDisposeMessage(default_triple);
+	LLVMDisposeMessage(cpu);
+	LLVMDisposeMessage(features);
 
 	init_metadata(c);
 

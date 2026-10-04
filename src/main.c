@@ -1,183 +1,40 @@
 #include <arena.h>
 #include <codegen.h>
 #include <diag.h>
+#include <driver.h>
 #include <lexer.h>
 #include <parser.h>
 #include <timbr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <errno.h>
+extern char **environ;
+
+static int link_object(const char *output,int lto,int profile,const char *target) {
+	char *args[12]; int count=0;
+	args[count++]="clang"; args[count++]="-pthread";
+#ifdef __APPLE__
+	args[count++]="-target"; args[count++]=(char *)target;
+#endif
+	if (lto) args[count++]="-flto";
+	if (profile) args[count++]="-fprofile-instr-generate";
+	args[count++]="output.o"; args[count++]="-o"; args[count++]=(char *)output; args[count]=NULL;
+	pid_t child;
+	int result=posix_spawnp(&child,args[0],NULL,NULL,args,environ);
+	if (result==ENOENT) { args[0]="cc"; result=posix_spawnp(&child,args[0],NULL,NULL,args,environ); }
+	if (result) { fprintf(stderr,"kawac: cannot start linker: %s\n",strerror(result)); return 2; }
+	int status;
+	while (waitpid(child,&status,0)<0) if (errno!=EINTR) return 2;
+	return WIFEXITED(status) && WEXITSTATUS(status)==0 ? 0 : 2;
+}
 
 // Exit-code contract (uniform across the toolchain):
 //   0  success
 //   1  compilation failed -- any diagnostic from the parser or codegen
 //   2  kawac itself failed -- usage error, unreadable file, link failure
-char *read_file(const char *path) {
-	FILE *f = fopen(path, "rb");
-	if (!f) {
-		fprintf(stderr, "kawac: cannot open '%s'\n", path);
-		exit(2);
-	}
-	fseek(f, 0, SEEK_END);
-	long len = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	char *buf = malloc(len + 1);
-	if (fread(buf, 1, len, f) != (size_t)len) {
-		fprintf(stderr, "kawac: short read on '%s'\n", path);
-		exit(2);
-	}
-	buf[len] = '\0';
-	fclose(f);
-	return buf;
-}
-
-// --- Multi-file imports ---------------------------------------------------
-// `import "dir/file.kawa";` splices the named file's text in place of the
-// import statement before lexing. Paths are relative to the importing
-// file's directory; each file expands at most once (first use wins), so
-// diamond includes are safe and cycles terminate.
-
-#define MAX_IMPORT_FILES 256
-
-typedef struct ImportCtx {
-	char *paths[MAX_IMPORT_FILES]; // canonical-ish keys already expanded
-	int count;
-} ImportCtx;
-
-static int is_ident_char(char ch) {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-		   (ch >= '0' && ch <= '9') || ch == '_' || ch == '$';
-}
-
-static void append_char(char **out, size_t *len, size_t *cap, char ch) {
-	if (*len + 1 >= *cap) {
-		*cap = *cap ? *cap * 2 : 4096;
-		*out = realloc(*out, *cap);
-		if (!*out) {
-			fprintf(stderr, "kawac: out of memory\n");
-			exit(2);
-		}
-	}
-	(*out)[(*len)++] = ch;
-}
-
-static void append_str(char **out, size_t *len, size_t *cap, const char *s) {
-	for (; *s; s++)
-		append_char(out, len, cap, *s);
-}
-
-static char *dir_name(const char *path, Arena *a) {
-	const char *slash = strrchr(path, '/');
-	if (!slash)
-		return arena_strdup(a, ".");
-	size_t len = slash - path;
-	if (len == 0)
-		len = 1; // "/foo.kawa" -> "/"
-	char *out = arena_alloc(a, len + 1);
-	memcpy(out, path, len);
-	out[len] = '\0';
-	return out;
-}
-
-static char *join_path(const char *dir, const char *rel, Arena *a) {
-	if (rel[0] == '/')
-		return arena_strdup(a, rel);
-	size_t dl = strlen(dir), rl = strlen(rel);
-	char *out = arena_alloc(a, dl + rl + 2);
-	memcpy(out, dir, dl);
-	out[dl] = '/';
-	memcpy(out + dl + 1, rel, rl + 1);
-	return out;
-}
-
-static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
-						char **out, size_t *out_len, size_t *out_cap);
-
-// Expand one file: read it, then walk its text splicing in any quoted
-// imports. Output accumulates into *out (grown as needed).
-static void expand_text(ImportCtx *ctx, const char *src_dir, const char *src,
-						const char *current_file,
-						Arena *a, char **out, size_t *out_len,
-						size_t *out_cap) {
-	const char *p = src;
-	while (*p) {
-		if (p[0] == 'i' && strncmp(p, "import", 6) == 0 &&
-			(p == src || !is_ident_char(p[-1]))) {
-			const char *q = p + 6;
-			while (*q == ' ' || *q == '\t')
-				q++;
-			if (*q == '"') {
-				// Quoted import: find the closing quote and the ';'.
-				const char *end = strchr(q + 1, '"');
-				if (end) {
-					const char *semi = end + 1;
-					while (*semi == ' ' || *semi == '\t')
-						semi++;
-					if (*semi == ';') {
-						size_t plen = end - (q + 1);
-						char *rel = arena_alloc(a, plen + 1);
-						memcpy(rel, q + 1, plen);
-						rel[plen] = '\0';
-
-						char *abs = join_path(src_dir, rel, a);
-						expand_file(ctx, abs, a, out, out_len, out_cap);
-						append_str(out, out_len, out_cap, "\n#module \"");
-						append_str(out, out_len, out_cap, current_file);
-						append_str(out, out_len, out_cap, "\"\n");
-
-						p = semi + 1; // skip past `import "...";`
-						continue;
-					}
-				}
-			}
-		}
-		// Not an import statement: copy the character through.
-		append_char(out, out_len, out_cap, *p);
-		p++;
-	}
-}
-
-static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
-						char **out, size_t *out_len, size_t *out_cap) {
-	// One expansion per file, first use wins.
-	for (int i = 0; i < ctx->count; i++) {
-		if (strcmp(ctx->paths[i], abs_path) == 0)
-			return;
-	}
-	if (ctx->count >= MAX_IMPORT_FILES) {
-		fprintf(stderr, "kawac: too many imported files (max %d)\n",
-				MAX_IMPORT_FILES);
-		exit(2);
-	}
-	ctx->paths[ctx->count++] = arena_strdup(a, abs_path);
-
-	char *src = read_file(abs_path);
-	append_str(out, out_len, out_cap, "\n#module \"");
-	append_str(out, out_len, out_cap, abs_path);
-	append_str(out, out_len, out_cap, "\"\n");
-	append_str(out, out_len, out_cap, "// ---- imported from \"");
-	append_str(out, out_len, out_cap, abs_path);
-	append_str(out, out_len, out_cap, "\" ----\n");
-
-	char *src_dir = dir_name(abs_path, a);
-	expand_text(ctx, src_dir, src, abs_path, a, out, out_len, out_cap);
-	free(src);
-}
-
-// Entry: returns fully-expanded source text (malloc'd, NUL-terminated).
-static char *expand_imports(const char *entry_path, Arena *a) {
-	ImportCtx ctx = {0};
-	size_t cap = 1 << 16, len = 0;
-	char *out = malloc(cap);
-	out[0] = '\0';
-	append_str(&out, &len, &cap, "#module \"");
-	append_str(&out, &len, &cap, entry_path);
-	append_str(&out, &len, &cap, "\"\n");
-	expand_file(&ctx, entry_path, a, &out, &len, &cap);
-	out[len] = '\0';
-	return out;
-}
-
 static void usage(const char *prog) {
 	printf("Usage: %s [options] <source.kawa>\n"
 		   "\n"
@@ -192,6 +49,12 @@ static void usage(const char *prog) {
 		   "  --pgo-use=<file>  use profile data for optimization\n"
 		   "  --bounds-check=<safe|always|never> bounds checking policy\n"
 		   "  --emit-hash  emit deterministic SHA-256 hash of output module\n"
+		   "  --check      validate without writing artifacts or invoking the linker\n"
+		   "  --memory-metrics  instrument managed reference checks and stable guards\n"
+		   "  --diagnostic-format=<text|json>  diagnostic output format\n"
+		   "  --explain <E####|W####>  explain a stable diagnostic code\n"
+		   "  --format     validate syntax and write canonical source to stdout\n"
+		   "  --format-check  fail if source needs formatting\n"
 		   "  --color=<when>   diagnostics color: auto|always|never (default auto)\n"
 		   "  --version    print version and exit\n"
 		   "  -h, --help   show this help\n",
@@ -210,6 +73,11 @@ int main(int argc, char **argv) {
 	const char *pgo_use = NULL;
 	int bounds_check_mode = 2; // safe by default; 1 = always, -1 = never
 	int emit_hash = 0;
+	int check_only = 0;
+	int memory_metrics = 0;
+	int json_diagnostics=0;
+	const char *explain=NULL;
+	int format=0, format_check=0;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -242,6 +110,20 @@ int main(int argc, char **argv) {
 				bounds_check_mode = -1;
 		} else if (strcmp(argv[i], "--emit-hash") == 0) {
 			emit_hash = 1;
+		} else if (strcmp(argv[i], "--check") == 0) {
+			check_only = 1;
+		} else if (strcmp(argv[i], "--memory-metrics") == 0) {
+			memory_metrics = 1;
+		} else if (!strcmp(argv[i],"--diagnostic-format=json")) {
+			json_diagnostics=1;
+		} else if (!strcmp(argv[i],"--diagnostic-format=text")) {
+			json_diagnostics=0;
+		} else if (!strcmp(argv[i],"--explain") && i+1<argc) {
+			explain=argv[++i];
+		} else if (!strcmp(argv[i],"--format") || !strcmp(argv[i],"--fmt")) {
+			format=1;
+		} else if (!strcmp(argv[i],"--format-check")) {
+			format=1; format_check=1;
 		} else if (strcmp(argv[i], "--color=always") == 0 ||
 				   strcmp(argv[i], "--color=auto") == 0) {
 			timbr_color_override =
@@ -267,6 +149,8 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	kdiag_set_json(json_diagnostics);
+	if (explain) return kdiag_explain(explain);
 	if (!src_path) {
 		usage(argv[0]);
 		return 2;
@@ -281,6 +165,7 @@ int main(int argc, char **argv) {
 	arena_init(&a, 1024 * 1024 * 10);
 
 	char *expanded = expand_imports(src_path, &a);
+	kdiag_set_source(expanded,(int)strlen(expanded));
 
 	Lexer lex;
 	// src_path is const (argv); the lexer wants a char* it never mutates.
@@ -294,6 +179,15 @@ int main(int argc, char **argv) {
 
 	if (p.had_error)
 		exit(1); // atexit hook prints the summary
+	if (format) {
+		char *original=read_file(src_path);
+		char *formatted=format_source(original,src_path,&a);
+		if (!formatted) return 1;
+		int needs_format=strcmp(original,formatted)!=0;
+		if (!format_check) fputs(formatted,stdout);
+		free(original); free(formatted); free(expanded); arena_free(&a);
+		return format_check && needs_format ? 1 : 0;
+	}
 
 	KawaCompiler kc;
 	kawa_init(&kc, "kawa_main", &a);
@@ -306,14 +200,16 @@ int main(int argc, char **argv) {
 	kc.pgo_use = pgo_use;
 	kc.bounds_check_mode = bounds_check_mode;
 	kc.emit_hash = emit_hash;
+	kc.check_only = check_only;
+	kc.memory_metrics = memory_metrics;
 	// Codegen errors only know a line number; the source text lets them
 	// render caret snippets like parser errors do.
-	kdiag_set_source(expanded, (int)strlen(expanded));
 	kc.source_text = expanded;
 	kc.source_len = (int)strlen(expanded);
 	kawa_compile(&kc, root);
 	kc.opt_level = opt_level;
 	kawa_optimize_and_write(&kc, "output.bc");
+	if (check_only) return 0;
 
 	if (!link_exe) {
 		printf("[Kawa] Wrote output.bc\n");
@@ -332,20 +228,7 @@ int main(int argc, char **argv) {
 		out_name = def;
 	}
 
-	char extra_link_flags[256] = "";
-	if (enable_lto)
-		strcat(extra_link_flags, " -flto");
-	if (pgo_gen)
-		strcat(extra_link_flags, " -fprofile-instr-generate");
-
-	char cmd[4096];
-	// Link the kawac-emitted object (output.o) rather than recompiling the
-	// bitcode: keeps debug sections intact and skips redundant codegen.
-	snprintf(cmd, sizeof(cmd),
-			 "clang %s output.o -o '%s' 2>/dev/null || "
-			 "cc %s output.o -o '%s'",
-			 extra_link_flags, out_name, extra_link_flags, out_name);
-	int rc = system(cmd);
+	int rc = link_object(out_name,enable_lto,pgo_gen!=NULL,LLVMGetTarget(kc.module));
 	if (rc != 0) {
 		fprintf(stderr, "kawac: linking failed\n");
 		return 2;

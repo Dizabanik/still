@@ -1,0 +1,1 @@
+fn main() { i64 a=128; i8 b=(i8)a; println("{b}"); return 0; }

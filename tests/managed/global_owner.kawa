@@ -1,0 +1,2 @@
+let root: owner<i64> = own(1);
+fn main() { return 0; }

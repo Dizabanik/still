@@ -1,0 +1,2 @@
+fn main() { let a: owner<i64> = own(0); let p=ref_of(a); let q=ref_slice(p,0,0);
+ stable(q) { println("{mem_len(q)}"); } return 0; }

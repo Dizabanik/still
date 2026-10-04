@@ -1,6 +1,17 @@
 #include "codegen_internal.h"
 
+static void scoped_statement(KawaCompiler *c, ASTNode *n) {
+	if (!n || n->type==NODE_BLOCK) { codegen_stmt(c,n); return; }
+	ASTNode block={.type=NODE_BLOCK,.line=n->line};
+	block.data.block.stmts=n;
+	codegen_stmt(c,&block);
+}
+
 void run_defer_frame(KawaCompiler *c, DeferFrame *d) {
+	if (d->memory_slot) {
+		kawa_memory_cleanup(c, d->memory_slot, d->memory_unpin);
+		return;
+	}
 	Scope *saved_scope = c->scope_stack;
 	for (int i = 0; i < d->capture_count; i++) {
 		scope_push(c, d->captures[i].name, d->captures[i].slot, d->captures[i].type, d->captures[i].node);
@@ -31,9 +42,19 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 	kawa_di_set_location(c, n->line);
 
 	switch (n->type) {
+	case NODE_STABLE:
+		kawa_memory_stable(c, n);
+		return;
 
 	case NODE_CALL:
 	case NODE_SEND:
+		if (kawa_is_owner(kawa_expr_type(c, n))) {
+			LLVMValueRef value = codegen_expr(c, n);
+			LLVMValueRef slot = create_entry_block_alloca(c, LLVMTypeOf(value), "discarded_owner");
+			LLVMBuildStore(c->builder, value, slot);
+			kawa_memory_cleanup(c, slot, 0);
+			return;
+		}
 		// `ch <- v;` as a statement: the send's value is discarded.
 		(void)codegen_expr(c, n);
 		return;
@@ -47,6 +68,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		return;
 
 	case NODE_BLOCK: {
+		Scope *saved_scope = c->scope_stack;
 		ASTNode *saved_list = c->cur_stmt_list;
 		c->cur_stmt_list = n->data.block.stmts;
 		DeferFrame *saved_defers = c->defer_stack;
@@ -58,14 +80,19 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		}
 		c->defer_stack = saved_defers;
 		c->cur_stmt_list = saved_list;
+		c->scope_stack = saved_scope;
 		return;
 	}
 
-	case NODE_VAR_DECL: {
+    case NODE_VAR_DECL: {
+        kawa_check_value_type(c,n,n->data_type);
+		if (kawa_is_owner(n->data_type) && c->in_coroutine) {
+			kerr(KAWA_E_TYPE, n, "managed owners in coroutines require cancellation cleanup support");
+			exit(1);
+		}
 		LLVMTypeRef var_type = get_llvm_type(c, n->data_type);
 		LLVMValueRef val_ptr =
 			create_entry_block_alloca(c, var_type, n->data.var_decl.name);
-		scope_push(c, n->data.var_decl.name, val_ptr, var_type, n);
 
 		LLVMValueRef init_val = NULL;
 		if (n->data.var_decl.init) {
@@ -141,6 +168,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		}
 		LLVMValueRef store = LLVMBuildStore(c->builder, init_val, val_ptr);
 		attach_tbaa(c, store, var_type);
+		// A declaration becomes visible after its initializer. Shadowing
+		// reads the outer binding; a self-initializer cannot load this alloca.
+		scope_push(c, n->data.var_decl.name, val_ptr, var_type, n);
+		if (kawa_is_owner(n->data_type)) kawa_memory_defer(c, val_ptr, 0);
 		return;
 	}
 
@@ -228,7 +259,25 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			}
 		}
 		LLVMTypeRef target_type = NULL;
-		LLVMValueRef target_ptr = get_address(c, target, &target_type);
+        LLVMValueRef container=NULL;
+        LLVMValueRef target_ptr=kawa_memory_lvalue(c,target,&target_type,&container);
+        if (!target_ptr) target_ptr=get_address(c,target,&target_type);
+		for (StableFrame *f = c->stable_stack; f; f = f->next) {
+			if (f->slot == target_ptr) {
+				kerr(KAWA_E_TYPE, n, "cannot reassign a stable binding");
+				exit(1);
+			}
+		}
+        Type *target_ast=kawa_expr_type(c,target);
+        int owning_field=kawa_is_owner(target_ast);
+        if (!kawa_is_owner(target_ast)) kawa_check_value_type(c,n,target_ast);
+        if (owning_field && container && target_ast->kind==TYPE_ARENA) {
+            kerr(KAWA_E_TYPE,n,"arenas cannot be embedded in owning slots");
+            exit(1);
+        }
+        if (owning_field && n->data.assign.value->type==NODE_CALL &&
+            !n->data.assign.value->data_type)
+            n->data.assign.value->data_type=target_ast;
 		if (!target_ptr || !target_type) {
 			kerr(KAWA_E_SEMANTIC, n,
 				 "cannot resolve assignment target"); // internal
@@ -306,7 +355,12 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		val = coerce_value(c, val, n->data.assign.value->data_type, target_type,
 						   target->data_type);
 		}
-		LLVMValueRef store = LLVMBuildStore(c->builder, val, target_ptr);
+        if (owning_field) {
+            kawa_memory_store_owner(c,target_ptr,val,container);
+            return;
+        }
+        target_ptr=kawa_memory_write_address(c,target_ptr,target_type,container);
+        LLVMValueRef store = LLVMBuildStore(c->builder, val, target_ptr);
 		attach_tbaa(c, store, target_type);
 		return;
 	}
@@ -324,12 +378,12 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 												else_bb ? else_bb : merge_bb);
 		set_branch_weights(c, br_instr, 1, 1);
 		LLVMPositionBuilderAtEnd(c->builder, then_bb);
-		codegen_stmt(c, n->data.if_stmt.then_block);
+		scoped_statement(c, n->data.if_stmt.then_block);
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 			LLVMBuildBr(c->builder, merge_bb);
 		if (else_bb) {
 			LLVMPositionBuilderAtEnd(c->builder, else_bb);
-			codegen_stmt(c, n->data.if_stmt.else_block);
+			scoped_statement(c, n->data.if_stmt.else_block);
 			if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 				LLVMBuildBr(c->builder, merge_bb);
 		}
@@ -355,15 +409,18 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 		struct LoopTargets targets = {exit_bb, cond_bb, c->defer_stack, c->loop_stack};
 		c->loop_stack = &targets;
-		codegen_stmt(c, n->data.while_stmt.body);
+		scoped_statement(c, n->data.while_stmt.body);
 		c->loop_stack = targets.next;
 
-		LLVMBuildBr(c->builder, cond_bb);
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+			LLVMBuildBr(c->builder, cond_bb);
 		LLVMPositionBuilderAtEnd(c->builder, exit_bb);
 		return;
 	}
 
 	case NODE_FOR: {
+		Scope *for_scope = c->scope_stack;
+		DeferFrame *for_defers = c->defer_stack;
 		// for init; cond; step { body }
 		// Lowered as its own block structure so `continue` lands on the
 		// step (not the condition) and per-iteration allocas stay scoped.
@@ -413,7 +470,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			}
 		}
 
-		codegen_stmt(c, n->data.for_stmt.body);
+		scoped_statement(c, n->data.for_stmt.body);
 
 		if (has_lr)
 			c->loop_ranges = lr.parent;
@@ -427,6 +484,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			codegen_stmt(c, n->data.for_stmt.step);
 		LLVMBuildBr(c->builder, cond_bb);
 		LLVMPositionBuilderAtEnd(c->builder, exit_bb);
+		for (DeferFrame *d = c->defer_stack; d && d != for_defers; d = d->next)
+			run_defer_frame(c, d);
+		c->defer_stack = for_defers;
+		c->scope_stack = for_scope;
 		return;
 	}
 
@@ -754,7 +815,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			else {
 				ret_val =
 					coerce_value(c, ret_val, n->data.ret_stmt.expr->data_type,
-								 c->current_ret_type, NULL);
+								 c->current_ret_type, c->current_ret_node_type);
 				LLVMBuildRet(c->builder, ret_val);
 			}
 		}
@@ -1003,6 +1064,10 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			for (ASTNode *cap = n->data.defer.captures; cap && d->capture_count < 16; cap = cap->next) {
 				Scope *s = scope_find(c, cap->data.var_decl.name);
 				if (s) {
+					if (kawa_contains_managed(c, s->node ? s->node->data_type : NULL, 1)) {
+						kerr(KAWA_E_OWNERSHIP, n, "defer captures cannot copy an owner; borrow it without a capture list");
+						exit(1);
+					}
 					LLVMValueRef shadow = create_entry_block_alloca(c, s->type, "defer_cap");
 					LLVMValueRef cur_val = LLVMBuildLoad2(c->builder, s->type, s->val, "cap_val");
 					LLVMBuildStore(c->builder, cur_val, shadow);
@@ -1089,6 +1154,11 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 	ASTNode *target = n->data.match_stmt.target;
 	LLVMValueRef target_val = codegen_expr(c, target);
 	LLVMTypeRef enum_t = LLVMTypeOf(target_val);
+	Type *target_type = kawa_expr_type(c,target);
+	if (!target_type || target_type->kind != TYPE_ENUM || LLVMGetTypeKind(enum_t) != LLVMStructTypeKind) {
+		kerr(KAWA_E_TYPE, n, "match requires a tagged enum value");
+		exit(1);
+	}
 
 	LLVMValueRef match_slot = create_entry_block_alloca(c, enum_t, "match_target");
 	LLVMBuildStore(c->builder, target_val, match_slot);
@@ -1124,6 +1194,44 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 	}
 
 	ASTNode *enum_decl = enum_name ? find_enum_decl(c, enum_name) : NULL;
+	if (!enum_decl || LLVMGetTypeKind(enum_t) != LLVMStructTypeKind) {
+		kerr(KAWA_E_TYPE, n, "match requires a tagged enum value");
+		exit(1);
+	}
+	int has_else = 0;
+	for (ASTNode *a = n->data.match_stmt.arms; a; a = a->next) {
+		if (a->data.match_arm.is_else) {
+			if (has_else) { kerr(KAWA_E_ARGS, a, "duplicate else arm"); exit(1); }
+			has_else = 1;
+			continue;
+		}
+		EnumVariant *variant = find_enum_variant(enum_decl, a->data.match_arm.variant_name);
+		if (!variant || (a->data.match_arm.enum_name && strcmp(a->data.match_arm.enum_name, enum_name))) {
+			kerr(KAWA_E_TYPE, a, "variant `%s` is not in enum `%s`", a->data.match_arm.variant_name, enum_name);
+			exit(1);
+		}
+		int bindings = 0;
+		for (ASTNode *b = a->data.match_arm.bindings; b; b = b->next) ++bindings;
+		if (bindings != variant->payload_count) {
+			kerr(KAWA_E_ARITY, a, "pattern `%s` expects %d bindings, got %d", variant->name, variant->payload_count, bindings);
+			exit(1);
+		}
+		for (ASTNode *prev = n->data.match_stmt.arms; prev != a; prev = prev->next)
+			if (!prev->data.match_arm.is_else && !strcmp(prev->data.match_arm.variant_name, variant->name)) {
+				kerr(KAWA_E_ARGS, a, "duplicate match arm `%s`", variant->name); exit(1);
+			}
+	}
+	if (!has_else) {
+		for (EnumVariant *variant = enum_decl->data.enum_decl.variants; variant; variant = variant->next) {
+			int covered = 0;
+			for (ASTNode *a = n->data.match_stmt.arms; a; a = a->next)
+				if (!strcmp(a->data.match_arm.variant_name, variant->name)) covered = 1;
+			if (!covered) {
+				kerr(KAWA_E_TYPE, n, "non-exhaustive match: missing `%s.%s`", enum_name, variant->name);
+				exit(1);
+			}
+		}
+	}
 
 	int arm_count = 0;
 	ASTNode *else_arm = NULL;

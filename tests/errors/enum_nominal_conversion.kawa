@@ -1,0 +1,4 @@
+enum First { Value(i64) }
+enum Second { Value(i64) }
+fn Second convert(First value) { return value; }
+fn main() { let second=convert(First.Value(42)); return 0; }

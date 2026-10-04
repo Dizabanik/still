@@ -1,0 +1,1 @@
+struct Wide { [8]i64 xs; } enum Value { WideValue(Wide), Empty } fn main() { Wide w; w.xs[7]=123; let value=Value.WideValue(w); match value { WideValue(item)=>{ println("{item.xs[7]}"); }, Empty=>{} } return 0; }

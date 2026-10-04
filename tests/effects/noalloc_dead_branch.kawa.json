@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "error\\[E0009\\].*kernel -> .*calloc"
+}

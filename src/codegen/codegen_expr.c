@@ -114,44 +114,7 @@ void trigger_orbit_updates(KawaCompiler *c, ASTNode *origin_node) {
 	}
 }
 
-// Sign- and width-correct integer arithmetic. NSW/NUW flags give the
-// optimizer extra freedom (vectorization, reassociation) without changing
-// semantics for well-defined Kawa programs.
 static void rehome_wide_literal(KawaCompiler *c, ASTNode *n);
-
-static LLVMValueRef build_int_binop(KawaCompiler *c, int op, LLVMValueRef l,
-									LLVMValueRef r, int lhs_signed,
-									int rhs_signed) {
-	int both_unsigned = !lhs_signed && !rhs_signed;
-	switch (op) {
-	case TOK_PLUS:
-		// Unsigned arithmetic WRAPS (C semantics): no nuw flag -- marking
-		// `u8 200 + 100` nuw makes the wrap a poison value. Signed keeps
-		// nsw to match C's UB and unlock optimizer reasoning.
-		return both_unsigned ? LLVMBuildAdd(c->builder, l, r, "add")
-							 : LLVMBuildNSWAdd(c->builder, l, r, "add");
-	case TOK_MINUS:
-		return both_unsigned ? LLVMBuildSub(c->builder, l, r, "sub")
-							 : LLVMBuildNSWSub(c->builder, l, r, "sub");
-	case TOK_STAR:
-		return both_unsigned ? LLVMBuildMul(c->builder, l, r, "mul")
-							 : LLVMBuildNSWMul(c->builder, l, r, "mul");
-	case TOK_SLASH:
-		// sdiv on an unsigned operand with the high bit set is wrong. When
-		// types are mixed we follow the RHS's signedness (the usual rule in
-		// C-like languages for `x / literal`).
-		if (both_unsigned || !rhs_signed)
-			return LLVMBuildUDiv(c->builder, l, r, "udiv");
-		return LLVMBuildSDiv(c->builder, l, r, "sdiv");
-	case TOK_PERCENT:
-		// Remainder follows the same signedness rule as division.
-		if (both_unsigned || !rhs_signed)
-			return LLVMBuildURem(c->builder, l, r, "urem");
-		return LLVMBuildSRem(c->builder, l, r, "srem");
-	default:
-		return NULL;
-	}
-}
 
 static LLVMValueRef declare_libc_fn(KawaCompiler *c, const char *name);
 
@@ -290,7 +253,14 @@ static void chan_yield(KawaCompiler *c) {
 }
 
 
-LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
+static LLVMValueRef codegen_expr_inner(KawaCompiler *c,ASTNode *n);
+LLVMValueRef codegen_expr(KawaCompiler *c,ASTNode *n) {
+	if (n) kawa_di_set_location(c,n->line);
+	LLVMValueRef result=codegen_expr_inner(c,n);
+	if (n) kawa_di_set_location(c,n->line);
+	return result;
+}
+static LLVMValueRef codegen_expr_inner(KawaCompiler *c, ASTNode *n) {
 	if (!n)
 		return LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0);
 
@@ -322,8 +292,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_BLOCK: {
-		for (ASTNode *s = n->data.block.stmts; s; s = s->next)
-			codegen_stmt(c, s);
+		codegen_stmt(c, n);
 		return LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0);
 	}
 
@@ -524,142 +493,16 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		char func_name[256];
 		LLVMValueRef fn = resolve_callee(c, n->data.call.callee, func_name,
 										 sizeof(func_name));
-
-		// Generic instantiation (IDEAS 2.2). A call naming a registered
-		// generic fn monomorphizes it for the concrete argument types:
-		// the mangled instance (name__T0_T1) is codegen'd on first use and
-		// cached in the module -- subsequent calls hit the same symbol.
-		if (!fn) {
-			for (int gfi = 0; gfi < c->generic_fn_count; gfi++) {
-				ASTNode *gfn = c->generic_fns[gfi];
-				if (strcmp(gfn->data.func.name, func_name) != 0)
-					continue;
-				// Collect concrete arg types (scope-stamp bare refs).
-				Type *concrete[8];
-				int ci = 0;
-				int ok = 1;
-				for (ASTNode *a = n->data.call.args; a; a = a->next, ci++) {
-					Type *at = a->data_type;
-					if (!at && a->type == NODE_VAR_REF) {
-						Scope *sv = scope_find(c, a->data.var_ref.name);
-						if (sv && sv->node && sv->node->data_type)
-							at = sv->node->data_type;
-					}
-					if (!at || ci >= 8) {
-						ok = 0;
-						break;
-					}
-					concrete[ci] = at;
-				}
-				if (!ok)
-					break; // untyped args: fall through to error path
-				char mangled[192];
-				int mo = snprintf(mangled, sizeof(mangled), "%s",
-								  func_name);
-				for (int mi = 0; mi < ci; mi++) {
-					const char *tn = "T";
-					switch (concrete[mi]->kind) {
-					case TYPE_I8: tn = "i8"; break;
-					case TYPE_U8: tn = "u8"; break;
-					case TYPE_I16: tn = "i16"; break;
-					case TYPE_U16: tn = "u16"; break;
-					case TYPE_I32: tn = "i32"; break;
-					case TYPE_U32: tn = "u32"; break;
-					case TYPE_I64: tn = "i64"; break;
-					case TYPE_U64: tn = "u64"; break;
-					case TYPE_F16: tn = "f16"; break;
-					case TYPE_BF16: tn = "bf16"; break;
-					case TYPE_F32: tn = "f32"; break;
-					case TYPE_F64: tn = "f64"; break;
-					default: tn = concrete[mi]->name ? concrete[mi]->name : "?";
-					}
-					mo += snprintf(mangled + mo,
-								   (unsigned)(sizeof(mangled) - mo),
-								   "__%s", tn);
-				}
-				if (LLVMGetNamedFunction(c->module, mangled)) {
-					fn = LLVMGetNamedFunction(c->module, mangled);
-					break;
-				}
-				// Bind params -> concrete types, then emit the instance.
-				c->generic_param_count = 0;
-				ASTNode *gp = gfn->data.func.args;
-				int gpi = 0;
-				for (ASTNode *a2 = n->data.call.args; a2 && gp;
-					 a2 = a2->next, gp = gp->next) {
-					Type *pt = gp->data_type;
-					while (pt && (pt->kind == TYPE_ARRAY ||
-								  pt->kind == TYPE_SLICE ||
-								  pt->kind == TYPE_PTR))
-						pt = pt->inner;
-					if (pt && pt->kind == TYPE_STRUCT && pt->name &&
-						strlen(pt->name) == 1 && pt->name[0] == 'T') {
-						c->generic_param_names[gpi] =
-							pt->name; // always "T" today
-						c->generic_param_types[gpi] = concrete[gpi];
-						gpi++;
-					}
-				}
-				c->generic_param_count = gpi;
-				c->generic_instantiating = 1;
-				// Emit directly under the mangled name so distinct
-				// specializations never collide on the plain symbol.
-				// Save/restore the caller's emission state: the instance's
-				// body leaves the builder parked in its own function.
-				LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
-				LLVMValueRef saved_fn2 = c->current_func;
-				LLVMTypeRef saved_rt2 = c->current_ret_type;
-				Scope *saved_scope = c->scope_stack;
-				// Drop any caller debug location first: the instance's body
-				// sets locations scoped to ITS subprogram, and a call we
-				// emit afterwards must not inherit that scope.
-				LLVMSetCurrentDebugLocation2(c->builder,
-											 (LLVMMetadataRef)NULL);
-				char *saved_name = gfn->data.func.name;
-				gfn->data.func.name = arena_strdup(c->arena, mangled);
-				codegen_func_decl(c, gfn, NULL);
-				gfn->data.func.name = saved_name;
-				c->generic_param_count = 0;
-				c->generic_instantiating = 0;
-				LLVMPositionBuilderAtEnd(c->builder, saved_bb);
-				c->current_func = saved_fn2;
-				c->current_ret_type = saved_rt2;
-				c->scope_stack = saved_scope;
-				// n->line can be 0 (postfix nodes aren't stamped); fall
-				// back to the enclosing function's entry line so the
-				// re-anchor always lands in THIS subprogram's scope.
-				kawa_di_set_location(c,
-									 n->line > 0 ? n->line : 1);
-				fn = LLVMGetNamedFunction(c->module, mangled);
-				if (!fn) {
-					kerr(KAWA_E_SEMANTIC, n,
-						 "generic instantiation of `%s` failed", mangled);
-					exit(1);
-				}
-				// Rewrite this call site to the specialization permanently.
-				n->data.call.callee->type = NODE_VAR_REF;
-				n->data.call.callee->data.var_ref.name =
-					arena_strdup(c->arena, mangled);
-				// Give the call its concrete return type so `let x =
-				// generic(...)` infers correctly (the parser skipped
-				// generics when building its signature table).
-				if (gfn->data.func.ret_type && !n->data_type) {
-					Type *rt = gfn->data.func.ret_type;
-					if (rt->kind == TYPE_STRUCT && rt->name &&
-						strlen(rt->name) == 1) {
-						// Bare T: clone with the first param's concrete
-						// type so later uses don't need the map.
-						Type *conc =
-							arena_alloc(c->arena, sizeof(Type));
-						*conc = *concrete[0];
-						n->data_type = conc;
-					} else {
-						n->data_type = rt;
-					}
-				}
-				break;
-			}
+		LLVMValueRef numeric = kawa_numeric_builtin(c, n, func_name);
+        if (numeric) return numeric;
+		LLVMValueRef managed = kawa_memory_builtin(c, n, func_name);
+		if (managed) return managed;
+		if (!strncmp(func_name, "__kawa_mem_", 11)) {
+			kerr(KAWA_E_SCOPE, n, "managed runtime entry points are reserved for the compiler");
+			exit(1);
 		}
+
+		if (!fn) fn=kawa_generic_function(c,n,func_name);
 
 		// Overload resolution (IDEAS 1.x): when the bare name belongs to an
 		// overload set, pick the declaration whose param types match the
@@ -1026,32 +869,34 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			kerr(KAWA_E_ARITY, n, "function `%s` expects %s%d arguments, got %d",
 				 func_name, LLVMIsFunctionVarArg(func_type) ? "at least " : "",
 				 param_count, arg_count);
-			exit(1);
+			 exit(1);
 		}
 
-		// Named arguments: `f(y: 2, x: 1)` -- match labels to parameter
-		// names and reorder into positional slots. Mixed positional/named
-		// is allowed as long as every named arg finds its slot; anything
-		// unmatched is an error (no defaults in v1). Zero runtime cost:
-		// this is a compile-time permutation of the argument list.
-		if (n->data.call.args &&
-			n->data.call.args->has_arg_label) {
+		ASTNode **evaluation_order=arena_alloc(c->arena,sizeof(*evaluation_order)*(arg_count ? arg_count : 1));
+		ASTNode **parameter_order=arena_alloc(c->arena,sizeof(*parameter_order)*(arg_count ? arg_count : 1));
+		int order=0;
+		for (ASTNode *a=n->data.call.args; a; a=a->next,++order)
+			evaluation_order[order]=parameter_order[order]=a;
+		// Named arguments change ABI slots, while evaluation remains in source
+		// order. Keep the AST intact for later generic specializations.
+		int has_named_argument=0;
+		for (ASTNode *a=n->data.call.args; a; a=a->next)
+			has_named_argument |= a->has_arg_label;
+		if (has_named_argument) {
 			// Build the reordered chain by param index.
 			ASTNode **reord =
 				arena_alloc(c->arena, sizeof(ASTNode *) * (arg_count > 0 ? arg_count : 1));
 			for (int s = 0; s < arg_count; s++)
 				reord[s] = NULL;
-			int used[256] = {0};
-			int pos = 0;
-			int ok = 1;
-			for (ASTNode *a = n->data.call.args; a; a = a->next, pos++) {
+			int *used=arena_alloc(c->arena,sizeof(*used)*(arg_count ? arg_count : 1));
+			memset(used,0,sizeof(*used)*(arg_count ? arg_count : 1));
+			int next_positional=0;
+			for (ASTNode *a = n->data.call.args; a; a = a->next) {
 				const char *label = a->has_arg_label ? a->arg_label : NULL;
 				if (!label) {
-					// Positional in a mixed call: keep relative order among
-					// positionals is NOT guaranteed with named present --
-					// v1 rule: if any arg is named, all must be named.
-					ok = 0;
-					break;
+					while (next_positional<arg_count && used[next_positional]) ++next_positional;
+					reord[next_positional]=a; used[next_positional++]=1;
+					continue;
 				}
 				int matched = -1;
 				for (int p_i = 0; p_i < param_count; p_i++) {
@@ -1066,7 +911,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 						break;
 					}
 				}
-				if (matched < 0 || matched >= 256 || used[matched]) {
+				if (matched < 0 || used[matched]) {
 					kerr(KAWA_E_ARGS, n,
 						 "no unique parameter `%s` in call", label);
 					exit(1);
@@ -1074,25 +919,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 				used[matched] = 1;
 				reord[matched] = a;
 			}
-			if (!ok) {
-				kerr(KAWA_E_ARGS, n,
-					 "if any argument is named, all must be named");
-				exit(1);
-			}
-			// Relink the chain in parameter order.
-			ASTNode *new_head = NULL;
-			ASTNode **new_tail = &new_head;
-			for (int p_i = 0; p_i < param_count; p_i++) {
-				if (!reord[p_i])
-					continue;
-				*new_tail = reord[p_i];
-				new_tail = &(*new_tail)->next;
-			}
-			*new_tail = NULL;
-			n->data.call.args = new_head;
-			arg_count = 0;
-			for (ASTNode *a = new_head; a; a = a->next)
-				arg_count++;
+			for (int p_i=0; p_i<arg_count; ++p_i) parameter_order[p_i]=reord[p_i];
 		}
 
 		size_t args_bytes =
@@ -1106,7 +933,30 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 			LLVMGetParamTypes(func_type, param_types);
 
 		ASTNode *arg_node = n->data.call.args;
-		for (int i = 0; i < arg_count; i++) {
+		FunctionSignature *source_signature = NULL;
+		for (FunctionSignature *s = c->function_signatures; s; s = s->next)
+			if (s->function == fn) { source_signature=s; break; }
+		ASTNode *source_parameter=source_signature ? source_signature->declaration->data.func.args : NULL;
+		Type **parameter_ast=arena_alloc(c->arena,sizeof(*parameter_ast)*(param_count ? param_count : 1));
+		for (int i=0; i<param_count; ++i) {
+			parameter_ast[i]=source_signature && source_signature->parameters ? source_signature->parameters[i] : source_parameter ? source_parameter->data_type : NULL;
+			if (source_parameter) source_parameter=source_parameter->next;
+		}
+		for (int evaluation_index=0; evaluation_index<arg_count; ++evaluation_index) {
+			arg_node=evaluation_order[evaluation_index];
+			int i=0;
+			while (parameter_order[i]!=arg_node) ++i;
+			Type *actual = kawa_expr_type(c, arg_node);
+			Type *expected_ast = i<param_count ? kawa_resolve_type(c,parameter_ast[i]) : NULL;
+			if (kawa_contains_managed(c, actual, 0) && !expected_ast) {
+				kerr(KAWA_E_TYPE, arg_node, "managed values require a typed Kawa parameter");
+				exit(1);
+			}
+			if ((kawa_is_managed(actual) || kawa_is_managed(expected_ast)) &&
+				(!actual || !expected_ast || !kawa_types_same(actual, expected_ast))) {
+				kerr(KAWA_E_TYPE, arg_node, "managed argument type must exactly match its parameter; use ref_of to borrow");
+				exit(1);
+			}
 			// Array -> slice decay: passing an `[N]T` lvalue where a
 			// `[]T` param is expected builds a {&arr[0], N} view in one
 			// constant pair -- no copy, no runtime work.
@@ -1239,7 +1089,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 					LLVMBuildStore(c->builder, val, temp_alloc);
 					val = temp_alloc;
 				}
-				val = coerce_value(c, val, arg_node->data_type, expected, NULL);
+				val = coerce_value(c, val, actual, expected, expected_ast);
 			} else {
 				// Vararg slot: C varargs require integer promotion to i32
 				// and float promotion to f64. Signed narrow values must
@@ -1306,123 +1156,7 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		return call;
 	}
 
-	case NODE_STRUCT_LITERAL: {
-		LLVMTypeRef s_type = get_llvm_type(c, n->data_type);
-		if (!s_type) {
-			kerr(KAWA_E_SEMANTIC, n, "literal missing type"); // internal
-			exit(1);
-		}
-
-		// Array literal: { e0, e1, ... } with TYPE_ARRAY context.
-		if (LLVMGetTypeKind(s_type) == LLVMArrayTypeKind) {
-			LLVMTypeRef elem_t = LLVMGetElementType(s_type);
-			LLVMValueRef alloca =
-				create_entry_block_alloca(c, s_type, "arr_lit");
-			int idx = 0;
-			for (StructInitItem *item = n->data.struct_lit.items; item;
-				 idx++, item = item->next) {
-				LLVMValueRef val = codegen_expr(c, item->value);
-				val =
-					coerce_value(c, val, item->value->data_type, elem_t, NULL);
-				LLVMValueRef gep = LLVMBuildStructGEP2(c->builder, s_type,
-													   alloca, idx, "elem");
-				LLVMBuildStore(c->builder, val, gep);
-			}
-			return LLVMBuildLoad2(c->builder, s_type, alloca, "arr_val");
-		}
-
-		if (LLVMGetTypeKind(s_type) != LLVMStructTypeKind) {
-			kerr(KAWA_E_SEMANTIC, n, "struct literal missing type"); // internal
-			exit(1);
-		}
-
-		LLVMValueRef alloca = create_entry_block_alloca(c, s_type, "lit");
-		LLVMTypeRef base_ty_unused = NULL;
-
-		// Field defaults + `..base` spread (IDEAS 1.3). Seed order:
-		// spread base first (whole-record copy), then defaults for fields
-		// the base didn't provide... no -- the base IS a full record, so
-		// with a spread the seed is just the base; without one, declared
-		// field defaults fill in. Explicit items always overwrite.
-		StructInitItem *spread = NULL;
-		for (StructInitItem *it = n->data.struct_lit.items; it; it = it->next)
-			if (it->spread_from)
-				spread = it;
-		if (spread) {
-			LLVMTypeRef i8_t = LLVMInt8TypeInContext(c->context);
-			LLVMTypeRef i8ptr =
-				LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
-			ASTNode *base_node = spread->spread_from;
-			Type *base_ty = base_node->data_type;
-			// libc memcpy: same machine code as the intrinsic once the
-			// optimizer recognizes the libfunc (lowered inline).
-			LLVMTypeRef memcpy_t = LLVMFunctionType(
-				i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr,
-									   LLVMInt64TypeInContext(c->context)},
-				3, 0);
-			LLVMValueRef mc =
-				LLVMGetNamedFunction(c->module, "memcpy");
-			if (!mc || LLVMGetTypeKind(LLVMGlobalGetValueType(mc)) !=
-						   LLVMFunctionTypeKind)
-				mc = LLVMAddFunction(c->module, "memcpy", memcpy_t);
-			LLVMValueRef base_ptr;
-			if (base_ty && (base_ty->kind == TYPE_STRUCT)) {
-				base_ptr = get_address(c, base_node, &base_ty_unused);
-			} else {
-				// Rvalue base: spill to a temp alloca and copy from there.
-				LLVMValueRef tmp =
-					create_entry_block_alloca(c, s_type, "spread_base");
-				LLVMBuildStore(c->builder,
-							   codegen_expr(c, base_node), tmp);
-				base_ptr = tmp;
-			}
-			LLVMBuildCall2(
-				c->builder, memcpy_t, mc,
-				(LLVMValueRef[]){
-					LLVMBuildBitCast(c->builder, alloca, i8ptr, ""),
-					LLVMBuildBitCast(c->builder, base_ptr, i8ptr, ""),
-					LLVMSizeOf(s_type)},
-				3, "");
-		} else {
-			// Declared defaults: store each before explicit items run.
-			StructDef *sd = find_struct_def_pub(c, s_type);
-			if (sd) {
-				for (int di = 0; di < sd->field_count; di++) {
-					if (!sd->fields[di].default_expr)
-						continue;
-					ASTNode *dflt = sd->fields[di].default_expr;
-					LLVMValueRef dv = codegen_expr(c, dflt);
-					dv = coerce_value(c, dv, dflt->data_type,
-									  sd->fields[di].type, NULL);
-					LLVMValueRef gep = LLVMBuildStructGEP2(
-						c->builder, s_type, alloca, (unsigned)di, "dflt");
-					LLVMBuildStore(c->builder, dv, gep);
-				}
-			}
-		}
-
-		StructInitItem *item = n->data.struct_lit.items;
-		for (int idx = 0; item; idx++, item = item->next) {
-			if (item->spread_from)
-				continue; // already applied as the seed
-			LLVMValueRef val = codegen_expr(c, item->value);
-			int field_idx;
-			LLVMTypeRef field_ty;
-			if (item->field_name) {
-				field_idx = get_field_index(c, s_type, item->field_name);
-				field_ty = get_field_type(c, s_type, item->field_name);
-			} else {
-				// Positional init: use the running index.
-				field_idx = idx;
-				field_ty = LLVMStructGetTypeAtIndex(s_type, idx);
-			}
-			LLVMValueRef gep = LLVMBuildStructGEP2(c->builder, s_type, alloca,
-												   field_idx, "fld");
-			val = coerce_value(c, val, item->value->data_type, field_ty, NULL);
-			LLVMBuildStore(c->builder, val, gep);
-		}
-		return LLVMBuildLoad2(c->builder, s_type, alloca, "lit_val");
-	}
+	case NODE_STRUCT_LITERAL: return kawa_codegen_literal(c,n);
 
 	case NODE_TERNARY: {
 		// cond ? a : b -- both arms evaluate in their own block; a phi
@@ -1464,14 +1198,27 @@ LLVMValueRef codegen_expr(KawaCompiler *c, ASTNode *n) {
 		return phi;
 	}
 
-	case NODE_BINARY_OP:
+	case NODE_BINARY_OP: {
+		LLVMValueRef managed=kawa_memory_binary(c,n);
+		if (managed) return managed;
 		// Short-circuit logical ops need custom control flow -- the RHS
 		// must not be evaluated unless the LHS demands it.
 		if (n->data.bin_op.op == TOK_ANDAND || n->data.bin_op.op == TOK_OROR)
 			return codegen_short_circuit(c, n);
 		rehome_wide_literal(c, n);
-		return build_binop(c, n, codegen_expr(c, n->data.bin_op.left),
-						   codegen_expr(c, n->data.bin_op.right));
+		if (n->data.bin_op.unary_negation) {
+			LLVMValueRef operand = codegen_expr(c, n->data.bin_op.right);
+			if (is_fp_kind(LLVMGetTypeKind(LLVMTypeOf(operand)))) {
+				LLVMValueRef value = LLVMBuildFNeg(c->builder, operand, "negate");
+				set_fast_math(c, value);
+				return value;
+			}
+			return build_binop(c, n, codegen_expr(c, n->data.bin_op.left), operand);
+		}
+		LLVMValueRef left = codegen_expr(c, n->data.bin_op.left);
+		LLVMValueRef right = codegen_expr(c, n->data.bin_op.right);
+		return build_binop(c, n, left, right);
+	}
 
 	case NODE_SET_POUR: {
 		LLVMTypeRef ignored;
@@ -2719,7 +2466,7 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 				res = LLVMBuildFDiv(c->builder, l, r, "fdiv");
 				break;
 			}
-			set_fast_math(res);
+			set_fast_math(c, res);
 			return res;
 		}
 		case TOK_LANGLE:
@@ -2829,7 +2576,8 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 		// Saturating forms (qadd/qsub/qmul) come in as function calls,
 		// not operators -- but a `q`-prefixed call on narrow types lowers
 		// to the sat intrinsics. Plain operators keep C wrap/UB rules.
-		LLVMValueRef res = build_int_binop(c, op, l, r, l_signed, r_signed);
+		LLVMValueRef res = kawa_integer_op(c, n, op, l, r, l_signed || r_signed,
+            (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR) && !(l_signed || r_signed) ? 1 : 0);
 		if (res)
 			return res;
 		return l;
@@ -2841,13 +2589,9 @@ LLVMValueRef build_binop(KawaCompiler *c, ASTNode *n, LLVMValueRef l,
 	case TOK_CARET:
 		return LLVMBuildXor(c->builder, l, r, "xor");
 	case TOK_SHL:
-		return LLVMBuildShl(c->builder, l, r, "shl");
+		return kawa_integer_op(c, n, op, l, r, l_signed, 0);
 	case TOK_SHR:
-		// Arithmetic shift for signed operands, logical for unsigned --
-		// mirrors C semantics with zero extra instructions.
-		return (l_signed || r_signed)
-				   ? LLVMBuildAShr(c->builder, l, r, "ashr")
-				   : LLVMBuildLShr(c->builder, l, r, "lshr");
+		return kawa_integer_op(c, n, op, l, r, l_signed, 0);
 	default:
 		return l;
 	}

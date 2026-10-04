@@ -1,0 +1,1 @@
+fn main() { i32 a=-1; u32 b=(u32)a; println("{b}"); return 0; }

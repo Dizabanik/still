@@ -1,6 +1,7 @@
 #include "timbr.h"
 #include <ctype.h>
 #include <diag.h>
+#include "driver.h"
 #include <lexer.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@ void lexer_init(Lexer *l, char *src, Arena *a, char *filename) {
 	l->pos = 0;
 	l->posA = 0;
 	l->posL = 0;
+	l->token_line=1; l->token_column=1; l->source_offsets=NULL;
 	l->line = 1;
 	l->arena = a;
 	l->had_error = 0;
@@ -40,22 +42,28 @@ static Token make_token(Lexer *l, TokenType type, char *text) {
 	Token t = {0};
 	t.type = type;
 	t.text = text;
-	t.line = l->line;
-	t.posA = l->posA - l->posL;
-	t.pos = l->posA;
-	t.len = l->pos - l->posL;
+	t.line = l->token_line;
+	t.posA = l->token_column;
+	t.pos = l->posA-1;
+	t.len = l->pos - t.pos;
+	if (l->source_offsets) {
+		int column;
+		kdiag_offset_location(l->source_offsets[t.pos],&t.line,&column);
+		t.posA=(size_t)column;
+		t.len=l->source_offsets[l->pos]-l->source_offsets[t.pos];
+	}
 	t.filename = l->filename;
 	return t;
 }
 
 char *get_line_text_lexer(Lexer *l) {
 	const char *src = l->src;
-	size_t pos = l->pos;
 
-	size_t start = l->posL;
+	size_t start = l->posA ? l->posA-1 : 0;
+	while (start && src[start-1]!='\n') --start;
 
 	// Move to the end of the current line
-	size_t end = pos;
+	size_t end = start;
 	while (src[end] != '\n' && src[end] != '\0') {
 		end++;
 	}
@@ -69,25 +77,27 @@ char *get_line_text_lexer(Lexer *l) {
 	return ret;
 }
 static Token error_token(Lexer *l, const char *msg) {
-	char *lT = get_line_text_lexer(l);
-	kdiag_error(KAWA_E_PARSE, l->filename, lT, l->line, l->posA - l->posL,
-				(int)(l->pos - l->posA + 1), "Lex error: %s", msg);
+	Token token=make_token(l,TOK_ERROR,"Error");
+	char *lT = l->source_offsets ? kdiag_line(token.line) : get_line_text_lexer(l);
+	kdiag_error(KAWA_E_PARSE, l->filename, lT, token.line, token.posA,
+				(int)token.len, "Lex error: %s", msg);
 	free(lT);
 	l->had_error = 1;
-	return make_token(l, TOK_ERROR, "Error");
+	return token;
 }
 
 Token lexer_next(Lexer *l) {
 	while (!is_at_end(l)) {
 		char c = advance(l);
 		l->posA = l->pos;
+		l->token_line=l->line; l->token_column=l->pos-l->posL;
 
 		if (c == '\n') {
 			l->line++;
 			l->posL = l->pos;
 			continue;
 		}
-		if (isspace(c))
+		if (isspace((unsigned char)c))
 			continue;
 
 		if (c == '/' && peek(l) == '/') {
@@ -105,29 +115,24 @@ Token lexer_next(Lexer *l) {
 				// inner text to the parser as one token.
 				advance(l); // consume '['
 				size_t start = l->pos;
-				while (!is_at_end(l) && peek(l) != ']')
-					advance(l);
+				while (!is_at_end(l) && peek(l) != ']') {
+					if (advance(l)=='\n') { ++l->line; l->posL=l->pos; }
+				}
 				size_t len = l->pos - start;
+				if (peek(l) == ']')
+					advance(l); // consume ']'
+				else return error_token(l,"Unterminated attribute");
 				Token t = make_token(l, TOK_ATTRIBUTE, NULL);
 				t.text = arena_alloc(l->arena, len + 1);
 				memcpy(t.text, l->src + start, len);
 				t.text[len] = '\0';
-				if (peek(l) == ']')
-					advance(l); // consume ']'
 				return t;
 			}
-			if (l->pos + 8 <= l->len && strncmp(l->src + l->pos, "module \"", 8) == 0) {
-				l->pos += 8; // skip 'module "'
-				size_t mstart = l->pos;
-				while (!is_at_end(l) && peek(l) != '"' && peek(l) != '\n')
-					advance(l);
-				size_t mlen = l->pos - mstart;
-				char *mpath = arena_alloc(l->arena, mlen + 1);
-				memcpy(mpath, l->src + mstart, mlen);
-				mpath[mlen] = '\0';
-				l->filename = mpath;
-				if (peek(l) == '"')
-					advance(l);
+			size_t end=l->pos;
+			while (end<l->len && l->src[end]!='\n') ++end;
+			char *path; int original;
+			if (driver_module_location(l->src+l->pos-1,end-l->pos+1,&path,&original)) {
+				l->filename=arena_strdup(l->arena,path); free(path);
 			}
 			while (peek(l) != '\n' && !is_at_end(l))
 				advance(l);
@@ -308,6 +313,7 @@ Token lexer_next(Lexer *l) {
 		if (c == '"') {
 			size_t capacity = 64;
 			char *buffer = arena_alloc(l->arena, capacity);
+			size_t *offsets=arena_alloc(l->arena,capacity*sizeof(*offsets));
 			size_t idx = 0;
 			while (peek(l) != '"' && !is_at_end(l)) {
 				if (idx + 1 >= capacity) {
@@ -315,10 +321,17 @@ Token lexer_next(Lexer *l) {
 					char *grown = arena_alloc(l->arena, capacity);
 					memcpy(grown, buffer, idx);
 					buffer = grown;
+					size_t *grown_offsets=arena_alloc(l->arena,capacity*sizeof(*offsets));
+					memcpy(grown_offsets,offsets,idx*sizeof(*offsets)); offsets=grown_offsets;
 				}
+				size_t start=l->pos;
+				offsets[idx]=l->source_offsets ? l->source_offsets[start] : start;
 				char ch = advance(l);
+				if (ch=='\n') { ++l->line; l->posL=l->pos; }
 				if (ch == '\\') {
+					if (is_at_end(l)) return error_token(l, "Unterminated string escape");
 					char esc = advance(l);
+					if (esc=='\n') { ++l->line; l->posL=l->pos; }
 					switch (esc) {
 					case 'n':
 						buffer[idx++] = '\n';
@@ -369,26 +382,46 @@ Token lexer_next(Lexer *l) {
 			}
 			if (is_at_end(l))
 				return error_token(l, "Unterminated string");
+			offsets[idx]=l->source_offsets ? l->source_offsets[l->pos] : l->pos;
 			advance(l);
 			buffer[idx] = '\0';
 			Token token = make_token(l, TOK_STRING_LIT, buffer);
 			token.string_len = idx;
+			token.string_offsets=offsets;
 			return token;
 		}
 
 		// FIX: Character Literals ('x')
 		if (c == '\'') {
-			char val = advance(l);
+			if (is_at_end(l)) return error_token(l, "Unterminated character literal");
+			unsigned char val = (unsigned char)advance(l);
 			if (val == '\\') {
+				if (is_at_end(l)) return error_token(l, "Unterminated character escape");
 				char esc = advance(l);
-				if (esc == 'n')
-					val = '\n';
-				else if (esc == 't')
-					val = '\t';
-				else if (esc == '0')
-					val = '\0';
+				switch (esc) {
+				case 'n': val='\n'; break;
+				case 'r': val='\r'; break;
+				case 't': val='\t'; break;
+				case '0': val=0; break;
+				case '\\': val='\\'; break;
+				case '\'': val='\''; break;
+				case '"': val='"'; break;
+				case 'x': {
+					int hi=hex_val(peek(l));
+					if (hi<0) return error_token(l, "\\x needs two hex digits");
+					advance(l);
+					int lo=hex_val(peek(l));
+					if (lo<0) return error_token(l, "\\x needs two hex digits");
+					advance(l); val=(unsigned char)(hi*16+lo); break;
+				}
+				default: return error_token(l, "Unknown character escape");
+				}
 			}
-			if (peek(l) != '\'')
+			if (val=='\n' || val=='\r') {
+				/* Escaped newline bytes are valid; literal newlines are not. */
+				if (l->src[l->posA]!='\\') return error_token(l, "Newline in character literal");
+			}
+			if (is_at_end(l) || peek(l) != '\'')
 				return error_token(l, "Expected closing '");
 			advance(l);
 			// Store as INT_LIT for simplicity in parser/codegen
@@ -643,20 +676,13 @@ Token lexer_next(Lexer *l) {
 
 		return error_token(l, "Unexpected character");
 	}
+	l->posA=l->pos+1; l->token_line=l->line; l->token_column=l->pos-l->posL+1;
 	return make_token(l, TOK_EOF, "");
 }
 
 Token lexer_peek(Lexer *l) {
-	size_t save_pos = l->pos;
-	size_t save_posA = l->posA;
-	size_t save_posL = l->posL;
-	int save_line = l->line;
-	int save_err = l->had_error;
+	Lexer saved=*l;
 	Token t = lexer_next(l);
-	l->pos = save_pos;
-	l->posA = save_posA;
-	l->posL = save_posL;
-	l->line = save_line;
-	l->had_error = save_err;
+	*l=saved;
 	return t;
 }

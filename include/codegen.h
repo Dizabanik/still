@@ -8,6 +8,7 @@
 #include <llvm-c/DebugInfo.h>
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
+#include <llvm-c/TargetMachine.h>
 
 // Forward decls to avoid pulling codegen_internal.h into public API.
 struct StructDef;
@@ -19,6 +20,7 @@ typedef struct Scope {
 	LLVMTypeRef type;
 	struct ASTNode *node;
 	int used; // set by scope_find; drives the unused-variable warning
+	struct Scope *all_next; // function's locals, including closed lexical scopes
 	struct Scope *next;
 } Scope;
 
@@ -36,6 +38,8 @@ typedef struct FilterFrame {
 // Deferred statements (`defer stmt;`): pushed at the defer site, emitted in
 // reverse order when the enclosing function returns.
 typedef struct DeferFrame {
+	LLVMValueRef memory_slot; /* owner drop or stable unpin; never captured by value */
+	int memory_unpin;
 	struct ASTNode *stmt;
 	struct {
 		char *name;
@@ -47,10 +51,31 @@ typedef struct DeferFrame {
 	struct DeferFrame *next;
 } DeferFrame;
 
+typedef struct StableFrame {
+	LLVMValueRef slot, reference, data;
+	struct StableFrame *next;
+} StableFrame;
+
+typedef struct FunctionSignature {
+	LLVMValueRef function;
+	ASTNode *declaration;
+	Type **parameters;
+	Type *return_type;
+	struct FunctionSignature *next;
+} FunctionSignature;
+
 typedef struct {
 	LLVMModuleRef module;
 	LLVMBuilderRef builder;
 	LLVMContextRef context;
+	LLVMTargetMachineRef target_machine;
+	LLVMTargetDataRef target_data;
+	int uses_memory;
+	int memory_metrics;
+	int check_only;
+	StableFrame *stable_stack;
+	FunctionSignature *function_signatures;
+	unsigned fp_permissions;
 
 	// Debug build enables source-level debug information. Bounds checks
 	// are controlled separately and default to safe in every build.
@@ -103,6 +128,7 @@ typedef struct {
 	LLVMMetadataRef di_file;
 	// Current source line for instruction locations (updated per statement).
 	int di_line;
+	int source_line; // expanded source line, retained even without debug info
 
 	// Source filename + full source text for diagnostics (owned by the
 	// driver). source_text backs kdiag_line(), which pulls the offending
@@ -152,6 +178,7 @@ typedef struct {
 	LLVMValueRef current_promise_ptr;
 
 	Scope *scope_stack;
+	Scope *function_locals;
 	// Head of the scope chain at FILE level (globals only). Coroutine
 	// bodies start from this snapshot so tasks can read globals without
 	// inheriting the spawning function's locals.

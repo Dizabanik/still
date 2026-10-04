@@ -19,6 +19,7 @@ typedef struct {
 	long long value;
 	int is_signed;
 	int ok;
+	unsigned width;
 } ComptimeInt;
 
 // Lexical environment: params and lets bound during this evaluation,
@@ -35,13 +36,29 @@ static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
 								 int depth, long long *steps, int *returned);
 
 static ComptimeInt ce_fail(void) {
-	ComptimeInt r = {0, 0, 0};
+	ComptimeInt r = {0};
 	return r;
 }
 
-static ComptimeInt ce_ok(long long v, int is_signed) {
-	ComptimeInt r = {v, is_signed, 1};
-	return r;
+static ComptimeInt ce_bits(uint64_t bits, unsigned width, int sign) {
+	uint64_t mask=width==64 ? UINT64_MAX : (UINT64_C(1)<<width)-1;
+	bits &= mask;
+	if (sign && (bits & (UINT64_C(1)<<(width-1)))) bits |= ~mask;
+	ComptimeInt result={(long long)bits,sign,1,width};
+	return result;
+}
+static ComptimeInt ce_convert(KawaCompiler *c, ComptimeInt v, Type *type, int lossy) {
+	if (!v.ok || !type) return ce_fail();
+	LLVMTypeRef target=get_llvm_type(c,type);
+	if (LLVMGetTypeKind(target)!=LLVMIntegerTypeKind) return ce_fail();
+	unsigned width=LLVMGetIntTypeWidth(target);
+	int sign=width!=1 && type_is_signed(c,type);
+	if (width==1) return ce_bits(v.value!=0,1,0);
+	__int128 value=v.is_signed ? (__int128)v.value : (__int128)(uint64_t)v.value;
+	__int128 minimum=sign ? -((__int128)1<<(width-1)) : 0;
+	__int128 end=(__int128)1<<(width-(sign ? 1 : 0));
+	if (!lossy && (value<minimum || value>=end)) return ce_fail();
+	return ce_bits((uint64_t)v.value,width,sign);
 }
 
 static ASTNode *ce_find_fn(KawaCompiler *c, const char *name) {
@@ -73,6 +90,8 @@ static ComptimeInt ce_call(KawaCompiler *c, ASTNode *fn, ASTNode *args,
 		ComptimeInt v = ce_eval(c, arg, caller_env, depth + 1, steps);
 		if (!v.ok)
 			return v;
+		v=ce_convert(c,v,param->data_type,0);
+		if (!v.ok || arg->has_arg_label) return ce_fail();
 		CeEnv *b = arena_alloc(c->arena, sizeof(CeEnv));
 		b->name = param->data.var_decl.name;
 		b->value = v;
@@ -93,7 +112,7 @@ static ComptimeInt ce_call(KawaCompiler *c, ASTNode *fn, ASTNode *args,
 		ce_exec_stmts(c, body->data.block.stmts, env, depth, steps, &returned);
 	if (!returned)
 		return ce_fail(); // fell off the end without a return
-	return result;
+	return ce_convert(c,result,fn->data.func.ret_type,0);
 }
 
 static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
@@ -109,6 +128,8 @@ static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
 					: ce_fail();
 			if (!v.ok)
 				return v;
+			if (st->data_type) v=ce_convert(c,v,st->data_type,0);
+			if (!v.ok) return v;
 			CeEnv *b = arena_alloc(c->arena, sizeof(CeEnv));
 			b->name = st->data.var_decl.name;
 			b->value = v;
@@ -166,11 +187,11 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 
 	switch (n->type) {
 	case NODE_LITERAL:
-		if (!n->data_type ||
-			n->data_type->kind == TYPE_F16 || n->data_type->kind == TYPE_BF16 ||
-			n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64)
+		if (n->data_type &&
+			(n->data_type->kind == TYPE_F16 || n->data_type->kind == TYPE_BF16 ||
+			n->data_type->kind == TYPE_F32 || n->data_type->kind == TYPE_F64))
 			return ce_fail(); // FP folding stays with the IR folder
-		return ce_ok(n->data.literal.i64_val,
+		return ce_bits(n->data.literal.i64_val,n->data_type ? LLVMGetIntTypeWidth(get_llvm_type(c,n->data_type)) : 32,
 					 type_is_signed(c, n->data_type));
 
 	case NODE_BINARY_OP: {
@@ -182,14 +203,26 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 				is_cmp = 1;
 		ComptimeInt l =
 			ce_eval(c, n->data.bin_op.left, env, depth + 1, steps);
+		int op=n->data.bin_op.op;
+		if (l.ok && (op==TOK_ANDAND || op==TOK_OROR)) {
+			if ((op==TOK_ANDAND && !l.value) || (op==TOK_OROR && l.value))
+				return ce_bits(l.value!=0,1,0);
+			ComptimeInt r=ce_eval(c,n->data.bin_op.right,env,depth+1,steps);
+			return r.ok ? ce_bits(r.value!=0,1,0) : r;
+		}
 		ComptimeInt r =
 			ce_eval(c, n->data.bin_op.right, env, depth + 1, steps);
 		if (!l.ok || !r.ok)
 			return ce_fail();
+		unsigned width=l.width>r.width ? l.width : r.width;
+		int ls=l.is_signed, rs=r.is_signed;
+		if (ls && !rs && r.width>=l.width) ls=0;
+		else if (!ls && rs && l.width>=r.width) rs=0;
 		if (is_cmp) {
 			// Mixed signedness compares unsigned, matching runtime icmps.
 			long long lv = l.value, rv = r.value;
-			int sg = l.is_signed && r.is_signed;
+			int sg = ls || rs;
+			lv=ce_bits(l.value,width,sg).value; rv=ce_bits(r.value,width,sg).value;
 			unsigned long long ulv = (unsigned long long)lv,
 							   urv = (unsigned long long)rv;
 			long long res;
@@ -201,15 +234,15 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 			case TOK_ISEQ: res = (lv == rv); break;
 			default: res = (lv != rv); break;
 			}
-			return ce_ok(res, 1);
+			return ce_bits(res,1,0);
 		}
 		unsigned long long out;
 		if (!fold_int_binop(n->data.bin_op.op,
 							(unsigned long long)l.value,
-							(unsigned long long)r.value, l.is_signed,
-							r.is_signed, &out))
+							(unsigned long long)r.value, ls,
+							rs, width, &out))
 			return ce_fail();
-		return ce_ok((long long)out, l.is_signed || r.is_signed);
+		return ce_bits(out,width,ls || rs);
 	}
 
 	case NODE_VAR_REF: {
@@ -250,6 +283,13 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 			return ce_fail();
 		return ce_call(c, fn, n->data.call.args, env, depth, steps);
 	}
+	case NODE_CAST:
+		return ce_convert(c,ce_eval(c,n->data.cast.val,env,depth+1,steps),n->data_type,0);
+	case NODE_TERNARY: {
+		ComptimeInt condition=ce_eval(c,n->data.ternary.cond,env,depth+1,steps);
+		if (!condition.ok) return condition;
+		return ce_eval(c,condition.value ? n->data.ternary.then_expr : n->data.ternary.else_expr,env,depth+1,steps);
+	}
 
 	default:
 		return ce_fail();
@@ -264,6 +304,7 @@ LLVMValueRef kawa_comptime_eval(KawaCompiler *c, ASTNode *n,
 		return NULL;
 	if (out_signed)
 		*out_signed = v.is_signed;
+	if (!result_width) result_width=v.width;
 	return LLVMConstInt(LLVMIntTypeInContext(c->context, result_width),
 						(unsigned long long)v.value, v.is_signed);
 }

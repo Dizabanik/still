@@ -1,0 +1,2 @@
+struct Record { i32 a; i32 b; }
+fn main(){Record value={.a=1,.a=2};return 0;}

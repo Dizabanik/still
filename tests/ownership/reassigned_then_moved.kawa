@@ -1,0 +1,6 @@
+fn main() {
+    let root: owner<i64> = own(1);
+    root = own(1);
+    let other = move(root);
+    return root[0];
+}

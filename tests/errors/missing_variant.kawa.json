@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "E0003.*non-exhaustive.*None"
+}

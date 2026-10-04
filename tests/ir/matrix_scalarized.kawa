@@ -1,6 +1,6 @@
 // OPT: 3
 // FLAGS: --bounds-check=safe
-fn i64 matrix([16]i64 m, [4]i64 v, i64 rounds) {
+pub fn i64 matrix([16]i64 m, [4]i64 v, i64 rounds) {
     i64 acc=0;
     for(i64 r=0;r<rounds;r+=1) {
         [4]i64 out;
@@ -12,7 +12,7 @@ fn i64 matrix([16]i64 m, [4]i64 v, i64 rounds) {
     }
     return acc;
 }
-fn i32 main() { [16]i64 m; [4]i64 v;
+pub fn i32 main() { [16]i64 m; [4]i64 v;
     for(i64 i=0;i<16;i+=1) { m[i]=(i*7+42)&15; }
     for(i64 i=0;i<4;i+=1) { v[i]=(42+i)&65535; }
     println("{matrix(m,v,100)}"); return 0;

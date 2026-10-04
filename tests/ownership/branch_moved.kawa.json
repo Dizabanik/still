@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "E0010.*owner.*a.*may have"
+}

@@ -3,6 +3,28 @@
 #include <llvm-c/Linker.h>
 #include <llvm-c/Error.h>
 #include "kawa_runtime_bc.h"
+/* Embedded runtime bitcode uses the compiler's target and SDK metadata. The
+ * print runtime may have been generated with an older SDK; its code is linked
+ * for this host, so reconcile that descriptive flag before module linking. */
+static void runtime_target(KawaCompiler *c,LLVMModuleRef runtime) {
+	LLVMSetTarget(runtime,LLVMGetTarget(c->module));
+	LLVMSetModuleDataLayout(runtime,c->target_data);
+	LLVMMetadataRef sdk=LLVMGetModuleFlag(c->module,"SDK Version",11);
+	if (!sdk) return;
+	unsigned count=LLVMGetNamedMetadataNumOperands(runtime,"llvm.module.flags");
+	LLVMValueRef *flags=malloc((count ? count : 1)*sizeof(*flags));
+	LLVMGetNamedMetadataOperands(runtime,"llvm.module.flags",flags);
+	for (unsigned i=0; i<count; ++i) {
+		if (LLVMGetMDNodeNumOperands(flags[i])!=3) continue;
+		LLVMValueRef operands[3]; LLVMGetMDNodeOperands(flags[i],operands);
+		unsigned size; const char *name=LLVMGetMDString(operands[1],&size);
+		if (name && size==11 && !memcmp(name,"SDK Version",11))
+			LLVMReplaceMDNodeOperandWith(flags[i],2,sdk);
+	}
+	free(flags);
+}
+#include "kawa_memory_bc.h"
+#include "kawa_memory_metrics_bc.h"
 
 // Runtime-initialized globals can't emit their kawa_globals_init body during
 // pass 3 -- user functions don't exist yet, so a call like `let g = make();`
@@ -25,7 +47,11 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 // runtime cost, folded into every use); anything else gets queued for the
 // synthesized `kawa_globals_init` that main() calls first.
 static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
-								PendingGlobalInit **pending) {
+                                PendingGlobalInit **pending) {
+    if (kawa_contains_managed(c,n->data_type,1)) {
+        kerr(KAWA_E_TYPE,n,"global owners require explicit program-lifetime cleanup support");
+        exit(1);
+    }
 	LLVMTypeRef g_type = get_llvm_type(c, n->data_type);
 
 	// Propagate the declared type to a struct/array literal initializer so
@@ -42,6 +68,10 @@ static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
 		else
 			init_const = const_eval_global_init(c, n->data.var_decl.init,
 												g_type, n->data_type);
+		if (!needs_runtime_init && !init_const) {
+			kerr(KAWA_E_SEMANTIC, n, "global initializer is not a valid constant (overflow or invalid operation)");
+			exit(1);
+		}
 	}
 
 	LLVMValueRef global =
@@ -58,7 +88,7 @@ static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
 
 	// `const x = ...` at file scope: the value never changes, so say so.
 	// This lets the optimizer fold loads and keep the global in registers.
-	if (n->data.var_decl.is_const && !n->data.var_decl.is_orbit)
+	if (n->data.var_decl.is_const && !n->data.var_decl.is_orbit && !needs_runtime_init)
 		LLVMSetGlobalConstant(global, 1);
 
 	// Register so function bodies resolve the name to this storage.
@@ -124,16 +154,48 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 	c->current_ret_type = saved_ret;
 }
 
+static void register_enum_constructor(KawaCompiler *c, LLVMValueRef fn, ASTNode *en,
+                                     EnumVariant *variant, Type *type) {
+	ASTNode *decl = arena_alloc(c->arena, sizeof(*decl));
+	decl->type = NODE_FUNC_DECL;
+	decl->line = en->line;
+	decl->data.func.name = arena_strdup(c->arena, LLVMGetValueName(fn));
+	decl->data.func.ret_type = type;
+	decl->data.func.is_pure = decl->data.func.is_noalloc = 1;
+	ASTNode **tail = &decl->data.func.args;
+	for (int i=0; i<variant->payload_count; ++i) {
+		ASTNode *arg = arena_alloc(c->arena, sizeof(*arg));
+		arg->type = NODE_VAR_DECL;
+		arg->data_type = variant->payload_types[i];
+		char name[24]; snprintf(name,sizeof(name),"payload%d",i);
+		arg->data.var_decl.name = arena_strdup(c->arena,name);
+		*tail = arg; tail = &arg->next;
+	}
+	FunctionSignature *sig = arena_alloc(c->arena, sizeof(*sig));
+	sig->function = fn; sig->declaration = decl;
+	sig->next = c->function_signatures; c->function_signatures = sig;
+	LLVMAddTargetDependentFunctionAttr(fn,"kawa.pure","true");
+	LLVMAddTargetDependentFunctionAttr(fn,"kawa.noalloc","true");
+}
+
+static int reserved_symbol(const char *name) {
+    return name && (!strncmp(name,"__kawa_",7) || !strcmp(name,"kawa_trap") ||
+        !strcmp(name,"kawa_main") || !strcmp(name,"kawa_globals_init"));
+}
 static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 	const char *enum_name = en->data.enum_decl.name;
-	Type en_type = {0};
-	en_type.kind = TYPE_ENUM;
-	en_type.name = (char *)enum_name;
-	LLVMTypeRef llvm_en_type = get_llvm_type(c, &en_type);
+	Type *en_type = arena_alloc(c->arena,sizeof(*en_type));
+	en_type->kind = TYPE_ENUM;
+	en_type->name = (char *)enum_name;
+	LLVMTypeRef llvm_en_type = get_llvm_type(c, en_type);
 
 	for (EnumVariant *ev = en->data.enum_decl.variants; ev; ev = ev->next) {
 		char mangled[256];
 		snprintf(mangled, sizeof(mangled), "%s_%s", enum_name, ev->name);
+        if (reserved_symbol(mangled) || reserved_symbol(ev->name)) {
+            kerr(KAWA_E_TYPE,en,"enum constructor name is reserved for compiler runtime symbols");
+            exit(1);
+        }
 
 		LLVMTypeRef param_ts[16];
 		for (int i = 0; i < ev->payload_count; i++) {
@@ -145,6 +207,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 		LLVMValueRef fn = LLVMGetNamedFunction(c->module, mangled);
 		if (!fn) {
 			fn = LLVMAddFunction(c->module, mangled, fn_t);
+			register_enum_constructor(c,fn,en,ev,en_type);
 			LLVMSetLinkage(fn, LLVMInternalLinkage);
 			unsigned ai_id = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
 			LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
@@ -154,6 +217,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
+			LLVMBuildStore(c->builder,LLVMConstNull(llvm_en_type),alloca_s);
 			LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 0, "tag_ptr");
 			LLVMBuildStore(c->builder, LLVMConstInt(LLVMInt64TypeInContext(c->context), (unsigned long long)ev->tag, 0), tag_ptr);
 
@@ -179,6 +243,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 		LLVMValueRef bare_fn = LLVMGetNamedFunction(c->module, ev->name);
 		if (!bare_fn) {
 			bare_fn = LLVMAddFunction(c->module, ev->name, fn_t);
+			register_enum_constructor(c,bare_fn,en,ev,en_type);
 			LLVMSetLinkage(bare_fn, LLVMInternalLinkage);
 			unsigned ai_id = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
 			LLVMAddAttributeAtIndex(bare_fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
@@ -188,6 +253,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
+			LLVMBuildStore(c->builder,LLVMConstNull(llvm_en_type),alloca_s);
 			LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, llvm_en_type, alloca_s, 0, "tag_ptr");
 			LLVMBuildStore(c->builder, LLVMConstInt(LLVMInt64TypeInContext(c->context), (unsigned long long)ev->tag, 0), tag_ptr);
 
@@ -213,7 +279,16 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 
 void kawa_compile(KawaCompiler *c, ASTNode *root) {
 	c->program_root = root; // comptime fn lookup
-	ASTNode *cur = root->next;
+    ASTNode *cur = root->next;
+    for (ASTNode *n=cur; n; n=n->next) {
+        const char *name=n->type==NODE_FUNC_DECL ? n->data.func.name :
+            n->type==NODE_EXTERN_FN ? n->data.extern_fn.name :
+            n->type==NODE_VAR_DECL ? n->data.var_decl.name : NULL;
+        if (reserved_symbol(name)) {
+            kerr(KAWA_E_TYPE,n,"name is reserved for compiler runtime symbols");
+            exit(1);
+        }
+    }
 
 	// Pass 1: Forward-declare named structs + register aliases. Aliases are
 	// resolved lazily through resolve_alias_type, so we only need to track
@@ -236,8 +311,9 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			LLVMGetTypeByName(c->module, scanner->data.struct_decl.name);
 
 		int field_count = 0;
-		for (ASTNode *f = scanner->data.struct_decl.fields; f; f = f->next)
+		for (ASTNode *f = scanner->data.struct_decl.fields; f; f = f->next) {
 			field_count++;
+		}
 
 		LLVMTypeRef *elem_types =
 			arena_alloc(c->arena, sizeof(LLVMTypeRef) *
@@ -304,8 +380,9 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		for (int ti = 0; ti < sn && !is_generic; ti++) {
 			Type *ty = sig[ti];
 			while (ty &&
-				   (ty->kind == TYPE_ARRAY || ty->kind == TYPE_SLICE ||
-					ty->kind == TYPE_PTR))
+                   (ty->kind == TYPE_ARRAY || ty->kind == TYPE_SLICE ||
+                    ty->kind == TYPE_PTR || ty->kind == TYPE_AMP || ty->kind==TYPE_OWNER ||
+                    ty->kind==TYPE_REF || ty->kind==TYPE_CHAN || ty->kind==TYPE_SET))
 				ty = ty->inner;
 			if (ty && ty->kind == TYPE_STRUCT && ty->name &&
 				strlen(ty->name) == 1 && ty->name[0] == 'T')
@@ -317,6 +394,16 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 	while (cur) {
 		if (cur->type == NODE_EXTERN_FN) {
+			if (!strncmp(cur->data.extern_fn.name, "__kawa_mem_", 11) ||
+				kawa_contains_managed(c, cur->data.extern_fn.ret_type, 0)) {
+				kerr(KAWA_E_TYPE, cur, "extern declarations cannot expose managed representations");
+				exit(1);
+			}
+			for (ASTNode *a = cur->data.extern_fn.args; a; a = a->next)
+				if (kawa_contains_managed(c, a->data_type, 0)) {
+					kerr(KAWA_E_TYPE, a, "extern parameters cannot expose managed representations");
+					exit(1);
+				}
 			// Declare the C symbol with its exact prototype. External
 			// linkage, no body: the linker resolves it from any library
 			// on the link line -- no header translation needed.
@@ -583,13 +670,32 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		}
 	}
 
+	if (c->uses_memory) {
+		LLVMMemoryBufferRef memory = LLVMCreateMemoryBufferWithMemoryRange(
+			(const char *)(c->memory_metrics ? kawa_memory_metrics_bc : kawa_memory_bc),
+			c->memory_metrics ? kawa_memory_metrics_bc_len : kawa_memory_bc_len, "kawa_memory", 0);
+		LLVMModuleRef runtime = NULL;
+		if (LLVMParseBitcodeInContext2(c->context, memory, &runtime)) {
+			kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL, 0,
+				"could not link the managed-memory runtime");
+			exit(1);
+		}
+		runtime_target(c,runtime);
+		if (LLVMLinkModules2(c->module,runtime)) {
+			kdiag_error_at(KAWA_E_SEMANTIC,c->source_filename,NULL,0,"could not link the managed-memory runtime");
+			exit(1);
+		}
+		LLVMDisposeMemoryBuffer(memory);
+	}
 	if (c->uses_print) {
 		LLVMMemoryBufferRef rt_mem = LLVMCreateMemoryBufferWithMemoryRange(
 			(const char *)kawa_runtime_bc, kawa_runtime_bc_len, "kawa_runtime", 0);
 		LLVMModuleRef rt_mod = NULL;
 		if (!LLVMParseBitcodeInContext2(c->context, rt_mem, &rt_mod)) {
+			runtime_target(c,rt_mod);
 			LLVMLinkModules2(c->module, rt_mod);
 		}
+		LLVMDisposeMemoryBuffer(rt_mem);
 	}
 }
 
@@ -683,7 +789,7 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	{
 		char *error = NULL;
 		if (LLVMVerifyModule(c->module, LLVMPrintMessageAction, &error)) {
-			if (getenv("KAWA_DUMP_BAD"))
+			if (!c->check_only && getenv("KAWA_DUMP_BAD"))
 				LLVMPrintModuleToFile(c->module, "tmp/bad2.ll", NULL);
 			kdiag_error_at(KAWA_E_SEMANTIC,
 						   c->source_filename ? c->source_filename : "<kawa>",
@@ -698,27 +804,15 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	}
 
 	char *error_msg = NULL;
-	LLVMTargetRef target;
-	const char *triple = LLVMGetDefaultTargetTriple();
-	if (LLVMGetTargetFromTriple(triple, &target, &error_msg)) {
-		kdiag_error_at(KAWA_E_SEMANTIC,
-					   c->source_filename ? c->source_filename : "<kawa>", NULL,
-					   0, "target selection failed: %s", error_msg);
-		LLVMDisposeMessage(error_msg);
+	LLVMTargetMachineRef machine = c->target_machine;
+	kawa_verify_safety(c, machine);
+	if (c->check_only) {
+		LLVMDisposeTargetMachine(machine);
+		LLVMDisposeTargetData(c->target_data);
+		c->target_machine = NULL;
+		c->target_data = NULL;
 		return;
 	}
-
-	// Aggressive codegen level + host CPU/features so the backend can use
-	// every instruction the machine has (AVX-512, etc.). Combined with
-	// default<O3> below this is what gets Kawa output on par with -O3 C.
-	LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
-		target, triple, LLVMGetHostCPUName(), LLVMGetHostCPUFeatures(),
-		LLVMCodeGenLevelAggressive, LLVMRelocDefault, LLVMCodeModelDefault);
-
-	// Set the data layout first -- vectorization needs a concrete layout.
-	LLVMSetModuleDataLayout(c->module, LLVMCreateTargetDataLayout(machine));
-	LLVMSetTarget(c->module, triple);
-	kawa_verify_safety(c, machine);
 
 	// Coroutine transforms must run before the main pipeline so coro-split
 	// lowers the frame before inlining decisions are made. The pass
@@ -798,7 +892,7 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	}
 
 	if (c->emit_hash) {
-		FILE *f = fopen(obj_path, "rb");
+		FILE *f = fopen(filename, "rb");
 		if (f) {
 			fseek(f, 0, SEEK_END);
 			long sz = ftell(f);
@@ -815,4 +909,7 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	}
 
 	LLVMDisposeTargetMachine(machine);
+	LLVMDisposeTargetData(c->target_data);
+	c->target_machine = NULL;
+	c->target_data = NULL;
 }

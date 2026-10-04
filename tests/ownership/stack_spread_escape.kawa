@@ -1,0 +1,8 @@
+struct View { i32* pointer; }
+fn View bad(){
+    i32 local=42;
+    View base={.pointer=&local};
+    View copied={..base};
+    return copied;
+}
+fn main(){return 0;}

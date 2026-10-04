@@ -1,0 +1,1 @@
+fn main() { let a: owner<i64>=own(1); while (std.process.arg_count()>0) { let b=move(a); break; } return a[0]; }

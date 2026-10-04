@@ -20,6 +20,36 @@ Type *resolve_alias_type(KawaCompiler *c, const char *name) {
 	return NULL;
 }
 
+Type *kawa_resolve_type(KawaCompiler *c, Type *type) {
+	if (!type) return NULL;
+	Type *start = type;
+	for (unsigned depth = 0; type && depth < 64; ++depth) {
+		Type *next = NULL;
+		if ((type->kind == TYPE_STRUCT || type->kind == TYPE_ALIAS) && type->name) {
+			if (c->generic_instantiating) {
+				for (int i = 0; i < c->generic_param_count; ++i)
+					if (!strcmp(type->name, c->generic_param_names[i])) next = c->generic_param_types[i];
+			}
+			if (!next) next = resolve_alias_type(c, type->name);
+		}
+		if (!next) return type;
+		type = next;
+	}
+	kdiag_error_at(KAWA_E_TYPE, c->source_filename, NULL, 0,
+		"cyclic or excessively deep type alias `%s`", start && start->name ? start->name : "?");
+	exit(1);
+}
+
+Type *kawa_concrete_type(KawaCompiler *c, Type *type) {
+	type=kawa_resolve_type(c,type);
+	if (!type || !type->inner) return type;
+	Type *inner=kawa_concrete_type(c,type->inner);
+	if (inner==type->inner) return type;
+	Type *result=arena_alloc(c->arena,sizeof(*result));
+	*result=*type; result->inner=inner;
+	return result;
+}
+
 // Register a struct by name and LLVMTypeRef. Populates the field table from
 // the AST field list (so callers don't need a separate "fill" pass that can
 // disagree with what `register_struct` already saw).
@@ -36,6 +66,7 @@ void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 	for (ASTNode *f = fields; f && idx < 64; f = f->next) {
 		sd->fields[idx].name = arena_strdup(c->arena, f->data.var_decl.name);
 		sd->fields[idx].type = get_llvm_type(c, f->data_type);
+		sd->fields[idx].ast_type = kawa_concrete_type(c,f->data_type);
 		sd->fields[idx].default_expr =
 			f->data.var_decl.field_default;
 		idx++;
@@ -260,7 +291,7 @@ int type_is_signed(KawaCompiler *c, Type *t) {
 				return type_is_signed(c, c->generic_param_types[gi]);
 		}
 	}
-	return kind_is_signed_int(t->kind);
+	return kind_is_signed_int(kawa_resolve_type(c, t)->kind);
 }
 
 ASTNode *find_enum_decl(KawaCompiler *c, const char *name) {
@@ -288,25 +319,30 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
 	ASTNode *en = find_enum_decl(c, name);
 	if (!en)
 		return 1;
-	int max_words = 0;
+	uint64_t max_bytes = 0;
 	for (EnumVariant *v = en->data.enum_decl.variants; v; v = v->next) {
-		int words = 0;
+		LLVMTypeRef fields[16];
 		for (int i = 0; i < v->payload_count; i++) {
 			Type *pt = v->payload_types[i];
-			if (!pt) continue;
-			if (pt->kind == TYPE_SLICE)
-				words += 2;
-			else if (pt->kind == TYPE_ARRAY) {
-				int elem_words = (pt->inner && pt->inner->kind == TYPE_SLICE) ? 2 : 1;
-				words += (int)(pt->array_len * elem_words);
-			} else {
-				words += 1;
+			if (kawa_contains_managed(c, pt, 1)) {
+				kerr(KAWA_E_TYPE, en, "enum owners require recursive drop support; borrow with ref<T>");
+				exit(1);
+			}
+			fields[i] = get_llvm_type(c, pt);
+			if (!LLVMTypeIsSized(fields[i])) {
+				kerr(KAWA_E_TYPE, en, "enum payload must have a finite, known layout");
+				exit(1);
 			}
 		}
-		if (words > max_words)
-			max_words = words;
+		LLVMTypeRef payload = LLVMStructTypeInContext(c->context, fields, v->payload_count, 0);
+		uint64_t bytes = LLVMABISizeOfType(c->target_data, payload);
+		if (bytes > max_bytes) max_bytes = bytes;
 	}
-	return max_words > 0 ? max_words : 1;
+	if (max_bytes > (uint64_t)INT32_MAX * 8) {
+		kerr(KAWA_E_TYPE, en, "enum payload layout is too large");
+		exit(1);
+	}
+	return max_bytes ? (int)((max_bytes + 7) / 8) : 1;
 }
 
 // Map a Type* to an LLVMTypeRef. Sets t->is_signed as a side effect for
@@ -314,8 +350,28 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
 LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	if (!t)
 		return LLVMInt32TypeInContext(c->context);
+	Type *resolved = kawa_resolve_type(c, t);
+	if (resolved != t) {
+		// Generic ASTs are reused by later specializations. Never overwrite T
+		// with the first instance's concrete type.
+		if (c->generic_instantiating) return get_llvm_type(c,resolved);
+		*t = *resolved;
+	}
+    if ((t->kind == TYPE_SLICE || t->kind == TYPE_CHAN ||
+		 t->kind == TYPE_PTR || t->kind == TYPE_AMP) && kawa_contains_managed(c, t->inner, 1)) {
+		kdiag_error_at(KAWA_E_TYPE, c->source_filename, NULL, 0,
+			"owners cannot be embedded in unmanaged storage");
+		exit(1);
+	}
 
 	switch (t->kind) {
+	case TYPE_OWNER:
+	case TYPE_REF:
+	case TYPE_ARENA: {
+		LLVMTypeRef i64 = LLVMInt64TypeInContext(c->context);
+		LLVMTypeRef fields[] = {LLVMPointerTypeInContext(c->context, 0), i64, i64, i64};
+		return LLVMStructTypeInContext(c->context, fields, 4, 0);
+	}
 	case TYPE_VOID:
 		t->is_signed = 0;
 		return LLVMVoidTypeInContext(c->context);
@@ -471,11 +527,11 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		LLVMTypeRef enum_t = LLVMGetTypeByName(c->module, enum_struct_name);
 		if (enum_t)
 			return enum_t;
+		enum_t = LLVMStructCreateNamed(c->context, enum_struct_name);
 		int max_words = get_enum_max_payload_words(c, t->name);
 		LLVMTypeRef fields[2];
 		fields[0] = LLVMInt64TypeInContext(c->context); // tag
 		fields[1] = LLVMArrayType(LLVMInt64TypeInContext(c->context), max_words > 0 ? max_words : 1);
-		enum_t = LLVMStructCreateNamed(c->context, enum_struct_name);
 		LLVMStructSetBody(enum_t, fields, 2, 0);
 		return enum_t;
 	}
@@ -541,14 +597,14 @@ int kawa_types_same(Type *a, Type *b) {
 	while (a && b) {
 		if (a->kind != b->kind)
 			return 0;
-		if (a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS ||
+        if (a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS || a->kind == TYPE_ENUM ||
 			a->kind == TYPE_CHAN) {
 			const char *an = a->name, *bn = b->name;
 			if (an != bn && (!an || !bn || strcmp(an, bn) != 0))
 				return 0;
 			// Structs/chans have no further structure to compare here;
 			// the name is the identity.
-			return a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS
+            return a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS || a->kind == TYPE_ENUM
 					   ? 1
 					   : kawa_types_same(a->inner, b->inner);
 		}

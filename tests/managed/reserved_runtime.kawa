@@ -1,0 +1,2 @@
+fn void __kawa_mem_drop(i64 value) {}
+fn main() { let root: owner<i64> = own(1); release(root); return 0; }

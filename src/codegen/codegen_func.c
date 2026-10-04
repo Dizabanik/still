@@ -2,8 +2,16 @@
 
 void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 					   const char *implicit_self_struct) {
+	Scope *caller_scope = c->scope_stack;
+	Scope *caller_locals = c->function_locals;
+	c->scope_stack = c->global_scope;
+	c->function_locals = NULL;
 	LLVMContextRef ctx = c->context;
-	LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+    kawa_check_value_type(c,cur,cur->data.func.ret_type);
+    for (ASTNode *a=cur->data.func.args; a; a=a->next) {
+        kawa_check_value_type(c,a,a->data_type);
+    }
 
 	// Explicit return type wins (`fn f64 accel(...)`, `fn void log(...)`).
 	// No declared type keeps the legacy default: i32, or i8* for drips.
@@ -25,6 +33,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// signature IS the ABI. implicit_self_struct only contributes the
 	// `Struct__` mangling prefix.
 	int total_arg_cnt = explicit_arg_cnt;
+	kawa_verify_ownership(c,cur);
 
 	LLVMTypeRef *param_types =
 		arena_alloc(c->arena, sizeof(LLVMTypeRef) *
@@ -73,11 +82,31 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	}
 
 	c->current_func = LLVMAddFunction(c->module, llvm_name, func_t);
+	// Module-private functions permit interprocedural range propagation and
+	// specialization. Exported functions keep their independently callable ABI.
+	if (!cur->is_pub && !is_user_main)
+		LLVMSetLinkage(c->current_func,LLVMInternalLinkage);
+	FunctionSignature *signature = arena_alloc(c->arena, sizeof(*signature));
+	signature->function = c->current_func;
+	signature->declaration = cur;
+	signature->parameters=arena_alloc(c->arena,sizeof(Type*)*(total_arg_cnt ? total_arg_cnt : 1));
+	int signature_index=0;
+	for (ASTNode *a=cur->data.func.args; a; a=a->next)
+		signature->parameters[signature_index++]=kawa_concrete_type(c,a->data_type);
+	signature->return_type=kawa_concrete_type(c,cur->data.func.ret_type);
+	signature->next = c->function_signatures;
+	c->function_signatures = signature;
 	char line_buf[32];
 	snprintf(line_buf, sizeof(line_buf), "%d", cur->line);
 	LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.source", line_buf);
 	if (cur->data.func.is_pure)
 		LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.pure", "true");
+	if (cur->data.func.is_noalloc)
+		LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.noalloc", "true");
+	if (cur->data.func.is_nocapture)
+		LLVMAddTargetDependentFunctionAttr(c->current_func,"kawa.nocapture","true");
+	unsigned saved_fp_permissions = c->fp_permissions;
+	c->fp_permissions = cur->data.func.fp_permissions;
 	c->current_ret_type = ret_t;
 	c->current_ret_node_type = cur->data.func.ret_type;
 
@@ -140,9 +169,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// Defer/filter stacks are per-function; save and clear before the body.
 	DeferFrame *saved_defers = c->defer_stack;
 	FilterFrame *saved_filters = c->filter_stack;
-	Scope *fn_scope_base = c->scope_stack;
+	StableFrame *saved_stable = c->stable_stack;
 	c->defer_stack = NULL;
 	c->filter_stack = NULL;
+	c->stable_stack = NULL;
 	c->warned_unreachable = 0;
 
 	// Spill each parameter to an entry-block alloca so mem2reg can promote
@@ -164,6 +194,13 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			create_entry_block_alloca(c, arg_type, a->data.var_decl.name);
 		LLVMBuildStore(c->builder, p_val, p_alloc);
 		scope_push(c, a->data.var_decl.name, p_alloc, arg_type, a);
+		if (kawa_is_owner(a->data_type)) {
+			if (cur->data.func.is_drip) {
+				kerr(KAWA_E_TYPE, a, "managed owners in coroutines require cancellation cleanup support");
+				exit(1);
+			}
+			kawa_memory_defer(c, p_alloc, 0);
+		}
 	}
 
 	if (cur->data.func.is_drip) {
@@ -219,7 +256,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// (everything above the entry snapshot). Parameters count too, matching
 	// the "declared but never read" contract. Underscore-prefixed names opt out.
 	if (!cur->data.func.is_test) {
-		for (Scope *sc = c->scope_stack; sc && sc != fn_scope_base; sc = sc->next) {
+		for (Scope *sc = c->function_locals; sc; sc = sc->all_next) {
 			if (sc->used || !sc->name || sc->name[0] == '_')
 				continue;
 			ASTNode *dn = sc->node;
@@ -233,5 +270,9 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	c->defer_stack = saved_defers;
 	c->filter_stack = saved_filters;
+	c->stable_stack = saved_stable;
+	c->fp_permissions = saved_fp_permissions;
 	c->overloads_active = saved_overload_idx;
+	c->scope_stack = caller_scope;
+	c->function_locals = caller_locals;
 }

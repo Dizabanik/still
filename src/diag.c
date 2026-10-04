@@ -1,4 +1,6 @@
 #include "diag.h"
+#include "ast.h"
+#include "driver.h"
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -12,37 +14,90 @@ static char *pending_note;
 // Program source text (set once by the driver) for kdiag_line().
 static const char *source_text;
 static int source_len;
+static int json_diagnostics;
+typedef struct { const char *filename; int original_line, start, end; int owns_filename; } SourceLocation;
+static SourceLocation *source_locations;
+static int source_location_count;
+
+void kdiag_set_json(int enabled) { json_diagnostics=enabled; }
+
+static void json_string(FILE *out,const char *text) {
+	fputc('"',out);
+	for (const unsigned char *p=(const unsigned char *)(text ? text : ""); *p; ++p) {
+		if (*p=='"' || *p=='\\') { fputc('\\',out); fputc(*p,out); }
+		else if (*p<32) fprintf(out,"\\u%04x",*p);
+		else if (*p<128) fputc(*p,out);
+		else {
+			unsigned bytes=(*p>=0xc2 && *p<=0xdf) ? 2 : (*p>=0xe0 && *p<=0xef) ? 3 : (*p>=0xf0 && *p<=0xf4) ? 4 : 0;
+			uint32_t scalar=bytes ? (*p & (0x7f>>bytes)) : 0;
+			for (unsigned i=1; i<bytes; ++i) {
+				if ((p[i] & 0xc0)!=0x80) { bytes=0; break; }
+				scalar=(scalar<<6) | (p[i] & 0x3f);
+			}
+			if ((bytes==2 && scalar<0x80) || (bytes==3 && scalar<0x800) ||
+				(bytes==4 && scalar<0x10000) || (scalar>=0xd800 && scalar<=0xdfff) || scalar>0x10ffff)
+				bytes=0;
+			if (bytes) { fwrite(p,1,bytes,out); p+=bytes-1; }
+			else fprintf(out,"\\u%04x",*p); // valid JSON even for arbitrary filename/source bytes
+		}
+	}
+	fputc('"',out);
+}
 
 void kdiag_set_source(const char *text, int len) {
 	source_text = text;
 	source_len = len;
+	for (int i=1; i<=source_location_count; ++i)
+		if (source_locations && source_locations[i].owns_filename) free((void *)source_locations[i].filename);
+	free(source_locations);
+	source_location_count=1;
+	for (int i=0; i<len; ++i) source_location_count += text[i]=='\n';
+	source_locations=calloc((size_t)source_location_count+1,sizeof(*source_locations));
+	const char *filename=NULL;
+	int original=1,line=1;
+	for (int i=0; i<len;) {
+		int start=i;
+		while (i<len && text[i]!='\n') ++i;
+		char *path;
+		if (driver_module_location(text+start,(size_t)(i-start),&path,&original)) {
+			filename=path;
+			source_locations[line++]=(SourceLocation){filename,original,start,i,1};
+			++i; continue;
+		}
+		source_locations[line++]=(SourceLocation){filename,original++,start,i,0};
+		++i;
+	}
+	if (line<=source_location_count)
+		source_locations[line]=(SourceLocation){filename,original,len,len,0};
+}
+
+void kdiag_location(int expanded_line,const char **filename,int *source_line) {
+	*source_line=expanded_line;
+	if (expanded_line<1 || expanded_line>source_location_count || !source_locations) return;
+	SourceLocation location=source_locations[expanded_line];
+	if (location.filename) { *filename=location.filename; *source_line=location.original_line; }
 }
 
 char *kdiag_line(int line_num) {
-	char *out = malloc(1);
-	out[0] = '\0';
-	if (!source_text || line_num <= 0)
-		return out;
-	// Walk to the start of the requested line, then copy through its end.
-	const char *p = source_text, *end = source_text + source_len;
-	int ln = 1;
-	while (p < end && ln < line_num) {
-		if (*p == '\n')
-			ln++;
-		p++;
-	}
-	if (p >= end)
-		return out;
-	const char *e = p;
-	while (e < end && *e != '\n')
-		e++;
+	if (!source_text || line_num<1 || line_num>source_location_count)
+		return calloc(1,1);
+	const char *p=source_text+source_locations[line_num].start;
+	const char *e=source_text+source_locations[line_num].end;
 	while (e > p && (e[-1] == '\r'))
 		e--;
-	free(out);
-	out = malloc((size_t)(e - p) + 1);
+	char *out = malloc((size_t)(e - p) + 1);
 	memcpy(out, p, (size_t)(e - p));
 	out[e - p] = '\0';
 	return out;
+}
+void kdiag_offset_location(size_t offset,int *expanded_line,int *byte_column) {
+	int low=1,high=source_location_count;
+	if (!source_locations || offset>(size_t)source_len) { *expanded_line=0; *byte_column=1; return; }
+	while (low<high) {
+		int mid=low+(high-low+1)/2;
+		if ((size_t)source_locations[mid].start<=offset) low=mid; else high=mid-1;
+	}
+	*expanded_line=low; *byte_column=(int)(offset-source_locations[low].start)+1;
 }
 
 int kdiag_error_count(void) { return timbr_error_count; }
@@ -81,10 +136,27 @@ static void emit(int level, int code, const char *filename,
 	char code_buf[8];
 	const char *code_str = NULL;
 	if (code > 0) {
-		snprintf(code_buf, sizeof(code_buf), "E%04d", code);
+		snprintf(code_buf, sizeof(code_buf), "%c%04d", level==TIMBR_WARN ? 'W' : 'E', code);
 		code_str = code_buf;
 	}
 
+	kdiag_location(line_num,&filename,&line_num);
+	if (json_diagnostics) {
+		FILE *out=timbr_config.output_stream ? timbr_config.output_stream : stderr;
+		if (level==TIMBR_ERROR) ++timbr_error_count;
+		else ++timbr_warning_count;
+		fputs("{\"type\":\"diagnostic\",\"level\":",out); json_string(out,level==TIMBR_ERROR ? "error" : "warning");
+		fputs(",\"code\":",out); json_string(out,code_str);
+		fputs(",\"message\":",out); json_string(out,title);
+		fputs(",\"location\":{\"file\":",out); json_string(out,filename ? filename : "<kawa>");
+		fprintf(out,",\"line\":%d,\"column\":%d,\"column_unit\":\"byte\",\"length\":%d,\"source_line\":",line_num,col_num,len>0 ? len : 1);
+		json_string(out,code_line); fputs("},\"notes\":[",out);
+		if (pending_note) json_string(out,pending_note);
+		fputs("],\"help\":[",out); if (pending_help) json_string(out,pending_help);
+		fputs("]}\n",out);
+		free(pending_help); free(pending_note); pending_help=pending_note=NULL;
+		return;
+	}
 	TimbrSpan span = {.code_line = code_line,
 					  .filename = filename ? filename : "<kawa>",
 					  .line_num = line_num,
@@ -136,6 +208,20 @@ void kdiag_warn_at(int code, const char *filename, const char *code_line,
 	free(owned);
 }
 
+static void emit_node(int level,int code,const char *filename,const ASTNode *node,const char *fmt,va_list ap) {
+	int line=node ? node->line : 0;
+	char *source=kdiag_line(line);
+	emit(level,code,filename,source,line,node && node->column>0 ? node->column : 1,
+		node && node->span_length>0 ? node->span_length : 1,fmt,ap);
+	free(source);
+}
+void kdiag_error_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
+	va_list ap; va_start(ap,fmt); emit_node(TIMBR_ERROR,code,filename,node,fmt,ap); va_end(ap);
+}
+void kdiag_warn_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
+	va_list ap; va_start(ap,fmt); emit_node(TIMBR_WARN,code,filename,node,fmt,ap); va_end(ap);
+}
+
 // First whole-word occurrence of `name` on the line: returns 1-based col
 // and its length. Whole-word = bounded by non-identifier chars so `count`
 // never matches inside `recount`.
@@ -144,7 +230,6 @@ static int find_name_col(const char *line, const char *name, int *out_len) {
 	if (!line || !name || !*name)
 		return 1;
 	size_t nl = strlen(name);
-	int vis = 1; // visual column, tabs expanded to 4 like the renderer
 	for (const char *p = line; *p; p++) {
 		if (strncmp(p, name, nl) == 0) {
 			int before = (p == line) ? 0 : p[-1];
@@ -155,10 +240,9 @@ static int find_name_col(const char *line, const char *name, int *out_len) {
 				isalnum((unsigned char)after) || after == '_';
 			if (!ident_before && !ident_after) {
 				*out_len = (int)nl;
-				return vis;
+				return (int)(p-line)+1;
 			}
 		}
-		vis += (*p == '\t') ? (4 - ((vis - 1) % 4)) : 1;
 	}
 	return 1;
 }
@@ -191,6 +275,7 @@ void kdiag_warn(int code, const char *filename, const char *code_line,
 }
 
 void kdiag_summary(void) {
+	if (json_diagnostics) return;
 	FILE *f = timbr_config.output_stream ? timbr_config.output_stream : stderr;
 	bool color =
 		timbr_config.use_color;
@@ -208,6 +293,32 @@ void kdiag_summary(void) {
 		fprintf(f, "%s%swarning%s: %d warning%s emitted\n", bold, yellow,
 				reset, w, w == 1 ? "" : "s");
 	}
+}
+
+int kdiag_explain(const char *code) {
+	static const char *explanations[]={NULL,
+		"Syntax is invalid. Check the highlighted token and the surrounding delimiters.",
+		"A name is unavailable in this scope. Check spelling, declaration order, imports, and visibility.",
+		"Types do not match. Numeric conversions are checked; owners cannot be copied or forged. Use an explicit borrow, move, clone, or lossy conversion when appropriate.",
+		"The argument count does not match the function signature.",
+		"Arguments are invalid. Named arguments must identify distinct parameters; evaluation follows source order.",
+		"A declaration or control transfer is invalid in this scope.",
+		"A semantic constraint failed. Local addresses cannot outlive their storage, and pure functions cannot write externally or call unverified effects.",
+		"This type has no field with the requested name.",
+		"A declared effect contract failed. noalloc and nocapture are verified transitively before optimization; unknown external effects cannot establish a proof.",
+		"An owner was consumed on this or another possible control-flow path. Borrow with ref_of, transfer once with move, or explicitly clone an independent owner.",
+		"This statement is unreachable because control already left its block.",
+		"A local binding is unused. Remove it or use a name beginning with an underscore."};
+	char *end;
+	long number=(code && (code[0]=='E' || code[0]=='W')) ? strtol(code+1,&end,10) : 0;
+	if (number<1 || number>12 || *end || strlen(code)!=5 || (number>=11)!=(code[0]=='W')) {
+		fprintf(stderr,"kawac: unknown diagnostic code '%s'\n",code ? code : ""); return 2;
+	}
+	if (json_diagnostics) {
+		fputs("{\"code\":",stdout); json_string(stdout,code);
+		fputs(",\"explanation\":",stdout); json_string(stdout,explanations[number]); fputs("}\n",stdout);
+	} else printf("%s: %s\n",code,explanations[number]);
+	return 0;
 }
 
 // Damerau-ish Levenshtein without transpositions: good enough for

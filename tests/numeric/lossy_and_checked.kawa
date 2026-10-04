@@ -1,0 +1,6 @@
+fn main() {
+ i64 n=257; i32 neg=-1; f64 nan=0.0/0.0; f64 inf=1.0/0.0;
+ println("{lossy_i8(n)} {lossy_u64(neg)} {lossy_i64(nan)} {lossy_i8(inf)}");
+ f64 lower=-9223372036854775808.0; let integer=(i64)lower;
+ println("{integer} {(i8)127} {(u8)255} {(i64)42.75} {(bool)nan}"); return 0;
+}

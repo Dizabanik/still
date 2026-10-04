@@ -1,0 +1,2 @@
+struct Record { [2]i64 values; }
+fn main() { let root: owner<Record> = own(1); let escaped = root[0].values.data; return 0; }

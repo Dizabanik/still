@@ -1,0 +1,6 @@
+fn main() {
+    let root: owner<owner<i64>> = own(1);
+    root[0] = own(1);
+    let duplicate = root[0];
+    return 0;
+}

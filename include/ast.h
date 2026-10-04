@@ -29,7 +29,10 @@ typedef enum {
 	TYPE_AMP,
 	TYPE_SLICE,
 	TYPE_CHAN,
-	TYPE_ENUM
+	TYPE_ENUM,
+	TYPE_OWNER,
+	TYPE_REF,
+	TYPE_ARENA
 } TypeKind;
 
 typedef struct Type {
@@ -101,6 +104,7 @@ typedef enum {
 	NODE_EXTERN_FN,
 	NODE_ASM,
 	NODE_UNCHECKED_BLOCK,
+	NODE_STABLE,
 	NODE_SEND,
 	NODE_RECV,
 	NODE_SELECT,
@@ -131,6 +135,7 @@ struct ASTNode {
 	Type *data_type;
 	Dependency *dependents;
 	int line; // source line, stamped by the parser where it matters
+	int column, span_length;
 			  // (diagnostics: traps, runtime errors)
 	// Call-site named-argument label (`f(x: 1)`). Lives OUTSIDE the data
 	// union on purpose: var_decl.name aliases literal.i_val/str_lit.s_val,
@@ -141,6 +146,7 @@ struct ASTNode {
 	const char *module_name;
 
 	union {
+		struct { ASTNode *reference, *body, *otherwise; int optional; } stable;
 		struct {
 			ASTNode *stmts;
 		} block;
@@ -153,6 +159,9 @@ struct ASTNode {
 			int is_drip;
 			int is_test;   // #[test] attribute
 			int is_ignored; // #[ignore]
+			int is_noalloc;
+			int is_nocapture;
+			unsigned fp_permissions; // 1 contraction, 2 reassociation, 4 finite-only
 		} func;
 		struct {
 			char *name;
@@ -196,6 +205,7 @@ struct ASTNode {
 		} struct_lit;
 		struct {
 			int op;
+			int unary_negation;
 			ASTNode *left, *right;
 		} bin_op;
 		struct {
@@ -213,6 +223,7 @@ struct ASTNode {
 		struct {
 			char *s_val;
 			size_t len;
+			size_t *source_offsets;
 		} str_lit;
 		struct {
 			char *name;
@@ -352,4 +363,9 @@ struct ASTNode {
 	ASTNode *next;
 };
 
+/* Clone an AST specialization without mutating its template. Linked child
+ * lists and dependency edges preserve shared node identity. Strings are
+ * immutable arena bytes; types and mutable nodes belong to the new instance. */
+ASTNode *kawa_clone_ast(Arena *, ASTNode *, int parameter_count, char **parameters,
+                        Type **concretes, const char *generic_struct, const char *instance_struct);
 #endif

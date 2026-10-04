@@ -1,0 +1,13 @@
+fn main() {
+ let a:owner<i64>=own(4);
+ a[0]=7; a[1]=11; a[2]=13; a[3]=17;
+ let r=ref_of(a); let s=r+1; let t=ref_slice(r,1,2);
+ s[1]=29;
+ println("{s[0]} {a[2]} {mem_len(s)} {s==t} {r!=s}");
+ let end=r+4;
+ println("{mem_len(end)} {end==ref_slice(r,4,4)}");
+ let old=ref_of(a); release(a);
+ let replacement:owner<i64>=own(4);
+ println("{old==ref_of(replacement)}");
+ return 0;
+}

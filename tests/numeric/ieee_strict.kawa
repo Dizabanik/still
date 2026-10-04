@@ -1,0 +1,5 @@
+fn f64 negate(f64 x) { return -x; }
+fn main() {
+ f64 z=-0.0; f64 other=negate(0.0); f64 n=0.0/0.0;
+ println("{z==0.0} {1.0/z<0.0} {1.0/other<0.0} {n==n} {n!=n}"); return 0;
+}
