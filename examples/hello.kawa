@@ -1,0 +1,10 @@
+fn main() -> i32 {
+    let numbers: owner<i64> = own(2);
+    numbers[0] = 20;
+    numbers[1] = 22;
+    let view: ref<i64> = ref_of(numbers);
+    stable(view) {
+        println("{view[0] + view[1]}");
+    }
+    return 0;
+}

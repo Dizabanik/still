@@ -1,0 +1,8 @@
+{
+  "kind": "run",
+  "inputs": [
+    {"args": [""], "stdout": "sqrt=0.0 cos=1.0\n"},
+    {"args": ["x"], "stdout": "sqrt=1.0 cos=0.5\n"},
+    {"args": ["abcd"], "stdout": "sqrt=4.0 cos=-0.7\n"}
+  ]
+}

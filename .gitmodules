@@ -1,3 +1,3 @@
 [submodule "timbr"]
 	path = timbr
-	url = git@github.com:Dizabanik/timbr.git
+	url = https://github.com/Dizabanik/timbr.git

@@ -1,31 +1,19 @@
 #!/usr/bin/env python3
+"""Standalone I/O runtime generation; normal builds generate it automatically."""
+import argparse
+from pathlib import Path
 import subprocess
-import os
+import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "src", "runtime", "kawa_runtime.c")
-BC = os.path.join(ROOT, "src", "runtime", "kawa_runtime.bc")
-OUT_H = os.path.join(ROOT, "src", "codegen", "kawa_runtime_bc.h")
-
-# Compile kawa_runtime.c to LLVM bitcode
-cmd = ["clang", "-O3", "-emit-llvm", "-c", SRC, "-o", BC]
-subprocess.run(cmd, check=True)
-
-with open(BC, "rb") as f:
-    data = f.read()
-
-with open(OUT_H, "w") as f:
-    f.write("// Auto-generated from src/runtime/kawa_runtime.c. Do not edit directly.\n")
-    f.write("#ifndef KAWA_RUNTIME_BC_H\n")
-    f.write("#define KAWA_RUNTIME_BC_H\n\n")
-    f.write("#include <stddef.h>\n\n")
-    f.write(f"static const size_t kawa_runtime_bc_len = {len(data)};\n")
-    f.write("static const unsigned char kawa_runtime_bc[] = {\n")
-    for i, b in enumerate(data):
-        f.write(f"0x{b:02x}, ")
-        if (i + 1) % 16 == 0:
-            f.write("\n")
-    f.write("\n};\n\n")
-    f.write("#endif // KAWA_RUNTIME_BC_H\n")
-
-print(f"Generated {OUT_H} ({len(data)} bytes bitcode)")
+ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--output', type=Path, default=ROOT / 'build/generated/kawa_runtime_bc.h')
+parser.add_argument('--clang')
+parser.add_argument('--portable', action='store_true')
+args = parser.parse_args()
+clang = args.clang or str(Path(subprocess.check_output(
+    ['llvm-config', '--bindir'], text=True).strip()) / 'clang')
+subprocess.run([sys.executable, str(ROOT / 'scripts/embed_runtime.py'),
+                '--clang', clang, '--source', str(ROOT / 'src/runtime/kawa_runtime.c'),
+                '--output', str(args.output), '--symbol', 'kawa_runtime_bc',
+                *([] if args.portable else ['--native'])], check=True)

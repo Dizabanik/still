@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Small deterministic correctness gates; no timings or speed thresholds.
+set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$root"
+build_dir=${1:-build-ci}
+build_dir=$(cd "$build_dir" && pwd)
+kawac="$build_dir/kawac"
+# The development host's Homebrew ASan runtime stalls before main. These
+# untimed C comparison checks use the working Apple sanitizer on macOS.
+cc=clang
+if [[ $(uname -s) == Darwin ]]; then cc=/usr/bin/clang; fi
+
+python3 scripts/bench.py --kawac "$kawac" --cc "$cc" --quick --verify-only --sanitize-c \
+  --json "$build_dir/benchmark-verification.json"
+for workload in reference_walk subobject_walk; do
+  python3 scripts/bench_memory.py --kawac "$kawac" --workload "$workload" \
+    --rounds 100000 --size 1024 --verify-only --sanitize-c \
+    --json "$build_dir/$workload-verification.json"
+done
+for workload in owner_tree owned_values; do
+  python3 scripts/bench_owners.py --kawac "$kawac" --workload "$workload" \
+    --size 2048 --trials 8 --verify-only \
+    --json "$build_dir/$workload-verification.json"
+done
+python3 scripts/bench_tools.py --kawac "$kawac" --verify-only \
+  --json "$build_dir/tooling-verification.json"

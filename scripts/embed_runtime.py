@@ -11,13 +11,13 @@ p.add_argument('--source', required=True)
 p.add_argument('--output', required=True)
 p.add_argument('--symbol', default='kawa_memory_bc')
 p.add_argument('--metrics', action='store_true')
+p.add_argument('--native', action='store_true', help='optimize for the build CPU; omit for distribution')
 a = p.parse_args()
 with tempfile.TemporaryDirectory(prefix='kawa-runtime-') as d:
     bc = pathlib.Path(d) / 'runtime.bc'
-    # kawac currently emits for the native host, like its own native build.
-    # Match the C benchmark's CPU and optimization policy in the embedded
-    # runtime instead of retaining generic CPU attributes from clang.
-    subprocess.run([a.clang, '-std=c11', '-O3', '-march=native', '-fPIC', '-emit-llvm', '-c',
+    # Local native builds match the benchmark CPU policy. Distribution builds
+    # must not bake the GitHub runner's instruction set into embedded bitcode.
+    subprocess.run([a.clang, '-std=c11', '-O3', *(['-march=native'] if a.native else []), '-fPIC', '-emit-llvm', '-c',
                     *(['-DKAWA_MEMORY_METRICS'] if a.metrics else []),
                     a.source, '-o', str(bc)], check=True)
     data = bc.read_bytes()

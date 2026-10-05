@@ -1,0 +1,10 @@
+// Runtime inputs keep external math calls live at every optimization level.
+import stdc;
+extern "c" fn f64 sqrt(f64 value);
+extern "c" fn f64 cos(f64 value);
+fn i32 main() {
+    let text = std.process.arg_at(1);
+    let n = ((f64)text.len);
+    stdc.printf("sqrt=%.1f cos=%.1f\n", sqrt(n*n), cos(n));
+    return 0;
+}

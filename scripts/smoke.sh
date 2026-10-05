@@ -2,8 +2,8 @@
 # Smoke test: the freshly built kawac compiles a tiny program and the result
 # runs. Invoked by ctest with the binary path as $1.
 set -e
-KAWAC="$1"
-SRCDIR="$(cd "$(dirname "$0")/.." && pwd)"
+KAWAC="${1:?compiler path required}"
+[[ "$KAWAC" = /* ]] || KAWAC="$PWD/$KAWAC"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/kawa-smoke.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 

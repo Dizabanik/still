@@ -1,0 +1,98 @@
+name: Build and verify
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Existing version tag to build; empty for a native development build.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release-tag || github.ref }}
+      - name: Validate workflow and shell syntax
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+          shellcheck scripts/ci/*.sh
+
+  build-and-test:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            cc: clang
+          - platform: macos-arm64
+            runner: macos-15
+            cc: /usr/bin/clang
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NATIVE_CPU: ${{ inputs.release-tag == '' && 'ON' || 'OFF' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release-tag || github.ref }}
+      - name: Install LLVM 21 and record the toolchain
+        run: |
+          mkdir -p build-ci
+          bash scripts/ci/setup_toolchain.sh | tee build-ci/toolchain.txt
+      - name: Build
+        env:
+          CC: ${{ matrix.cc }}
+        run: |
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DKAWA_NATIVE_CPU="$NATIVE_CPU"
+          cmake --build build-ci --parallel 2
+          cmake --build build-ci --target kawac_debug --parallel 2
+      - name: Compiler contracts and sanitized runtime
+        run: |
+          python3 scripts/generate_property_cases.py --check
+          ctest --test-dir build-ci --output-on-failure --parallel 2
+          bash scripts/smoke.sh build-ci/kawac_debug
+      - name: Benchmark correctness and safety counters
+        run: bash scripts/ci/verify_benchmarks.sh build-ci
+      - name: Package and smoke-test the installed compiler
+        if: inputs.release-tag != ''
+        run: python3 scripts/package_release.py --build-dir build-ci --output dist --binary
+      - name: Preserve reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-${{ matrix.platform }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build-ci/toolchain.txt
+            build-ci/unit-results.json
+            build-ci/*-verification.json
+            build-ci/Testing/Temporary/LastTest.log
+      - name: Upload release package
+        if: inputs.release-tag != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: error
+          path: dist/*

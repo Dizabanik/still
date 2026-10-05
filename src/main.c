@@ -21,7 +21,13 @@ static int link_object(const char *output,int lto,int profile,const char *target
 #endif
 	if (lto) args[count++]="-flto";
 	if (profile) args[count++]="-fprofile-instr-generate";
-	args[count++]="output.o"; args[count++]="-o"; args[count++]=(char *)output; args[count]=NULL;
+	args[count++]="output.o";
+#ifndef __APPLE__
+	// LLVM intrinsics and C math declarations can lower to libm calls,
+	// particularly at O0. Keep the library after the object for ELF linkers.
+	args[count++]="-lm";
+#endif
+	args[count++]="-o"; args[count++]=(char *)output; args[count]=NULL;
 	pid_t child;
 	int result=posix_spawnp(&child,args[0],NULL,NULL,args,environ);
 	if (result==ENOENT) { args[0]="cc"; result=posix_spawnp(&child,args[0],NULL,NULL,args,environ); }
@@ -141,7 +147,7 @@ int main(int argc, char **argv) {
 				   argv[i][2] >= '0' && argv[i][2] <= '3' && !argv[i][3]) {
 			opt_level = argv[i][2] - '0';
 		} else if (strcmp(argv[i], "--version") == 0) {
-			printf("kawac 0.1.0\n");
+			printf("kawac %s\n", KAWA_VERSION);
 			return 0;
 		} else if (strcmp(argv[i], "-h") == 0 ||
 				   strcmp(argv[i], "--help") == 0) {

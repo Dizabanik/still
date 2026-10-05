@@ -1,49 +1,30 @@
-name: Kawa Compiler Tests
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
+  verify:
+    uses: ./.github/workflows/build.yml
+
+  required:
+    name: CI required
+    if: always()
+    needs: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: Install LLVM 21 and build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 curl
-          curl --fail --location https://apt.llvm.org/llvm.sh --output /tmp/llvm.sh
-          sudo bash /tmp/llvm.sh 21
-          sudo apt-get install -y llvm-21-dev llvm-21-tools libclang-rt-21-dev
-          echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
-      - name: Record toolchain
-        run: |
-          clang --version
-          llvm-config --version
-          rustc --version
-          python3 --version
-      - name: Build
-        run: |
-          cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-ci
-      - name: Compiler contracts and harness tests
-        run: ctest --test-dir build-ci --output-on-failure
-      - name: Benchmark correctness (no timing gate on shared CI)
-        run: |
-          python3 scripts/bench.py --kawac build-ci/kawac \
-            --quick --verify-only --sanitize-c \
-            --json build-ci/benchmark-verification.json
-      - name: Preserve reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compiler-and-benchmark-results
-          path: |
-            build-ci/unit-results.json
-            build-ci/benchmark-verification.json
-            build-ci/Testing/Temporary/LastTest.log
+      - name: Require every verification job to pass
+        env:
+          RESULT: ${{ needs.verify.result }}
+        run: '[[ "$RESULT" == success ]]'

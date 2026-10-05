@@ -2,7 +2,7 @@
 #include <llvm-c/BitReader.h>
 #include <llvm-c/Linker.h>
 #include <llvm-c/Error.h>
-#include "kawa_runtime_bc.h"
+#include <kawa_runtime_bc.h>
 /* Embedded runtime bitcode uses the compiler's target and SDK metadata. The
  * print runtime may have been generated with an older SDK; its code is linked
  * for this host, so reconcile that descriptive flag before module linking. */

@@ -76,8 +76,10 @@ Work order:
 Managed lowering, ownership analysis, numeric policies, effects, aggregate
 literals, optimization reporting, import expansion, and formatting have
 separate source files.
-The embedded memory runtime uses the native CPU and O3, matching the current
-native-only object emitter.
+Local builds optimize the embedded runtimes for the native CPU at O3.
+Distribution builds use KAWA_NATIVE_CPU=OFF so the compiler and embedded
+bitcode do not require the build runner's CPU features. Both I/O and memory
+runtime headers are generated with LLVM 21 during the build.
 Reserved compiler runtime helpers have internal linkage for specialization
 and removal of unused entry points. Public source functions keep their ABI.
 
@@ -127,7 +129,7 @@ unchecked after removing its allocation.
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 854 passing cases and all seven
+The latest complete language checkpoint has 857 passing cases and all seven
 CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
@@ -194,6 +196,11 @@ Native Darwin object emission uses the macOS product deployment version instead
 of an outdated Darwin-kernel conversion and passes the same target to the linker.
 The deployment override is checked, and successful tooling builds reject
 unexpected linker warnings.
+
+Repository CI covers Linux and macOS with the same strict contracts and
+untimed benchmark verification. Linux links libm after the generated object;
+runtime-input sqrt/cos regression cases keep math calls live at O0/O2/O3,
+rather than letting constant folding hide a missing linker dependency.
 
 ## Remaining scope
 
