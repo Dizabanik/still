@@ -51,6 +51,9 @@ venv/
 .lit_test_times.txt
 
 # Local scratch files, assistant state and OS metadata.
+/IDEAS.md
+/sum.md
+/todo.md
 /tmp/
 .cache/
 .claude/
