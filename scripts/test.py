@@ -13,16 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--kawac", default=str(ROOT / "build-cmake/kawac"))
+    ap.add_argument("--still", default=str(ROOT / "build-cmake/still"))
     ap.add_argument("--filter", default="")
     ap.add_argument("--json", type=Path)
     ap.add_argument("--strict", action="store_true", help="also fail for documented compiler gaps")
     args = ap.parse_args()
-    compiler = shutil.which(args.kawac)
+    compiler = shutil.which(args.still)
     if not compiler:
-        ap.error("compiler not found: " + args.kawac)
+        ap.error("compiler not found: " + args.still)
     records = []
-    for src in sorted((ROOT / "tests").rglob("*.kawa")):
+    for src in sorted((ROOT / "tests").rglob("*.wky")):
         if "lib" in src.relative_to(ROOT / "tests").parts or args.filter not in str(src):
             continue
         for result in run_case(src, str(Path(compiler).resolve())):

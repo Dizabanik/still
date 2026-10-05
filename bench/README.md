@@ -1,19 +1,19 @@
 # Benchmarks
 
-`scripts/bench.py` builds **Kawa, C and Rust from their source files on every invocation**. It never discovers or runs the old `*_c`/`*_rs` executables. An explicit [manifest](manifest.json) selects sources, input sets, workload contracts, and output comparisons.
+`scripts/bench.py` builds **Whisky, C and Rust from their source files on every invocation**. It never discovers or runs the old `*_c`/`*_rs` executables. An explicit [manifest](manifest.json) selects sources, input sets, workload contracts, and output comparisons.
 
 ```sh
 # Fast correctness check, including separate untimed C ASan/UBSan builds:
-python3 scripts/bench.py --kawac ./kawac --quick --verify-only --sanitize-c
+python3 scripts/bench.py --still ./still --quick --verify-only --sanitize-c
 
 # Measurements: run alone on an idle host, with stable power settings.
-python3 scripts/bench.py --kawac ./kawac --runs 9 --warmups 2 --json build/bench.json
+python3 scripts/bench.py --still ./still --runs 9 --warmups 2 --json build/bench.json
 
 # If a workload is too short, increase work inside every language's process:
-python3 scripts/bench.py --kawac ./kawac --filter runtime_mix --iterations 50000000
+python3 scripts/bench.py --still ./still --filter runtime_mix --iterations 50000000
 
 # Historical implementation comparisons, explicitly requested:
-python3 scripts/bench.py --kawac ./kawac --suite historical --verify-only
+python3 scripts/bench.py --still ./still --suite historical --verify-only
 python3 scripts/bench.py --list
 ```
 
@@ -27,17 +27,17 @@ The timer measures **whole-process elapsed time**: process launch, argument pars
 
 Each measured round runs each language once, in seeded randomized order. All receive the same number of warmups and samples. Reports contain every sample, median, median absolute deviation (MAD), minimum, maximum, order, inputs, source/binary hashes, compiler versions and paths, build commands/times, executable sizes, and host details. Builds and Python oracles are outside timed intervals. Sanitizer runs are also outside timing.
 
-Durations below 50 ms and MAD above 5% produce warnings. `--quick` is for checking the harness, not publishing speed claims. Increase `--iterations` if startup noise dominates; that scales work *inside* the process, not repeated process launches. There is no universal Kawa-versus-C pass threshold and no aggregate language ranking. Median ratios are descriptive and appear only for the matched suite; they are not statistical significance claims.
+Durations below 50 ms and MAD above 5% produce warnings. `--quick` is for checking the harness, not publishing speed claims. Increase `--iterations` if startup noise dominates; that scales work *inside* the process, not repeated process launches. There is no universal Whisky-versus-C pass threshold and no aggregate language ranking. Median ratios are descriptive and appear only for the matched suite; they are not statistical significance claims.
 
 Build policies are explicit:
 
 | Implementation | Policy |
 | --- | --- |
-| Kawa | `-O3 --bounds-check=safe`; compiler selects host target; current compiler's O3 pipeline includes its LTO pass. |
+| Whisky | `-O3 --bounds-check=safe`; compiler selects host target; current compiler's O3 pipeline includes its LTO pass. |
 | C | `-O3 -march=native -std=c11 -ffp-contract=off`; dynamic index guards are written explicitly where needed. |
 | Rust | `--edition=2021`, O3, native CPU, one codegen unit, panic abort, overflow checks off; normal indexed accesses retain bounds semantics. |
 
-The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. The original matched workloads use legacy storage; managed-reference safety is exercised separately below. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor returns a checked, sized byte view. The setup parser explicitly decays that view to a C pointer to parse the controlled, NUL-terminated decimal arguments; this keeps the workload algorithm unchanged.
+The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. The original matched workloads use legacy storage; managed-reference safety is exercised separately below. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Whisky's argument accessor returns a checked, sized byte view. The setup parser explicitly decays that view to a C pointer to parse the controlled, NUL-terminated decimal arguments; this keeps the workload algorithm unchanged.
 
 ## New matched workloads
 
@@ -56,7 +56,7 @@ Each includes zero/one iteration, multiple seeds, and boundaries such as 63/64/6
 
 The original 17 source triples remain available under `--suite historical`. They are freshly built and correctness-checked too, but have fixed inputs and no independent oracle, so agreement among twins is weaker evidence. Their timings receive no language-ranking ratios.
 
-- `b6_chan` compares cooperative Kawa coroutines, C `ucontext`, and Rust OS threads. Equal output does not make their scheduling costs equivalent. `ring_pipeline` supplies a separate equal-policy baseline; it does not replace this end-to-end implementation comparison.
+- `b6_chan` compares cooperative Whisky coroutines, C `ucontext`, and Rust OS threads. Equal output does not make their scheduling costs equivalent. `ring_pipeline` supplies a separate equal-policy baseline; it does not replace this end-to-end implementation comparison.
 - `b14_format` measures different formatting/buffering libraries, including output handling. It is not evidence of a generally faster language.
 - `b4_reductions` and `bench2` contain invariant work that an optimizer may hoist. Do not interpret their source iteration counts as proof of executed loads or memory bandwidth.
 - `b3_particles` uses a declared **2e-6 absolute tolerance** on its six-decimal accumulator, with exact output structure and finite values required. Different historical FP contraction/rounding paths are not byte-identical. The report preserves per-language output hashes and the comparison policy.
@@ -67,14 +67,14 @@ All other historical output comparisons are byte-exact. Prefer the matched suite
 ## Managed memory and compiler tooling
 
 ```sh
-python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --verify-only --sanitize-c
-python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --workload subobject_walk --rounds 10000000 --sanitize-c --json build/subobject-benchmark.json
-python3 scripts/bench_owners.py --kawac ./build-cmake/kawac --verify-only
-python3 scripts/bench_owners.py --kawac ./build-cmake/kawac --workload owned_values --trials 64 --json build/owned-values-benchmark.json
-python3 scripts/bench_tools.py --kawac ./build-cmake/kawac --verify-only
+python3 scripts/bench_memory.py --still ./build-cmake/still --verify-only --sanitize-c
+python3 scripts/bench_memory.py --still ./build-cmake/still --workload subobject_walk --rounds 10000000 --sanitize-c --json build/subobject-benchmark.json
+python3 scripts/bench_owners.py --still ./build-cmake/still --verify-only
+python3 scripts/bench_owners.py --still ./build-cmake/still --workload owned_values --trials 64 --json build/owned-values-benchmark.json
+python3 scripts/bench_tools.py --still ./build-cmake/still --verify-only
 ```
 
-The reference and field-view walks compare Kawa and C using the same descriptor runtime, reference ABI, initialization, and arithmetic policy. Each has an independent Python checksum oracle, 80 boundary runs, and eight separately instrumented cases. The field-view walk constructs two bounded references per iteration into a 32-byte row. Checked mode performs four indexed validations per iteration. Stable mode performs zero indexed validations, but acquires two guards per iteration plus one outer guard. This workload includes that guard cost; it does not assume stability always improves speed.
+The reference and field-view walks compare Whisky and C using the same descriptor runtime, reference ABI, initialization, and arithmetic policy. Each has an independent Python checksum oracle, 80 boundary runs, and eight separately instrumented cases. The field-view walk constructs two bounded references per iteration into a 32-byte row. Checked mode performs four indexed validations per iteration. Stable mode performs zero indexed validations, but acquires two guards per iteration plus one outer guard. This workload includes that guard cost; it does not assume stability always improves speed.
 
 The ownership lifecycle workload verifies deep chains and fanout trees, allocation failure, clone/drop behavior, and matching runtime counters. The owned-values workload holds four buffers in a 136-byte aggregate, then clones, moves, traverses, and drops it. Its two modes transfer directly between stack values or through a managed heap slot. Each ownership workload verifies 40 edge runs, four instrumented cases and two untimed C sanitizer runs. Their checksum oracles are closed-form Python equations, with explicit allocation, copied-byte, peak-byte and validation-count formulas. Compiler tooling uses deterministic source corpora with independent execution checksums, formatter fixed points, and repeated bitcode/IR/object hashes. It measures check, format, and build separately.
 

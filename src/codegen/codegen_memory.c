@@ -1,22 +1,22 @@
 #include "codegen_internal.h"
-static void error(KawaCompiler *c, ASTNode *n, const char *message);
+static void error(StillCompiler *c, ASTNode *n, const char *message);
 
-int kawa_is_managed(Type *t) {
+int wky_is_managed(Type *t) {
     return t && (t->kind == TYPE_OWNER || t->kind == TYPE_REF || t->kind == TYPE_ARENA);
 }
-int kawa_is_owner(Type *t) {
+int wky_is_owner(Type *t) {
     return t && (t->kind == TYPE_OWNER || t->kind == TYPE_ARENA);
 }
-static int contains(KawaCompiler *c, Type *t, int owners_only, Type **path, unsigned depth) {
+static int contains(StillCompiler *c, Type *t, int owners_only, Type **path, unsigned depth) {
     if (!t) return 0;
-    t = kawa_resolve_type(c, t);
-    if (owners_only ? kawa_is_owner(t) : kawa_is_managed(t)) return 1;
+    t = wky_resolve_type(c, t);
+    if (owners_only ? wky_is_owner(t) : wky_is_managed(t)) return 1;
     if (t->kind == TYPE_REF) return 0; /* its referent is not embedded */
     for (unsigned i=0; i<depth; ++i)
         if (path[i]==t || (t->kind==TYPE_STRUCT && path[i]->kind==TYPE_STRUCT &&
             t->name && path[i]->name && !strcmp(t->name,path[i]->name))) return 0;
     if (depth==128) {
-        kdiag_error_at(KAWA_E_TYPE,c->source_filename,NULL,0,"embedded type nesting exceeds 128 levels");
+        still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,0,"embedded type nesting exceeds 128 levels");
         exit(1);
     }
     path[depth]=t;
@@ -35,19 +35,19 @@ static int contains(KawaCompiler *c, Type *t, int owners_only, Type **path, unsi
     }
     return contains(c,t->inner,owners_only,path,depth+1);
 }
-int kawa_contains_managed(KawaCompiler *c, Type *t, int owners_only) {
+int wky_contains_managed(StillCompiler *c, Type *t, int owners_only) {
     Type *path[128];
     return contains(c,t,owners_only,path,0);
 }
-Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
+Type *wky_expr_type(StillCompiler *c, ASTNode *n) {
     if (!n) return NULL;
-    if (n->data_type) return kawa_resolve_type(c, n->data_type);
+    if (n->data_type) return wky_resolve_type(c, n->data_type);
     if (n->type == NODE_VAR_REF) {
         Scope *s = scope_find(c, n->data.var_ref.name);
         if (s && s->node) n->data_type = s->node->data_type;
     }
     if (n->type==NODE_BINARY_OP) {
-        Type *left=kawa_expr_type(c,n->data.bin_op.left), *right=kawa_expr_type(c,n->data.bin_op.right);
+        Type *left=wky_expr_type(c,n->data.bin_op.left), *right=wky_expr_type(c,n->data.bin_op.right);
         if (left && right) {
             if (left->kind>=TYPE_BOOL && left->kind<=TYPE_F64 && right->kind>=TYPE_BOOL && right->kind<=TYPE_F64) {
                 LLVMTypeRef l=get_llvm_type(c,left), r=get_llvm_type(c,right);
@@ -62,11 +62,11 @@ Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
         } else n->data_type=left ? left : right;
     }
     if (n->type == NODE_INDEX || n->type == NODE_DEREF) {
-        Type *base=kawa_expr_type(c,n->type==NODE_INDEX ? n->data.index.object : n->data.deref.expr);
+        Type *base=wky_expr_type(c,n->type==NODE_INDEX ? n->data.index.object : n->data.deref.expr);
         if (base) n->data_type=base->inner;
     }
     if (n->type == NODE_MEMBER_ACCESS) {
-        Type *base=kawa_expr_type(c,n->data.member_access.object);
+        Type *base=wky_expr_type(c,n->data.member_access.object);
         if (base && base->kind==TYPE_STRUCT) {
             LLVMTypeRef type=get_llvm_type(c,base);
             for (unsigned depth=0; depth<16; ++depth) {
@@ -75,7 +75,7 @@ Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
                 for (int i=0; i<sd->field_count; ++i)
                     if (!strcmp(sd->fields[i].name,n->data.member_access.member)) {
                         n->data_type=sd->fields[i].ast_type;
-                        return kawa_resolve_type(c,n->data_type);
+                        return wky_resolve_type(c,n->data_type);
                     }
                 int middle,field;
                 if (!try_promoted_field(c,type,n->data.member_access.member,&middle,&field)) break;
@@ -83,23 +83,23 @@ Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
             }
         }
     }
-    return kawa_resolve_type(c, n->data_type);
+    return wky_resolve_type(c, n->data_type);
 }
-void kawa_check_value_type(KawaCompiler *c, ASTNode *n, Type *type) {
-    type=kawa_resolve_type(c,type);
-    if (!kawa_is_owner(type) && kawa_contains_managed(c,type,1) &&
+void wky_check_value_type(StillCompiler *c, ASTNode *n, Type *type) {
+    type=wky_resolve_type(c,type);
+    if (!wky_is_owner(type) && wky_contains_managed(c,type,1) &&
         type->kind!=TYPE_STRUCT && type->kind!=TYPE_ARRAY) {
         error(c,n,"owned values require owner, arena, struct or fixed array types");
     }
 }
-static LLVMTypeRef i64(KawaCompiler *c) { return LLVMInt64TypeInContext(c->context); }
-static LLVMValueRef constant(KawaCompiler *c, uint64_t v) { return LLVMConstInt(i64(c), v, 0); }
-static LLVMTypeRef ptr(KawaCompiler *c) { return LLVMPointerTypeInContext(c->context, 0); }
-static LLVMTypeRef ref_type(KawaCompiler *c) {
+static LLVMTypeRef i64(StillCompiler *c) { return LLVMInt64TypeInContext(c->context); }
+static LLVMValueRef constant(StillCompiler *c, uint64_t v) { return LLVMConstInt(i64(c), v, 0); }
+static LLVMTypeRef ptr(StillCompiler *c) { return LLVMPointerTypeInContext(c->context, 0); }
+static LLVMTypeRef ref_type(StillCompiler *c) {
     Type t = {.kind = TYPE_REF};
     return get_llvm_type(c, &t);
 }
-static LLVMValueRef call_runtime(KawaCompiler *c, ASTNode *node,const char *name, LLVMTypeRef ret,
+static LLVMValueRef call_runtime(StillCompiler *c, ASTNode *node,const char *name, LLVMTypeRef ret,
                                   LLVMValueRef *args, unsigned count) {
     c->uses_memory = 1;
     LLVMValueRef fn = LLVMGetNamedFunction(c->module, name);
@@ -110,33 +110,33 @@ static LLVMValueRef call_runtime(KawaCompiler *c, ASTNode *node,const char *name
     }
     LLVMValueRef call=LLVMBuildCall2(c->builder,LLVMGlobalGetValueType(fn),fn,args,count,
                                     LLVMGetTypeKind(ret)==LLVMVoidTypeKind ? "" : "memory");
-    if (strcmp(name,"__kawa_mem_metric") && strcmp(name,"__kawa_mem_budget")) {
-        const char *kind=!strcmp(name,"__kawa_mem_address") ? "lifetime_and_bounds" :
-            !strcmp(name,"__kawa_mem_write_address") ? "lifetime_and_extent" :
-            !strcmp(name,"__kawa_mem_view") ? "subobject_view" :
-            strstr(name,"pin") ? "stability" : strstr(name,"alloc") || !strcmp(name,"__kawa_mem_arena") ?
+    if (strcmp(name,"__wky_mem_metric") && strcmp(name,"__wky_mem_budget")) {
+        const char *kind=!strcmp(name,"__wky_mem_address") ? "lifetime_and_bounds" :
+            !strcmp(name,"__wky_mem_write_address") ? "lifetime_and_extent" :
+            !strcmp(name,"__wky_mem_view") ? "subobject_view" :
+            strstr(name,"pin") ? "stability" : strstr(name,"alloc") || !strcmp(name,"__wky_mem_arena") ?
             "allocation" : strstr(name,"clone") ? "clone" : strstr(name,"resize") ?
             "resize" : "memory_operation";
-        kawa_report_attach(c,call,kawa_report_site(c,node,kind,name,NULL));
+        still_report_attach(c,call,still_report_site(c,node,kind,name,NULL));
     }
     return call;
 }
-static void error(KawaCompiler *c, ASTNode *n, const char *message) {
-    kerr(KAWA_E_TYPE, n, "%s", message);
+static void error(StillCompiler *c, ASTNode *n, const char *message) {
+    still_error(STILL_E_TYPE, n, "%s", message);
     exit(1);
 }
-static LLVMValueRef integer_arg(KawaCompiler *c, ASTNode *n) {
+static LLVMValueRef integer_arg(StillCompiler *c, ASTNode *n) {
     LLVMValueRef value = codegen_expr(c, n);
     if (LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMIntegerTypeKind)
         error(c, n, "memory sizes and indices must be integers");
-    return coerce_value(c, value, kawa_expr_type(c, n), i64(c), NULL);
+    return coerce_value(c, value, wky_expr_type(c, n), i64(c), NULL);
 }
-static LLVMValueRef element_size(KawaCompiler *c, Type *type) {
+static LLVMValueRef element_size(StillCompiler *c, Type *type) {
     return LLVMSizeOf(get_llvm_type(c, type));
 }
-static int managed_element(KawaCompiler *c, Type *t, int depth) {
+static int managed_element(StillCompiler *c, Type *t, int depth) {
     if (!t || depth>64) return 0;
-    t=kawa_resolve_type(c,t);
+    t=wky_resolve_type(c,t);
     if (t->kind==TYPE_OWNER || t->kind==TYPE_REF ||
         (t->kind>=TYPE_BOOL && t->kind<=TYPE_F64)) return 1;
     if (t->kind==TYPE_ARRAY) return managed_element(c,t->inner,depth+1);
@@ -149,41 +149,41 @@ static int managed_element(KawaCompiler *c, Type *t, int depth) {
     }
     return 0;
 }
-LLVMValueRef kawa_memory_value(KawaCompiler *c, ASTNode *n) {
-    if (!kawa_is_managed(kawa_expr_type(c, n))) error(c, n, "expected a managed owner or reference");
+LLVMValueRef wky_memory_value(StillCompiler *c, ASTNode *n) {
+    if (!wky_is_managed(wky_expr_type(c, n))) error(c, n, "expected a managed owner or reference");
     if (n->type == NODE_VAR_REF || n->type == NODE_MEMBER_ACCESS || n->type == NODE_INDEX || n->type == NODE_DEREF) {
         LLVMValueRef slot = get_address(c, n, NULL);
         return LLVMBuildLoad2(c->builder, ref_type(c), slot, "reference");
     }
-    if (kawa_is_owner(n->data_type))
+    if (wky_is_owner(n->data_type))
         error(c, n, "bind the temporary owner before borrowing it");
     return codegen_expr(c, n);
 }
-static LLVMValueRef spill(KawaCompiler *c, LLVMValueRef value) {
+static LLVMValueRef spill(StillCompiler *c, LLVMValueRef value) {
     LLVMValueRef slot = create_entry_block_alloca(c, LLVMTypeOf(value), "memory_arg");
     LLVMBuildStore(c->builder, value, slot);
     return slot;
 }
-void kawa_memory_cleanup(KawaCompiler *c, LLVMValueRef slot, int unpin) {
-    call_runtime(c,NULL, unpin ? "__kawa_mem_unpin" : "__kawa_mem_drop",
+void wky_memory_cleanup(StillCompiler *c, LLVMValueRef slot, int unpin) {
+    call_runtime(c,NULL, unpin ? "__wky_mem_unpin" : "__wky_mem_drop",
                  LLVMVoidTypeInContext(c->context), &slot, 1);
 }
-void kawa_memory_defer(KawaCompiler *c, LLVMValueRef slot, int unpin) {
+void wky_memory_defer(StillCompiler *c, LLVMValueRef slot, int unpin) {
     DeferFrame *d = arena_alloc(c->arena, sizeof(*d));
     d->memory_slot = slot;
     d->memory_unpin = unpin;
     d->next = c->defer_stack;
     c->defer_stack = d;
 }
-LLVMValueRef kawa_memory_address(KawaCompiler *c, ASTNode *n, ASTNode *base,
+LLVMValueRef wky_memory_address(StillCompiler *c, ASTNode *n, ASTNode *base,
                                   ASTNode *index, LLVMTypeRef *out_type, LLVMValueRef *container) {
-    Type *type = kawa_expr_type(c, base);
-    if (!kawa_is_managed(type)) return NULL;
+    Type *type = wky_expr_type(c, base);
+    if (!wky_is_managed(type)) return NULL;
     if (type->kind == TYPE_ARENA || !type->inner) error(c, n, "an arena is not an indexable reference");
     LLVMTypeRef elem = get_llvm_type(c, type->inner);
     if (out_type) *out_type = elem;
     n->data_type = type->inner;
-    LLVMValueRef value = kawa_memory_value(c, base);
+    LLVMValueRef value = wky_memory_value(c, base);
     if (container) *container=value;
     LLVMValueRef idx = index ? integer_arg(c, index) : constant(c, 0);
     LLVMValueRef size = element_size(c, type->inner);
@@ -204,13 +204,13 @@ LLVMValueRef kawa_memory_address(KawaCompiler *c, ASTNode *n, ASTNode *base,
     LLVMValueRef args[6];
     for (unsigned i = 0; i < 4; ++i) args[i] = LLVMBuildExtractValue(c->builder, value, i, "ref_part");
     args[4] = idx; args[5] = size;
-    return call_runtime(c,n, "__kawa_mem_address", ptr(c), args, 6);
+    return call_runtime(c,n, "__wky_mem_address", ptr(c), args, 6);
 }
 /* Resolve the managed container alongside its slot, evaluating each source
  * expression once. Field/array offsets keep the nearest allocation identity
  * so a later callback cannot turn a saved slot address into an unchecked
  * write to freed or recycled storage. */
-int kawa_expr_may_invalidate(KawaCompiler *c, ASTNode *n) {
+int wky_expr_may_invalidate(StillCompiler *c, ASTNode *n) {
     if (!n) return 0;
     switch (n->type) {
     case NODE_LITERAL: case NODE_STRING_LIT: case NODE_VAR_REF: return 0;
@@ -219,43 +219,43 @@ int kawa_expr_may_invalidate(KawaCompiler *c, ASTNode *n) {
          * Only built-in scalar/reference operators have no invalidation. */
         for (unsigned i=0; i<2; ++i) {
             ASTNode *operand=i ? n->data.bin_op.right : n->data.bin_op.left;
-            Type *type=kawa_expr_type(c,operand);
-            if (!type || !((type->kind>=TYPE_BOOL && type->kind<=TYPE_F64) || kawa_is_managed(type)))
+            Type *type=wky_expr_type(c,operand);
+            if (!type || !((type->kind>=TYPE_BOOL && type->kind<=TYPE_F64) || wky_is_managed(type)))
                 return 1;
-            if (kawa_expr_may_invalidate(c,operand)) return 1;
+            if (wky_expr_may_invalidate(c,operand)) return 1;
         }
         return 0;
-    case NODE_MEMBER_ACCESS: return kawa_expr_may_invalidate(c,n->data.member_access.object);
+    case NODE_MEMBER_ACCESS: return wky_expr_may_invalidate(c,n->data.member_access.object);
     case NODE_INDEX: {
-        Type *base=kawa_expr_type(c,n->data.index.object);
+        Type *base=wky_expr_type(c,n->data.index.object);
         if (!base || base->kind==TYPE_STRUCT) return 1; /* user indexing */
-        return kawa_expr_may_invalidate(c,n->data.index.object) || kawa_expr_may_invalidate(c,n->data.index.index);
+        return wky_expr_may_invalidate(c,n->data.index.object) || wky_expr_may_invalidate(c,n->data.index.index);
     }
-    case NODE_DEREF: case NODE_AMP: return kawa_expr_may_invalidate(c,n->data.deref.expr);
-    case NODE_CAST: return kawa_expr_may_invalidate(c,n->data.cast.val);
+    case NODE_DEREF: case NODE_AMP: return wky_expr_may_invalidate(c,n->data.deref.expr);
+    case NODE_CAST: return wky_expr_may_invalidate(c,n->data.cast.val);
     default: return 1;
     }
 }
-LLVMValueRef kawa_memory_lvalue(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type,
+LLVMValueRef wky_memory_lvalue(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type,
                                LLVMValueRef *container) {
     if (!n) return NULL;
     LLVMValueRef local_container=NULL;
     if (!container) container=&local_container;
     if (n->type==NODE_INDEX || n->type==NODE_DEREF) {
         ASTNode *base=n->type==NODE_INDEX ? n->data.index.object : n->data.deref.expr;
-        LLVMValueRef address=kawa_memory_address(c,n,base,
+        LLVMValueRef address=wky_memory_address(c,n,base,
             n->type==NODE_INDEX ? n->data.index.index : NULL,out_type,container);
         if (address || n->type==NODE_DEREF) return address;
-        Type *type=kawa_expr_type(c,base);
+        Type *type=wky_expr_type(c,base);
         if (!type || type->kind!=TYPE_ARRAY) return NULL;
         LLVMTypeRef array_type=NULL;
-        address=kawa_memory_lvalue(c,base,&array_type,container);
+        address=wky_memory_lvalue(c,base,&array_type,container);
         if (!address) return NULL;
         LLVMValueRef index=integer_arg(c,n->data.index.index);
         emit_check_or_trap(c,n,LLVMBuildICmp(c->builder,LLVMIntULT,index,constant(c,type->array_len),"array_bounds"),
                            "array index out of bounds");
-        if (kawa_expr_may_invalidate(c,n->data.index.index))
-            address=kawa_memory_write_address(c,address,array_type,*container);
+        if (wky_expr_may_invalidate(c,n->data.index.index))
+            address=wky_memory_write_address(c,address,array_type,*container);
         LLVMValueRef indices[]={constant(c,0),index};
         if (out_type) *out_type=get_llvm_type(c,type->inner);
         n->data_type=type->inner;
@@ -263,7 +263,7 @@ LLVMValueRef kawa_memory_lvalue(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_ty
     }
     if (n->type!=NODE_MEMBER_ACCESS) return NULL;
     LLVMTypeRef type=NULL;
-    LLVMValueRef address=kawa_memory_lvalue(c,n->data.member_access.object,&type,container);
+    LLVMValueRef address=wky_memory_lvalue(c,n->data.member_access.object,&type,container);
     if (!address) return NULL;
     const char *name=n->data.member_access.member;
     if (LLVMGetTypeKind(type)==LLVMArrayTypeKind) {
@@ -287,46 +287,46 @@ LLVMValueRef kawa_memory_lvalue(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_ty
     if (out_type) *out_type=get_field_type(c,type,name);
     return LLVMBuildStructGEP2(c->builder,type,address,index,"managed_field");
 }
-LLVMValueRef kawa_memory_write_address(KawaCompiler *c, LLVMValueRef slot,
+LLVMValueRef wky_memory_write_address(StillCompiler *c, LLVMValueRef slot,
                                       LLVMTypeRef type, LLVMValueRef container) {
     if (!container) return slot;
     for (StableFrame *f=c->stable_stack; f; f=f->next)
         if (f->reference==container) return slot;
     LLVMValueRef args[]={spill(c,container),slot,LLVMSizeOf(type)};
-    return call_runtime(c,NULL,"__kawa_mem_write_address",ptr(c),args,3);
+    return call_runtime(c,NULL,"__wky_mem_write_address",ptr(c),args,3);
 }
-void kawa_memory_store_owner(KawaCompiler *c, LLVMValueRef slot,
+void wky_memory_store_owner(StillCompiler *c, LLVMValueRef slot,
                              LLVMValueRef value, LLVMValueRef container) {
     if (!container) {
         LLVMValueRef args[]={slot,spill(c,value)};
-        call_runtime(c,NULL,"__kawa_mem_replace",LLVMVoidTypeInContext(c->context),args,2);
+        call_runtime(c,NULL,"__wky_mem_replace",LLVMVoidTypeInContext(c->context),args,2);
         return;
     }
     LLVMValueRef args[]={slot,spill(c,value),spill(c,container)};
-    call_runtime(c,NULL,"__kawa_mem_store_owner",LLVMVoidTypeInContext(c->context),args,3);
+    call_runtime(c,NULL,"__wky_mem_store_owner",LLVMVoidTypeInContext(c->context),args,3);
 }
-void kawa_memory_stable(KawaCompiler *c, ASTNode *n) {
+void wky_memory_stable(StillCompiler *c, ASTNode *n) {
     ASTNode *reference = n->data.stable.reference;
-    if (reference->type != NODE_VAR_REF || !kawa_is_managed(kawa_expr_type(c, reference)))
+    if (reference->type != NODE_VAR_REF || !wky_is_managed(wky_expr_type(c, reference)))
         error(c, n, "stable expects a named owner or reference");
     if (c->in_coroutine) error(c, n, "stable access cannot span a coroutine suspension");
-    LLVMValueRef value = kawa_memory_value(c, reference);
+    LLVMValueRef value = wky_memory_value(c, reference);
     LLVMValueRef guard = spill(c, value);
-    LLVMValueRef data = call_runtime(c,n, n->data.stable.optional ? "__kawa_mem_try_pin" : "__kawa_mem_pin", ptr(c), &guard, 1);
+    LLVMValueRef data = call_runtime(c,n, n->data.stable.optional ? "__wky_mem_try_pin" : "__wky_mem_pin", ptr(c), &guard, 1);
     LLVMBasicBlockRef missing = NULL, done = NULL;
     if (n->data.stable.optional) {
-        LLVMBasicBlockRef acquired = kawa_append_block(c->current_func, "access_acquired");
-        missing = kawa_append_block(c->current_func, "access_missing");
-        done = kawa_append_block(c->current_func, "access_done");
+        LLVMBasicBlockRef acquired = wky_append_block(c->current_func, "access_acquired");
+        missing = wky_append_block(c->current_func, "access_missing");
+        done = wky_append_block(c->current_func, "access_done");
         LLVMBuildCondBr(c->builder, LLVMBuildIsNotNull(c->builder, data, "acquired"), acquired, missing);
         LLVMPositionBuilderAtEnd(c->builder, acquired);
     }
     StableFrame frame = {get_address(c, reference, NULL), value, data, c->stable_stack};
     DeferFrame *saved = c->defer_stack;
     c->stable_stack = &frame;
-    kawa_memory_defer(c, guard, 1);
+    wky_memory_defer(c, guard, 1);
     codegen_stmt(c, n->data.stable.body);
-    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) kawa_memory_cleanup(c, guard, 1);
+    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) wky_memory_cleanup(c, guard, 1);
     c->defer_stack = saved;
     c->stable_stack = frame.next;
     if (missing) {
@@ -337,24 +337,24 @@ void kawa_memory_stable(KawaCompiler *c, ASTNode *n) {
         LLVMPositionBuilderAtEnd(c->builder, done);
     }
 }
-LLVMValueRef kawa_memory_binary(KawaCompiler *c, ASTNode *n) {
+LLVMValueRef wky_memory_binary(StillCompiler *c, ASTNode *n) {
     ASTNode *left=n->data.bin_op.left, *right=n->data.bin_op.right;
-    Type *lt=kawa_expr_type(c,left), *rt=kawa_expr_type(c,right);
-    if (!kawa_is_managed(lt) && !kawa_is_managed(rt)) return NULL;
+    Type *lt=wky_expr_type(c,left), *rt=wky_expr_type(c,right);
+    if (!wky_is_managed(lt) && !wky_is_managed(rt)) return NULL;
     int op=n->data.bin_op.op;
-    if (op==TOK_PLUS && lt && (lt->kind==TYPE_OWNER || lt->kind==TYPE_REF) && !kawa_is_managed(rt)) {
-        LLVMValueRef reference=kawa_memory_value(c,left);
+    if (op==TOK_PLUS && lt && (lt->kind==TYPE_OWNER || lt->kind==TYPE_REF) && !wky_is_managed(rt)) {
+        LLVMValueRef reference=wky_memory_value(c,left);
         LLVMValueRef offset=integer_arg(c,right), size=element_size(c,lt->inner);
         LLVMValueRef length=LLVMBuildUDiv(c->builder,LLVMBuildExtractValue(c->builder,reference,3,"extent"),size,"length");
         LLVMValueRef input=spill(c,reference), out=create_entry_block_alloca(c,ref_type(c),"advanced_reference");
         LLVMValueRef args[]={out,input,offset,length,size};
-        call_runtime(c,n,"__kawa_mem_slice",LLVMVoidTypeInContext(c->context),args,5);
+        call_runtime(c,n,"__wky_mem_slice",LLVMVoidTypeInContext(c->context),args,5);
         Type *result=arena_alloc(c->arena,sizeof(*result)); *result=*lt; result->kind=TYPE_REF; n->data_type=result;
         return LLVMBuildLoad2(c->builder,ref_type(c),out,"advanced_reference");
     }
-    if ((op==TOK_ISEQ || op==TOK_NOTEQ) && kawa_is_managed(lt) && kawa_is_managed(rt) && lt->kind!=TYPE_ARENA && rt->kind!=TYPE_ARENA &&
-        kawa_types_same(kawa_resolve_type(c,lt->inner),kawa_resolve_type(c,rt->inner))) {
-        LLVMValueRef l=kawa_memory_value(c,left), r=kawa_memory_value(c,right);
+    if ((op==TOK_ISEQ || op==TOK_NOTEQ) && wky_is_managed(lt) && wky_is_managed(rt) && lt->kind!=TYPE_ARENA && rt->kind!=TYPE_ARENA &&
+        wky_types_same(wky_resolve_type(c,lt->inner),wky_resolve_type(c,rt->inner))) {
+        LLVMValueRef l=wky_memory_value(c,left), r=wky_memory_value(c,right);
         LLVMValueRef equal=LLVMConstInt(LLVMInt1TypeInContext(c->context),1,0);
         // Identity is allocation + generation + position. A narrower view at
         // the same position compares equal; recycled addresses never do.
@@ -367,7 +367,7 @@ LLVMValueRef kawa_memory_binary(KawaCompiler *c, ASTNode *n) {
     error(c,n,"managed references support equality and forward offsets within their extent");
     return NULL;
 }
-LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) {
+LLVMValueRef wky_memory_builtin(StillCompiler *c, ASTNode *n, const char *name) {
     const char *names[] = {"own", "try_own", "ref_of", "move", "clone", "try_clone", "release",
         "ref_slice", "mem_len", "allocated", "arena", "arena_new", "try_arena_new", "remove",
         "mem_budget", "mem_metric", "resize", "try_resize", "mem_capacity", NULL};
@@ -381,12 +381,12 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         (!strcmp(name, "arena_new") || !strcmp(name, "try_arena_new") ||
          !strcmp(name, "resize") || !strcmp(name, "try_resize")) ? 2 : 1;
     if (count != arity) {
-        kerr(KAWA_E_ARITY, n, "%s expects %u arguments, got %u", name, arity, count);
+        still_error(STILL_E_ARITY, n, "%s expects %u arguments, got %u", name, arity, count);
         exit(1);
     }
     LLVMTypeRef rt = ref_type(c), vi = LLVMVoidTypeInContext(c->context);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(c->context);
-    Type *at = kawa_expr_type(c, a);
+    Type *at = wky_expr_type(c, a);
     if (a && a->type == NODE_VAR_REF && !at) (void)get_address(c,a,NULL);
     if (!strcmp(name,"resize") || !strcmp(name,"try_resize")) {
         if (!at || at->kind != TYPE_OWNER || a->type != NODE_VAR_REF || !managed_element(c,at->inner,0))
@@ -395,19 +395,19 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         for (StableFrame *f=c->stable_stack; f; f=f->next)
             if (f->slot==slot) error(c,n,"cannot resize a stable binding");
         LLVMValueRef args[]={slot,integer_arg(c,a->next),element_size(c,at->inner)};
-        LLVMValueRef ok=call_runtime(c,n,"__kawa_mem_resize",i32,args,3);
+        LLVMValueRef ok=call_runtime(c,n,"__wky_mem_resize",i32,args,3);
         if (!strcmp(name,"try_resize")) return cond_to_bool(c,ok);
         emit_check_or_trap(c,n,cond_to_bool(c,ok),"managed resize failed");
         return ok;
     }
     if (!strcmp(name, "mem_budget")) {
         LLVMValueRef arg = integer_arg(c, a);
-        return call_runtime(c,n, "__kawa_mem_budget", vi, &arg, 1);
+        return call_runtime(c,n, "__wky_mem_budget", vi, &arg, 1);
     }
     if (!strcmp(name, "mem_metric")) {
         LLVMValueRef arg = integer_arg(c, a);
         arg = LLVMBuildTrunc(c->builder, arg, i32, "metric_id");
-        return call_runtime(c,n, "__kawa_mem_metric", i64(c), &arg, 1);
+        return call_runtime(c,n, "__wky_mem_metric", i64(c), &arg, 1);
     }
     if (!strcmp(name, "own") || !strcmp(name, "try_own") || !strcmp(name, "arena") ||
         !strcmp(name, "arena_new") || !strcmp(name, "try_arena_new")) {
@@ -423,56 +423,56 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         unsigned argc = 1;
         if (child) {
             if (!at || at->kind != TYPE_ARENA) error(c, n, "arena_new requires an arena");
-            args[argc++] = spill(c, kawa_memory_value(c, a));
+            args[argc++] = spill(c, wky_memory_value(c, a));
         }
         if (!arena) {
             args[argc++] = integer_arg(c, child ? a->next : a);
             args[argc++] = element_size(c, t->inner);
         }
-        LLVMValueRef ok = call_runtime(c,n, arena ? "__kawa_mem_arena" : child ?
-            "__kawa_mem_arena_alloc" : "__kawa_mem_alloc", i32, args, argc);
+        LLVMValueRef ok = call_runtime(c,n, arena ? "__wky_mem_arena" : child ?
+            "__wky_mem_arena_alloc" : "__wky_mem_alloc", i32, args, argc);
         if (strncmp(name, "try_", 4))
             emit_check_or_trap(c, n, cond_to_bool(c, ok), "managed allocation failed");
         return LLVMBuildLoad2(c->builder, rt, out, "allocated_reference");
     }
-    if (!kawa_is_managed(at) && kawa_contains_managed(c,at,1) &&
+    if (!wky_is_managed(at) && wky_contains_managed(c,at,1) &&
         (!strcmp(name,"move") || !strcmp(name,"release") || !strcmp(name,"clone") || !strcmp(name,"try_clone"))) {
-        kawa_check_value_type(c,n,at);
+        wky_check_value_type(c,n,at);
         LLVMTypeRef type=NULL;
-        LLVMValueRef container=NULL, slot=kawa_memory_lvalue(c,a,&type,&container);
+        LLVMValueRef container=NULL, slot=wky_memory_lvalue(c,a,&type,&container);
         if (!slot) slot=get_address(c,a,&type);
         if (!slot || !type) error(c,n,"owned aggregate operations require an lvalue; bind the temporary first");
-        LLVMValueRef layout=kawa_memory_layout(c,at);
+        LLVMValueRef layout=wky_memory_layout(c,at);
         if (!strcmp(name,"release")) {
             if (container) {
                 LLVMValueRef args[]={slot,layout,spill(c,container)};
-                return call_runtime(c,n,"__kawa_mem_value_clear",vi,args,3);
+                return call_runtime(c,n,"__wky_mem_value_clear",vi,args,3);
             }
             LLVMValueRef args[]={slot,layout};
-            return call_runtime(c,n,"__kawa_mem_value_drop",vi,args,2);
+            return call_runtime(c,n,"__wky_mem_value_drop",vi,args,2);
         }
         LLVMValueRef out=create_entry_block_alloca(c,type,"owned_value_result");
         LLVMValueRef guard=container ? spill(c,container) : LLVMConstNull(ptr(c));
         LLVMValueRef args[]={out,slot,layout,guard};
         if (!strcmp(name,"move"))
-            call_runtime(c,n,"__kawa_mem_value_take",vi,args,4);
+            call_runtime(c,n,"__wky_mem_value_take",vi,args,4);
         else {
-            if (kawa_value_contains_arena(c,at)) error(c,n,"arenas cannot be cloned; move the owning value instead");
-            LLVMValueRef ok=call_runtime(c,n,"__kawa_mem_value_clone",i32,args,4);
+            if (wky_value_contains_arena(c,at)) error(c,n,"arenas cannot be cloned; move the owning value instead");
+            LLVMValueRef ok=call_runtime(c,n,"__wky_mem_value_clone",i32,args,4);
             if (!strcmp(name,"clone")) emit_check_or_trap(c,n,cond_to_bool(c,ok),"owned value clone failed");
         }
         n->data_type=at;
         return LLVMBuildLoad2(c->builder,type,out,"owned_value_result");
     }
-    if (!kawa_is_managed(at) && strcmp(name,"ref_of"))
+    if (!wky_is_managed(at) && strcmp(name,"ref_of"))
         error(c, n, "memory operation expects an owner or reference");
     if (!strcmp(name, "move") || !strcmp(name, "release") || !strcmp(name, "remove")) {
         int remove = !strcmp(name, "remove");
         int lvalue=a->type==NODE_VAR_REF || a->type==NODE_MEMBER_ACCESS || a->type==NODE_INDEX || a->type==NODE_DEREF;
-        if ((!remove && !kawa_is_owner(at)) || (remove && at->kind != TYPE_REF) || !lvalue)
+        if ((!remove && !wky_is_owner(at)) || (remove && at->kind != TYPE_REF) || !lvalue)
             error(c, n, "move/release require an owning lvalue; remove requires an arena reference");
         LLVMValueRef container=NULL;
-        LLVMValueRef slot=kawa_memory_lvalue(c,a,NULL,&container);
+        LLVMValueRef slot=wky_memory_lvalue(c,a,NULL,&container);
         if (!slot) slot=get_address(c,a,NULL);
         for (StableFrame *f = c->stable_stack; f; f = f->next)
             if (f->slot == slot) error(c, n, "cannot move or invalidate a stable binding");
@@ -480,19 +480,19 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
             if (container) {
                 LLVMValueRef out=create_entry_block_alloca(c,rt,"moved_field");
                 LLVMValueRef args[]={out,slot,spill(c,container)};
-                call_runtime(c,n,"__kawa_mem_take",vi,args,3);
+                call_runtime(c,n,"__wky_mem_take",vi,args,3);
                 return LLVMBuildLoad2(c->builder,rt,out,"moved_owner");
             }
             LLVMValueRef value = LLVMBuildLoad2(c->builder,rt,slot,"moved_owner");
             LLVMBuildStore(c->builder, LLVMConstNull(rt), slot);
             return value;
         }
-        return call_runtime(c,n, remove ? "__kawa_mem_remove" : "__kawa_mem_drop", vi, &slot, 1);
+        return call_runtime(c,n, remove ? "__wky_mem_remove" : "__wky_mem_drop", vi, &slot, 1);
     }
-    if (!strcmp(name,"ref_of") && !kawa_is_managed(at)) {
+    if (!strcmp(name,"ref_of") && !wky_is_managed(at)) {
         LLVMTypeRef type=NULL;
-        LLVMValueRef container=NULL, slot=kawa_memory_lvalue(c,a,&type,&container);
-        at=kawa_expr_type(c,a);
+        LLVMValueRef container=NULL, slot=wky_memory_lvalue(c,a,&type,&container);
+        at=wky_expr_type(c,a);
         if (!slot || !container || !at || !managed_element(c,at,0))
             error(c,n,"ref_of requires managed storage; stack and raw addresses cannot acquire managed identity");
         Type *borrowed=arena_alloc(c->arena,sizeof(*borrowed));
@@ -501,10 +501,10 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         n->data_type=borrowed;
         LLVMValueRef out=create_entry_block_alloca(c,rt,"subobject_reference");
         LLVMValueRef args[]={out,spill(c,container),slot,LLVMSizeOf(type)};
-        call_runtime(c,n,"__kawa_mem_view",vi,args,4);
+        call_runtime(c,n,"__wky_mem_view",vi,args,4);
         return LLVMBuildLoad2(c->builder,rt,out,"subobject_reference");
     }
-    LLVMValueRef value = kawa_memory_value(c, a);
+    LLVMValueRef value = wky_memory_value(c, a);
     if (!strcmp(name, "allocated"))
         return LLVMBuildIsNotNull(c->builder, LLVMBuildExtractValue(c->builder, value, 0, "descriptor"), "allocated");
     if (!strcmp(name, "ref_of")) {
@@ -517,7 +517,7 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
                              element_size(c, at->inner), "length");
     LLVMValueRef in = spill(c, value);
     if (!strcmp(name,"mem_capacity")) {
-        LLVMValueRef capacity=call_runtime(c,n,"__kawa_mem_capacity",i64(c),&in,1);
+        LLVMValueRef capacity=call_runtime(c,n,"__wky_mem_capacity",i64(c),&in,1);
         return LLVMBuildUDiv(c->builder,capacity,element_size(c,at->inner),"capacity");
     }
     LLVMValueRef out = create_entry_block_alloca(c, rt, "memory_result");
@@ -525,11 +525,11 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         LLVMValueRef start=integer_arg(c,a->next), end=integer_arg(c,a->next->next);
         LLVMValueRef args[] = {out, in, start, end,
                                element_size(c, at->inner)};
-        call_runtime(c,n, "__kawa_mem_slice", vi, args, 5);
+        call_runtime(c,n, "__wky_mem_slice", vi, args, 5);
     } else {
         if (!managed_element(c, at->inner, 0)) error(c, n, "clone requires supported managed elements");
         LLVMValueRef args[] = {out, in};
-        LLVMValueRef ok = call_runtime(c,n, "__kawa_mem_clone", i32, args, 2);
+        LLVMValueRef ok = call_runtime(c,n, "__wky_mem_clone", i32, args, 2);
         if (!strcmp(name, "clone")) emit_check_or_trap(c, n, cond_to_bool(c, ok), "managed clone failed");
     }
     return LLVMBuildLoad2(c->builder, rt, out, "memory_result");

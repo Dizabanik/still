@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build kawac and run semantic, FileCheck, and harness tests through CTest.
+# Build still and run semantic, FileCheck, and harness tests through CTest.
 # Equivalent: cmake --build build-cmake &&
 # ctest --test-dir build-cmake.
 set -e

@@ -2,10 +2,10 @@
 
 // Debug-info emission (-g). v1 scope: compile unit + file + subprogram
 // metadata and per-statement line locations. That's what makes lldb,
-// Instruments and `sample` show Kawa function names and call lines instead
+// Instruments and `sample` show Whisky function names and call lines instead
 // of raw addresses -- the minimum for profiling real programs.
 
-void kawa_di_init(KawaCompiler *c, const char *source_filename) {
+void still_di_init(StillCompiler *c, const char *source_filename) {
 	if (!c->debug_build)
 		return;
 	c->di_builder = LLVMCreateDIBuilder(c->module);
@@ -27,7 +27,7 @@ void kawa_di_init(KawaCompiler *c, const char *source_filename) {
 	c->di_file = LLVMDIBuilderCreateFile(
 		c->di_builder, name, strlen(name), dir, strlen(dir));
 
-	const char *producer = "kawac 0.1.0";
+	const char *producer = "still " STILL_VERSION;
 	LLVMDIBuilderCreateCompileUnit(
 		c->di_builder, LLVMDWARFSourceLanguageC11, c->di_file, producer,
 		strlen(producer), 0 /* isOptimized */, "", 0, 0 /* RuntimeVer */,
@@ -49,16 +49,16 @@ void kawa_di_init(KawaCompiler *c, const char *source_filename) {
 						  LLVMInt32TypeInContext(c->context), 4, 0)));
 }
 
-void kawa_di_finalize(KawaCompiler *c) {
+void still_di_finalize(StillCompiler *c) {
 	if (!c->di_builder)
 		return;
 	LLVMDIBuilderFinalize(c->di_builder);
 }
 
-// Map a Kawa type to a DWARF type descriptor. Basic ints/floats/pointers
+// Map a Whisky type to a DWARF type descriptor. Basic ints/floats/pointers
 // cover the common cases; anything else falls back to void so emission
 // never fails.
-static LLVMMetadataRef di_type(KawaCompiler *c, Type *t) {
+static LLVMMetadataRef di_type(StillCompiler *c, Type *t) {
 	if (!c->di_builder)
 		return NULL;
 	if (!t)
@@ -155,16 +155,16 @@ static LLVMMetadataRef di_type(KawaCompiler *c, Type *t) {
 	return NULL;
 }
 
-LLVMMetadataRef kawa_di_subprogram(KawaCompiler *c, const char *name,
+LLVMMetadataRef still_di_subprogram(StillCompiler *c, const char *name,
 								   unsigned line, ASTNode *fn_node) {
 	if (!c->di_builder)
 		return NULL;
 	const char *source_file=c->source_filename;
 	int original;
-	kdiag_location((int)line,&source_file,&original);
+	still_diag_location((int)line,&source_file,&original);
 	line=(unsigned)original;
 	const char *slash=source_file ? strrchr(source_file,'/') : NULL;
-	const char *basename=slash ? slash+1 : (source_file ? source_file : "<kawa>");
+	const char *basename=slash ? slash+1 : (source_file ? source_file : "<wky>");
 	const char *directory=".";
 	if (slash) {
 		size_t size=(size_t)(slash-source_file);
@@ -213,24 +213,24 @@ LLVMMetadataRef kawa_di_subprogram(KawaCompiler *c, const char *name,
 
 // Create the DISubprogram for a function and attach it to the LLVM func
 // that is currently being emitted (c->current_func).
-void kawa_di_attach_subprogram(KawaCompiler *c, const char *name,
+void still_di_attach_subprogram(StillCompiler *c, const char *name,
 							   ASTNode *fn_node) {
 	if (!c->di_builder)
 		return;
 	LLVMMetadataRef sp =
-		kawa_di_subprogram(c, name, fn_node->line > 0 ? fn_node->line : 1,
+		still_di_subprogram(c, name, fn_node->line > 0 ? fn_node->line : 1,
 						   fn_node);
 	if (sp)
 		LLVMSetSubprogram(c->current_func, sp);
 }
 
 // Attach a source location to whatever instruction the builder emits next.
-void kawa_di_set_location(KawaCompiler *c, int line) {
+void still_di_set_location(StillCompiler *c, int line) {
 	if (line>0) c->source_line=line;
 	if (!c->di_builder || !c->current_func || line <= 0)
 		return;
 	const char *file=c->source_filename;
-	kdiag_location(line,&file,&line);
+	still_diag_location(line,&file,&line);
 	c->di_line = line;
 	LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
 		c->context, line, 0, LLVMGetSubprogram(c->current_func), NULL);

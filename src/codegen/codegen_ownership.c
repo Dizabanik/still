@@ -28,7 +28,7 @@ typedef struct Handler {
     struct Handler *next;
 } Handler;
 typedef struct {
-    KawaCompiler *compiler;
+    StillCompiler *compiler;
     Pending *defers;
     Edge *loop;
     Handler *handler;
@@ -80,7 +80,7 @@ static void edge(Analysis *a, Binding **destination, Binding *base, Binding *inc
 static void bind(Analysis *a, Binding **env, ASTNode *decl, int cleanup) {
     Binding *b=arena_alloc(a->compiler->arena,sizeof(*b));
     b->declaration=decl; b->name=decl->data.var_decl.name;
-    b->owner=kawa_contains_managed(a->compiler,decl->data_type,1);
+    b->owner=wky_contains_managed(a->compiler,decl->data_type,1);
     b->state=LIVE; b->next=*env; *env=b;
     if (b->owner && cleanup) {
         Pending *d=arena_alloc(a->compiler->arena,sizeof(*d));
@@ -89,15 +89,15 @@ static void bind(Analysis *a, Binding **env, ASTNode *decl, int cleanup) {
 }
 static void require_live(Analysis *a, ASTNode *use, Binding *b) {
     if (!b || !b->owner || b->state==LIVE) return;
-    KawaCompiler *c=a->compiler;
+    StillCompiler *c=a->compiler;
     const char *origin_file=c->source_filename, *consumed_file=c->source_filename;
     int origin_line, consumed_line;
-    kdiag_location(b->declaration->line,&origin_file,&origin_line);
-    kdiag_location(b->consumed_at ? b->consumed_at->line : 0,&consumed_file,&consumed_line);
-    kdiag_note("owner `%s` declared at %s:%d; consumed at %s:%d",
+    still_diag_location(b->declaration->line,&origin_file,&origin_line);
+    still_diag_location(b->consumed_at ? b->consumed_at->line : 0,&consumed_file,&consumed_line);
+    still_diag_note("owner `%s` declared at %s:%d; consumed at %s:%d",
                b->name,origin_file,origin_line,consumed_file,consumed_line);
-    kdiag_help("borrow with ref_of before moving, or keep the new owner binding");
-    kerr(KAWA_E_OWNERSHIP,use,"owner `%s` %s been moved or released",b->name,
+    still_diag_help("borrow with ref_of before moving, or keep the new owner binding");
+    still_error(STILL_E_OWNERSHIP,use,"owner `%s` %s been moved or released",b->name,
          b->state==CONSUMED ? "has" : "may have");
     exit(1);
 }
@@ -204,10 +204,10 @@ static void loop(Analysis *a, ASTNode *cond, ASTNode *body, ASTNode *step, Bindi
             for (Binding *b=before; b; b=b->next) {
                 Binding *after=declared(frame.continues,b->declaration);
                 if (b->owner && b->state==LIVE && after && after->state!=LIVE) {
-                    KawaCompiler *c=a->compiler;
-                    kdiag_note("owner `%s` declared at line %d; consumed at line %d",b->name,
+                    StillCompiler *c=a->compiler;
+                    still_diag_note("owner `%s` declared at line %d; consumed at line %d",b->name,
                                b->declaration->line,after->consumed_at ? after->consumed_at->line : 0);
-                    kerr(KAWA_E_OWNERSHIP,after->consumed_at,"owner `%s` may be consumed again on a loop backedge",b->name);
+                    still_error(STILL_E_OWNERSHIP,after->consumed_at,"owner `%s` may be consumed again on a loop backedge",b->name);
                     exit(1);
                 }
             }
@@ -219,7 +219,7 @@ static void loop(Analysis *a, ASTNode *cond, ASTNode *body, ASTNode *step, Bindi
 }
 static int statement(Analysis *a, ASTNode *n, Binding **env) {
     if (!n) return 0;
-    KawaCompiler *c=a->compiler;
+    StillCompiler *c=a->compiler;
     switch(n->type) {
     case NODE_BLOCK: {
         Binding *base=*env;
@@ -264,10 +264,10 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
     }
     case NODE_RETURN:
         expression(a,n->data.ret_stmt.expr,env);
-        if (a->in_defer) { kerr(KAWA_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
+        if (a->in_defer) { still_error(STILL_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
         cleanup(a,NULL,env); return 1;
     case NODE_BREAK: case NODE_CONTINUE: {
-        if (a->in_defer) { kerr(KAWA_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
+        if (a->in_defer) { still_error(STILL_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
         Edge *target=a->loop;
         if (n->type==NODE_CONTINUE) while (target && target->is_switch) target=target->next;
         if (target) {
@@ -282,7 +282,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
     case NODE_DEFER: {
         for (ASTNode *cap=n->data.defer.captures; cap; cap=cap->next) {
             Binding *b=named(*env,cap->data.var_decl.name);
-            if (b && b->owner) { kerr(KAWA_E_OWNERSHIP,n,"defer captures cannot copy an owner; borrow it without a capture list"); exit(1); }
+            if (b && b->owner) { still_error(STILL_E_OWNERSHIP,n,"defer captures cannot copy an owner; borrow it without a capture list"); exit(1); }
         }
         Pending *d=arena_alloc(c->arena,sizeof(*d));
         d->statement=n->data.defer.stmt; d->next=a->defers; a->defers=d;
@@ -316,7 +316,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
     }
     case NODE_PRESS:
         expression(a,n->data.press.target,env);
-        if (a->in_defer) { kerr(KAWA_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
+        if (a->in_defer) { still_error(STILL_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
         if (a->handler) {
             a->handler->has_errors=1;
             cleanup(a,a->handler->defers,env);
@@ -359,7 +359,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
     return 0;
 }
 
-void kawa_verify_ownership(KawaCompiler *c, ASTNode *function) {
+void wky_verify_ownership(StillCompiler *c, ASTNode *function) {
     Analysis a={.compiler=c};
     Binding *env=NULL;
     for (Scope *s=c->global_scope; s; s=s->next)

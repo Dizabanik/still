@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdint.h>
 
-// C twin of b7_errors.kawa: the idiomatic error-code pattern. validate()
+// C twin of b7_errors.wky: the idiomatic error-code pattern. validate()
 // returns 0 on success or fills a payload struct and returns a code -- what
-// Kawa's filter/press/dregs lowers to, written out by hand.
+// Whisky's filter/press/dregs lowers to, written out by hand.
 
 #define N 200000000
 

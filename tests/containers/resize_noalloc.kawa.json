@@ -1,4 +1,0 @@
-{
-  "kind": "reject",
-  "diagnostic": "E0009.*noalloc.*__kawa_mem_resize"
-}

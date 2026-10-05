@@ -1,10 +1,10 @@
 #include "codegen_internal.h"
 
-// Convert a Kawa identifier (which uses `__` as a path separator inside
+// Convert a Whisky identifier (which uses `__` as a path separator inside
 // synthesized names) to a dotted path for display. The buffer is arena-
 // allocated; the program only calls this from error paths so the lifetime
 // is fine.
-char *get_var_path(KawaCompiler *c, const char *s) {
+char *get_var_path(StillCompiler *c, const char *s) {
 	if (!s)
 		return NULL;
 	size_t len = strlen(s);
@@ -26,7 +26,7 @@ char *get_var_path(KawaCompiler *c, const char *s) {
 	return out;
 }
 
-const char *resolve_type_name(KawaCompiler *c, ASTNode *n) {
+const char *resolve_type_name(StillCompiler *c, ASTNode *n) {
 	if (n->type == NODE_VAR_REF) {
 		Scope *s = scope_find(c, n->data.var_ref.name);
 		if (s && s->node && s->node->data_type) {
@@ -48,7 +48,7 @@ const char *resolve_type_name(KawaCompiler *c, ASTNode *n) {
 // alloca at the top of the function (instead of at the use site) is what
 // lets mem2reg actually promote it to a register -- so this is a real
 // optimization, not a stylistic choice.
-LLVMValueRef create_entry_block_alloca(KawaCompiler *c, LLVMTypeRef type,
+LLVMValueRef create_entry_block_alloca(StillCompiler *c, LLVMTypeRef type,
 									   const char *name) {
 	LLVMBasicBlockRef current_block = LLVMGetInsertBlock(c->builder);
 	LLVMBasicBlockRef entry_block = LLVMGetEntryBasicBlock(c->current_func);
@@ -67,18 +67,18 @@ LLVMValueRef create_entry_block_alloca(KawaCompiler *c, LLVMTypeRef type,
 // A global initializer is "constant" when it can be evaluated at compile
 // time into an LLVM Constant: literals, arrays/structs of constants, and
 // simple arithmetic over those. Anything else (calls, var refs, coroutines)
-// forces a runtime init in kawa_globals_init.
-static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
+// forces a runtime init in wky_globals_init.
+static LLVMValueRef const_eval_expr(StillCompiler *c, ASTNode *n,
 									LLVMTypeRef dst);
 
 // Integer literals are i32 until coerced; a binop node's data_type tells us
 // how the parser typed it. `is_signed` picks sign-extension vs zero-fill and
 // signed vs unsigned division/remainder -- mirroring build_int_binop().
-static int init_is_signed(KawaCompiler *c, ASTNode *n) {
+static int init_is_signed(StillCompiler *c, ASTNode *n) {
 	return n->data_type ? type_is_signed(c, n->data_type) : 0;
 }
 
-int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
+int global_init_is_constant(StillCompiler *c, ASTNode *n) {
 	if (!n)
 		return 1;
 	switch (n->type) {
@@ -105,17 +105,17 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 			global_init_is_constant(c,n->data.ternary.then_expr) &&
 			global_init_is_constant(c,n->data.ternary.else_expr);
 	case NODE_STRUCT_LITERAL: {
-		kawa_literal_context(c,n,n->data_type);
-		Type *actual=kawa_resolve_type(c,n->data_type);
+		wky_literal_context(c,n,n->data_type);
+		Type *actual=wky_resolve_type(c,n->data_type);
 		StructDef *sd=actual->kind==TYPE_STRUCT ? find_struct_def_pub(c,get_llvm_type(c,actual)) : NULL;
 		LiteralPlan plan={0};
-		if (actual->kind==TYPE_STRUCT) plan=kawa_literal_plan(c,n,get_llvm_type(c,actual));
+		if (actual->kind==TYPE_STRUCT) plan=wky_literal_plan(c,n,get_llvm_type(c,actual));
 		unsigned at=0;
 		for (StructInitItem *it = n->data.struct_lit.items; it; it = it->next,++at) {
 			Type *element=actual->kind==TYPE_ARRAY ? actual->inner :
 				(sd && !it->spread_from ? sd->fields[plan.indices[at]].ast_type : actual);
-			kawa_literal_context(c,it->value,element);
-			kawa_literal_context(c,it->spread_from,actual);
+			wky_literal_context(c,it->value,element);
+			wky_literal_context(c,it->spread_from,actual);
 			if (!global_init_is_constant(c, it->value) || !global_init_is_constant(c,it->spread_from))
 				return 0;
 		}
@@ -128,7 +128,7 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 	case NODE_CALL:
 		// Comptime-callable when the evaluator can run it (pure fn over
 		// integer constants). The eval itself is the authority.
-		return kawa_comptime_eval(c, n, 64, NULL) != NULL;
+		return wky_comptime_eval(c, n, 64, NULL) != NULL;
 	case NODE_MEMBER_ACCESS: {
 		if (n->data.member_access.object->type == NODE_VAR_REF) {
 			char mangled[256];
@@ -151,7 +151,7 @@ int global_init_is_constant(KawaCompiler *c, ASTNode *n) {
 // Rebuild an integer constant at `dst`'s width from its raw value, keeping
 // the bit pattern for same/narrower widths and re-signing only when growing.
 // Replaces the missing LLVMConstTrunc/SExt/ZExt trio with one uniform path.
-static LLVMValueRef const_int_as(KawaCompiler *c, LLVMValueRef v,
+static LLVMValueRef const_int_as(StillCompiler *c, LLVMValueRef v,
 								 LLVMTypeRef dst, int is_signed) {
 	LLVMTypeRef src = LLVMTypeOf(v);
 	if (src == dst || LLVMGetTypeKind(src) != LLVMIntegerTypeKind ||
@@ -233,7 +233,7 @@ int fold_int_binop(int tok, unsigned long long a, unsigned long long b,
 
 // Evaluate a compile-time initializer expression to an LLVM Constant of the
 // requested type. Only called after global_init_is_constant() returned true.
-LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
+LLVMValueRef const_eval_global_init(StillCompiler *c, ASTNode *n,
 									LLVMTypeRef dst, Type *dst_ast) {
 	if (n->type == NODE_STRING_LIT) {
 		// One terminated storage object; lengths always count decoded bytes.
@@ -272,7 +272,7 @@ LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 			dst, LLVMConstRealGetDouble(v, &(LLVMBool){0}));
 
 	if (n->line>0) c->source_line=n->line;
-	kawa_check_conversion(c, v, n->data_type, dst, dst_ast);
+	wky_check_conversion(c, v, n->data_type, dst, dst_ast);
 	if (is_fp_kind(LLVMGetTypeKind(LLVMTypeOf(v))) && LLVMGetTypeKind(dst) == LLVMIntegerTypeKind) {
 		double value = LLVMConstRealGetDouble(v, &(LLVMBool){0});
 		unsigned long long integer = LLVMGetIntTypeWidth(dst) == 1 ? value != 0.0 :
@@ -283,7 +283,7 @@ LLVMValueRef const_eval_global_init(KawaCompiler *c, ASTNode *n,
 	return v;
 }
 
-static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
+static LLVMValueRef const_eval_expr(StillCompiler *c, ASTNode *n,
 									LLVMTypeRef dst) {
 	switch (n->type) {
 	case NODE_LITERAL:
@@ -313,7 +313,7 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		return const_eval_expr(c, sv->node->data.var_decl.init, dst);
 	}
 	case NODE_BINARY_OP: {
-		LLVMValueRef integer=kawa_comptime_eval(c,n,0,NULL);
+		LLVMValueRef integer=wky_comptime_eval(c,n,0,NULL);
 		if (integer) return integer;
 		// Fold manually: LLVM 21's C API has no ConstBinOp/Mul/Div family.
 		// GetSExtValue/GetZExtValue already return the value carried to
@@ -375,8 +375,8 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 							l_s || r_s);
 	}
 	case NODE_STRUCT_LITERAL: {
-		kawa_literal_context(c,n,n->data_type);
-		Type *actual=kawa_resolve_type(c,n->data_type);
+		wky_literal_context(c,n,n->data_type);
+		Type *actual=wky_resolve_type(c,n->data_type);
 		LLVMTypeRef s_type =
 			get_llvm_type(c, n->data_type ? n->data_type : NULL);
 		if (!s_type)
@@ -389,9 +389,9 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 			unsigned i = 0;
 			for (StructInitItem *it = n->data.struct_lit.items; it;
 				 i++, it = it->next) {
-				if (i>=len) { kerr(KAWA_E_ARITY,n,"too many elements in array initializer"); exit(1); }
-				if (it->field_name || it->spread_from) { kerr(KAWA_E_ARGS,n,"array initializers require positional elements"); exit(1); }
-				kawa_literal_context(c,it->value,actual->inner);
+				if (i>=len) { still_error(STILL_E_ARITY,n,"too many elements in array initializer"); exit(1); }
+				if (it->field_name || it->spread_from) { still_error(STILL_E_ARGS,n,"array initializers require positional elements"); exit(1); }
+				wky_literal_context(c,it->value,actual->inner);
 				elems[i] = const_eval_global_init(c, it->value, elem_t, actual->inner);
 				if (!elems[i]) return NULL;
 			}
@@ -405,7 +405,7 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		LLVMValueRef *fields =
 			arena_alloc(c->arena, sizeof(LLVMValueRef) * (fc ? fc : 1));
 		StructDef *sd=find_struct_def_pub(c,s_type);
-		LiteralPlan plan=kawa_literal_plan(c,n,s_type);
+		LiteralPlan plan=wky_literal_plan(c,n,s_type);
 		for (unsigned i=0; i<fc; ++i) {
 			fields[i]=sd && !plan.spread && !(plan.provided & (UINT64_C(1)<<i)) && sd->fields[i].default_expr ? const_eval_global_init(c,sd->fields[i].default_expr,
 				LLVMStructGetTypeAtIndex(s_type,i),sd->fields[i].ast_type) : LLVMConstNull(LLVMStructGetTypeAtIndex(s_type,i));
@@ -421,7 +421,7 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		for (StructInitItem *it=n->data.struct_lit.items; it; it=it->next,++at) {
 			if (it->spread_from) continue;
 			unsigned i=plan.indices[at];
-			kawa_literal_context(c,it->value,sd ? sd->fields[i].ast_type : NULL);
+			wky_literal_context(c,it->value,sd ? sd->fields[i].ast_type : NULL);
 			fields[i]=const_eval_global_init(c,it->value,LLVMStructGetTypeAtIndex(s_type,i),sd ? sd->fields[i].ast_type : NULL);
 			if (!fields[i]) return NULL;
 		}
@@ -431,16 +431,16 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 		// Comptime (IDEAS 2.1): a call the tree-walking evaluator can run
 		// (pure fn over integer constants) folds right here -- no IR is
 		// generated for the callee when every use folds away.
-		LLVMValueRef folded = kawa_comptime_eval(c, n, 0, NULL);
+		LLVMValueRef folded = wky_comptime_eval(c, n, 0, NULL);
 		if (folded)
 			return folded;
 		return NULL;
 	}
 	case NODE_CAST: {
 		LLVMValueRef value=const_eval_expr(c,n->data.cast.val,NULL);
-		return value ? coerce_value(c,value,kawa_expr_type(c,n->data.cast.val),get_llvm_type(c,n->data_type),n->data_type) : NULL;
+		return value ? coerce_value(c,value,wky_expr_type(c,n->data.cast.val),get_llvm_type(c,n->data_type),n->data_type) : NULL;
 	}
-	case NODE_TERNARY: return kawa_comptime_eval(c,n,0,NULL);
+	case NODE_TERNARY: return wky_comptime_eval(c,n,0,NULL);
 	case NODE_MEMBER_ACCESS: {
 		if (n->data.member_access.object->type == NODE_VAR_REF) {
 			char mangled[256];
@@ -463,7 +463,7 @@ static LLVMValueRef const_eval_expr(KawaCompiler *c, ASTNode *n,
 
 // Compile-time integer fold for case labels: literals, consts (enum members
 // are consts), and const arithmetic. Sign comes from the expression itself.
-int const_eval_i64(KawaCompiler *c, ASTNode *n, long long *out) {
+int const_eval_i64(StillCompiler *c, ASTNode *n, long long *out) {
 	if (!global_init_is_constant(c, n))
 		return 0;
 	LLVMValueRef v = const_eval_expr(c, n, NULL);
@@ -477,7 +477,7 @@ int const_eval_i64(KawaCompiler *c, ASTNode *n, long long *out) {
 	return 1;
 }
 
-void scope_push(KawaCompiler *c, const char *name, LLVMValueRef val,
+void scope_push(StillCompiler *c, const char *name, LLVMValueRef val,
 				LLVMTypeRef type, ASTNode *node) {
 	Scope *s = arena_alloc(c->arena, sizeof(Scope));
 	s->name = arena_strdup(c->arena, name);
@@ -491,7 +491,7 @@ void scope_push(KawaCompiler *c, const char *name, LLVMValueRef val,
 	c->scope_stack = s;
 }
 
-Scope *scope_find(KawaCompiler *c, const char *name) {
+Scope *scope_find(StillCompiler *c, const char *name) {
 	for (Scope *cur = c->scope_stack; cur; cur = cur->next) {
 		if (strcmp(cur->name, name) == 0) {
 			cur->used = 1;
@@ -507,7 +507,7 @@ Scope *scope_find(KawaCompiler *c, const char *name) {
 //   2. The declared type of the referenced variable (peel one pointer).
 //   3. Nested derefs: the value being dereferenced is itself a deref
 //		result, so recurse and peel one more pointer level.
-static Type *deref_value_type(KawaCompiler *c, ASTNode *n) {
+static Type *deref_value_type(StillCompiler *c, ASTNode *n) {
 	(void)c;
 	if (n->data_type)
 		return n->data_type;
@@ -537,14 +537,14 @@ static Type *deref_value_type(KawaCompiler *c, ASTNode *n) {
 // nodes therefore return the loaded pointer itself (the address of the
 // pointee), which makes chains like `(*p)->field` and `**pp` resolve
 // uniformly: each deref level contributes exactly one load of a pointer.
-// Lazily DEFINE the module-wide trap: `kawa_trap(msg, file, line)` writes a
+// Lazily DEFINE the module-wide trap: `wky_trap(msg, file, line)` writes a
 // diagnostic to stderr and aborts. Defined into the module itself (not
 // linked from a runtime lib) so generated programs stay self-contained.
 // Modules that never trap carry no definition at all.
 //
 // The body uses only portable libc: snprintf into a stack buffer, then
 // write(2) to fd 2 -- avoids FILE*/stderr plumbing that differs per libc.
-LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
+LLVMValueRef get_or_declare_trap_fn(StillCompiler *c) {
 	if (c->trap_fn)
 		return c->trap_fn;
 	LLVMContextRef ctx = c->context;
@@ -554,7 +554,7 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 	LLVMTypeRef fn_t = LLVMFunctionType(LLVMVoidTypeInContext(ctx),
 										(LLVMTypeRef[]){i8ptr, i8ptr, i32t},
 										3, 0);
-	LLVMValueRef fn = LLVMAddFunction(c->module, "kawa_trap", fn_t);
+	LLVMValueRef fn = LLVMAddFunction(c->module, "wky_trap", fn_t);
 	const char *noreturn = "noreturn";
 	LLVMAddAttributeAtIndex(
 		fn, LLVMAttributeFunctionIndex,
@@ -568,7 +568,7 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 	LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(c->builder);
 	LLVMValueRef saved_func = c->current_func;
 
-	LLVMBasicBlockRef bb = kawa_append_block(fn, "entry");
+	LLVMBasicBlockRef bb = wky_append_block(fn, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, bb);
 
 	// declare i32 @snprintf(ptr, i64, ptr, ...)
@@ -594,10 +594,10 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 		c->builder, LLVMInt8TypeInContext(ctx),
 		LLVMConstInt(i64t, 512, 0), "trap_buf");
 
-	// n = snprintf(buf, 512, "kawa: trap: %s at %s:%d\n", msg, file, line);
+	// n = snprintf(buf, 512, "Whisky: trap: %s at %s:%d\n", msg, file, line);
 	// Params: msg=0, file=1, line=2.
 	LLVMValueRef fmt = LLVMBuildGlobalStringPtr(
-		c->builder, "kawa: trap: %s at %s:%d\n", "trap_fmt");
+		c->builder, "Whisky: trap: %s at %s:%d\n", "trap_fmt");
 	LLVMValueRef snargs[6] = {
 		buf, LLVMConstInt(i64t, 512, 0), fmt,
 		LLVMGetParam(fn, 0), // msg
@@ -623,7 +623,7 @@ LLVMValueRef get_or_declare_trap_fn(KawaCompiler *c) {
 
 // Array bounds checks reject both negative and oversized indices. LLVM
 // removes checks when it can prove the access safe.
-static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
+static void emit_bounds_check(StillCompiler *c, ASTNode *idx_node,
 							  LLVMValueRef idx_i64,
 							  long long array_len, const char *file,
 							  int line) {
@@ -642,7 +642,7 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 			unsigned long long cval = LLVMConstIntGetZExtValue(idx_i64);
             if (cval < (unsigned long long)array_len) {
                 // Statically proven safe!
-                kawa_report_site(c,idx_node,"guard","index out of bounds",
+                still_report_site(c,idx_node,"guard","index out of bounds",
                     "Lowering proved the constant index is within the fixed array bound.");
                 return;
 			}
@@ -659,17 +659,17 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 	LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx_i64,
 									len_const, "bounds_ok");
 	LLVMBasicBlockRef cont_bb =
-		kawa_append_block(c->current_func, "idx_in_bounds");
+		wky_append_block(c->current_func, "idx_in_bounds");
 	LLVMBasicBlockRef trap_bb =
-		kawa_append_block(c->current_func, "idx_oob");
+		wky_append_block(c->current_func, "idx_oob");
     LLVMValueRef branch=LLVMBuildCondBr(c->builder,ok,cont_bb,trap_bb);
-    LLVMMetadataRef site=kawa_report_site(c,idx_node,"guard","index out of bounds",NULL);
-    kawa_report_attach(c,branch,site);
+    LLVMMetadataRef site=still_report_site(c,idx_node,"guard","index out of bounds",NULL);
+    still_report_attach(c,branch,site);
 
 	LLVMPositionBuilderAtEnd(c->builder, trap_bb);
 	LLVMValueRef msg = LLVMBuildGlobalStringPtr(
 		c->builder, "index out of bounds", "trap_msg");
-    kdiag_location(line,&file,&line);
+    still_diag_location(line,&file,&line);
     LLVMValueRef file_v =
 		LLVMBuildGlobalStringPtr(c->builder, file ? file : "?", "trap_file");
 	LLVMValueRef args[3] = {
@@ -678,7 +678,7 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
     LLVMValueRef call=LLVMBuildCall2(c->builder,
                    LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
                    get_or_declare_trap_fn(c), args, 3, "");
-    kawa_report_attach(c,call,site);
+    still_report_attach(c,call,site);
 	LLVMBuildUnreachable(c->builder);
 
 	LLVMPositionBuilderAtEnd(c->builder, cont_bb);
@@ -687,7 +687,7 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 // Index into a COMPUTED slice value (`argv[0][i]`, `s.data[i]`): the pair
 // is already evaluated; extract data + len, bounds-check by default,
 // and return the element address. Shared by get_address's NODE_INDEX.
-static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
+static LLVMValueRef slice_index_addr(StillCompiler *c, ASTNode *n,
 									 LLVMValueRef pair_val,
 									 LLVMTypeRef elem_t,
 									 LLVMTypeRef *out_type) {
@@ -716,9 +716,9 @@ static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
 		LLVMValueRef ok = LLVMBuildICmp(c->builder, LLVMIntULT, idx, slen,
 										"bounds_ok");
 		LLVMBasicBlockRef cont_bb =
-			kawa_append_block(c->current_func, "idx_in_bounds");
+			wky_append_block(c->current_func, "idx_in_bounds");
 		LLVMBasicBlockRef trap_bb =
-			kawa_append_block(c->current_func, "idx_oob");
+			wky_append_block(c->current_func, "idx_oob");
 		LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
 
 		LLVMPositionBuilderAtEnd(c->builder, trap_bb);
@@ -747,8 +747,8 @@ static LLVMValueRef slice_index_addr(KawaCompiler *c, ASTNode *n,
 	return addr;
 }
 
-LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
-    LLVMValueRef managed=kawa_memory_lvalue(c,n,out_type,NULL);
+LLVMValueRef get_address(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
+    LLVMValueRef managed=wky_memory_lvalue(c,n,out_type,NULL);
     if (managed) return managed;
 	switch (n->type) {
 	case NODE_VAR_REF: {
@@ -761,11 +761,11 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			for (Scope *cur = c->scope_stack; cur && nc < 32; cur = cur->next)
 				cands[nc++] = cur->name;
 			cands[nc] = NULL;
-			const char *alt = kdiag_closest(n->data.var_ref.name, cands);
+			const char *alt = still_diag_closest(n->data.var_ref.name, cands);
 			if (alt)
-				kdiag_help("a variable with a similar name exists: `%s`",
+				still_diag_help("a variable with a similar name exists: `%s`",
 						   get_var_path(c, alt));
-			knerr(KAWA_E_UNDEF, n, n->data.var_ref.name,
+			still_error_named(STILL_E_UNDEF, n, n->data.var_ref.name,
 				  "cannot find variable `%s` in this scope", v_path);
 			exit(1);
 		}
@@ -808,10 +808,10 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 							? 4
 							: -1;
 					if (slot2 < 0) {
-						kdiag_note(
+						still_diag_note(
 							"channel fields: `buf`, `cap`, `head`, "
 							"`count`, `mask`");
-						kerr(KAWA_E_UNDEF, n,
+						still_error(STILL_E_UNDEF, n,
 							 "chan<T> has no field `%s`",
 							 n->data.member_access.member);
 						exit(1);
@@ -945,8 +945,8 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMValueRef ptr =
 			get_address(c, n->data.member_access.object, &container_type);
 		if (!ptr && n->data.member_access.object->data_type) {
-            if (kawa_contains_managed(c,n->data.member_access.object->data_type,1)) {
-                kerr(KAWA_E_OWNERSHIP,n,"bind an owned temporary before accessing its fields");
+            if (wky_contains_managed(c,n->data.member_access.object->data_type,1)) {
+                still_error(STILL_E_OWNERSHIP,n,"bind an owned temporary before accessing its fields");
                 exit(1);
             }
 			// Rvalue base (`Vec.new(1,2).x`): evaluate the object to a
@@ -976,7 +976,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 			}
 		}
 		if (!ptr || !container_type) {
-			kerr(KAWA_E_SEMANTIC, n,
+			still_error(STILL_E_SEMANTIC, n,
 				 "failed to resolve member access base"); // internal
 			exit(1);
 		}
@@ -1042,13 +1042,13 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 	case NODE_INDEX: {
 		// a[i] where `a` is an array (alloca) or pointer. GEP with the
 		// element type; no load of the base is needed for arrays.
-        Type *array_ast=kawa_expr_type(c,n->data.index.object);
+        Type *array_ast=wky_expr_type(c,n->data.index.object);
         if (array_ast && array_ast->kind==TYPE_ARRAY) {
             LLVMTypeRef array_type=NULL;
             LLVMValueRef array=get_address(c,n->data.index.object,&array_type);
             if (!array) {
-                if (kawa_contains_managed(c,array_ast,1)) {
-                    kerr(KAWA_E_OWNERSHIP,n,"bind an owned temporary before indexing it");
+                if (wky_contains_managed(c,array_ast,1)) {
+                    still_error(STILL_E_OWNERSHIP,n,"bind an owned temporary before indexing it");
                     exit(1);
                 }
                 LLVMValueRef value=codegen_expr(c,n->data.index.object);
@@ -1058,7 +1058,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
             }
             LLVMTypeRef i64=LLVMInt64TypeInContext(c->context);
             LLVMValueRef index=codegen_expr(c,n->data.index.index);
-            index=coerce_value(c,index,kawa_expr_type(c,n->data.index.index),i64,NULL);
+            index=coerce_value(c,index,wky_expr_type(c,n->data.index.index),i64,NULL);
             if (c->bounds_check_mode!=-1)
                 emit_bounds_check(c,n->data.index.index,index,array_ast->array_len,c->source_filename,n->line);
             LLVMValueRef indices[]={LLVMConstInt(i64,0,0),index};
@@ -1136,9 +1136,9 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				attach_tbaa(c, slen, i64_t);
 				LLVMValueRef ok = LLVMBuildICmp(
 					c->builder, LLVMIntULT, idx, slen, "bounds_ok");
-				LLVMBasicBlockRef cont_bb = kawa_append_block(
+				LLVMBasicBlockRef cont_bb = wky_append_block(
 					c->current_func, "idx_in_bounds");
-				LLVMBasicBlockRef trap_bb = kawa_append_block(
+				LLVMBasicBlockRef trap_bb = wky_append_block(
 					c->current_func, "idx_oob");
 				LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
 
@@ -1182,12 +1182,12 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 					cands[nc++] = cur->name;
 				cands[nc] = NULL;
 				const char *alt =
-					kdiag_closest(obj->data.var_ref.name, cands);
+					still_diag_closest(obj->data.var_ref.name, cands);
 				if (alt)
-					kdiag_help(
+					still_diag_help(
 						"a variable with a similar name exists: `%s`",
 						get_var_path(c, alt));
-				knerr(KAWA_E_UNDEF, n, obj->data.var_ref.name,
+				still_error_named(STILL_E_UNDEF, n, obj->data.var_ref.name,
 					  "cannot find variable `%s` in this scope", v_path);
 				exit(1);
 			}
@@ -1306,7 +1306,7 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
         } else {
             loaded=codegen_expr(c,n->data.deref.expr);
             if (!loaded || LLVMGetTypeKind(LLVMTypeOf(loaded))!=LLVMPointerTypeKind) {
-                kerr(KAWA_E_TYPE,n,"dereference requires a pointer value"); exit(1);
+                still_error(STILL_E_TYPE,n,"dereference requires a pointer value"); exit(1);
             }
         }
 
@@ -1322,9 +1322,9 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 
 // Rvalue evaluation for lvalue-shaped nodes. Loads exactly once from the
 // resolved address; `&x` (NODE_AMP) is the address itself, no load.
-LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
-    if (kawa_contains_managed(c,kawa_expr_type(c, n),1)) {
-		kerr(KAWA_E_TYPE, n, "an owner cannot be copied; use move, ref_of, or clone");
+LLVMValueRef value_of_lvalue(StillCompiler *c, ASTNode *n) {
+    if (wky_contains_managed(c,wky_expr_type(c, n),1)) {
+		still_error(STILL_E_TYPE, n, "an owner cannot be copied; use move, ref_of, or clone");
 		exit(1);
 	}
 	if (n->type == NODE_AMP) {
@@ -1332,16 +1332,16 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
 		while (base && (base->type == NODE_INDEX || base->type == NODE_DEREF || base->type == NODE_MEMBER_ACCESS)) {
 			base = base->type == NODE_INDEX ? base->data.index.object :
 				base->type == NODE_DEREF ? base->data.deref.expr : base->data.member_access.object;
-			if (kawa_is_managed(kawa_expr_type(c, base))) break;
+			if (wky_is_managed(wky_expr_type(c, base))) break;
 		}
-		if (kawa_contains_managed(c, kawa_expr_type(c, base), 0)) {
-			kerr(KAWA_E_TYPE, n, "managed storage cannot decay to a raw pointer; use ref_of or ref_slice");
+		if (wky_contains_managed(c, wky_expr_type(c, base), 0)) {
+			still_error(STILL_E_TYPE, n, "managed storage cannot decay to a raw pointer; use ref_of or ref_slice");
 			exit(1);
 		}
 		LLVMTypeRef addr_type = NULL;
 		LLVMValueRef addr = get_address(c, n->data.deref.expr, &addr_type);
 		if (!addr) {
-			kerr(KAWA_E_ARGS, n, "cannot take address of a non-lvalue");
+			still_error(STILL_E_ARGS, n, "cannot take address of a non-lvalue");
 			exit(1);
 		}
 		return addr;
@@ -1350,12 +1350,12 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
 	LLVMTypeRef val_type = NULL;
 	LLVMValueRef addr = get_address(c, n, &val_type);
 	if (!addr || !val_type) {
-		kerr(KAWA_E_SEMANTIC, n, "failed to resolve lvalue"); // internal
+		still_error(STILL_E_SEMANTIC, n, "failed to resolve lvalue"); // internal
 		exit(1);
 	}
 
-    if (kawa_contains_managed(c,kawa_expr_type(c,n),1)) {
-        kerr(KAWA_E_TYPE,n,"an owned value cannot be copied; use move, ref_of, or clone");
+    if (wky_contains_managed(c,wky_expr_type(c,n),1)) {
+        still_error(STILL_E_TYPE,n,"an owned value cannot be copied; use move, ref_of, or clone");
         exit(1);
     }
     LLVMValueRef val = LLVMBuildLoad2(c->builder, val_type, addr, "load");
@@ -1365,7 +1365,7 @@ LLVMValueRef value_of_lvalue(KawaCompiler *c, ASTNode *n) {
 
 // Normalize a condition value to i1. Integer conditions wider than one bit
 // become `!= 0`; pointers become null checks.
-LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond) {
+LLVMValueRef cond_to_bool(StillCompiler *c, LLVMValueRef cond) {
 	LLVMTypeRef t = LLVMTypeOf(cond);
 	switch (LLVMGetTypeKind(t)) {
 	case LLVMIntegerTypeKind:
@@ -1376,7 +1376,7 @@ LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond) {
 	case LLVMPointerTypeKind:
 		return LLVMBuildIsNotNull(c->builder, cond, "ptr_to_bool");
 	default:
-		kdiag_error_at(KAWA_E_TYPE, "<kawa>", NULL, 0,
+		still_diag_error_at(STILL_E_TYPE, "<wky>", NULL, 0,
 					   "condition must be bool, integer or pointer");
 		exit(1);
 	}
@@ -1385,20 +1385,20 @@ LLVMValueRef cond_to_bool(KawaCompiler *c, LLVMValueRef cond) {
 // Coerce `v` (produced from AST type `src_ast`, may be NULL) to `dst`.
 // Sign-aware: signed->signed widening is SExt, everything else ZExt, so
 // negative values survive integer promotion.
-LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
+LLVMValueRef coerce_value(StillCompiler *c, LLVMValueRef v, Type *src_ast,
 						  LLVMTypeRef dst, Type *dst_ast) {
 	LLVMTypeRef src = LLVMTypeOf(v);
-	kawa_check_conversion(c, v, src_ast, dst, dst_ast);
-    Type *source_type=kawa_concrete_type(c,src_ast), *destination_type=kawa_concrete_type(c,dst_ast);
+	wky_check_conversion(c, v, src_ast, dst, dst_ast);
+    Type *source_type=wky_concrete_type(c,src_ast), *destination_type=wky_concrete_type(c,dst_ast);
     if (source_type && destination_type && source_type->kind==TYPE_ENUM &&
-        destination_type->kind==TYPE_ENUM && !kawa_types_same(source_type,destination_type)) {
-        kdiag_error_at(KAWA_E_TYPE,c->source_filename,NULL,0,
+        destination_type->kind==TYPE_ENUM && !wky_types_same(source_type,destination_type)) {
+        still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,0,
             "cannot implicitly convert between distinct enum types");
         exit(1);
     }
-    if (kawa_contains_managed(c,source_type,0) || kawa_contains_managed(c,destination_type,0)) {
-        if ((destination_type && (!source_type || !kawa_types_same(source_type,destination_type))) || src != dst) {
-			kdiag_error_at(KAWA_E_TYPE, c->source_filename, NULL, 0,
+    if (wky_contains_managed(c,source_type,0) || wky_contains_managed(c,destination_type,0)) {
+        if ((destination_type && (!source_type || !wky_types_same(source_type,destination_type))) || src != dst) {
+			still_diag_error_at(STILL_E_TYPE, c->source_filename, NULL, 0,
 				"managed references cannot be cast, forged, or implicitly converted");
 			exit(1);
 		}
@@ -1522,34 +1522,34 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 		LLVMGetTypeKind(src) == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
 
-	kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+	still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
 				   "cannot coerce value in codegen"); // internal
 	exit(1);
 }
 
 // Keep unlikely error handling out of the hot path. LLVM folds proven checks.
-void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message) {
+void emit_check_or_trap(StillCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message) {
     if (LLVMIsAConstantInt(ok) && LLVMConstIntGetZExtValue(ok)) {
-        kawa_report_site(c,n,"guard",message,"Lowering proved the safety predicate is constant true.");
+        still_report_site(c,n,"guard",message,"Lowering proved the safety predicate is constant true.");
         return;
     }
-	LLVMBasicBlockRef cont = kawa_append_block(c->current_func, "checked");
-	LLVMBasicBlockRef trap = kawa_append_block(c->current_func, "out_of_bounds");
+	LLVMBasicBlockRef cont = wky_append_block(c->current_func, "checked");
+	LLVMBasicBlockRef trap = wky_append_block(c->current_func, "out_of_bounds");
     LLVMValueRef br = LLVMBuildCondBr(c->builder, ok, cont, trap);
-    LLVMMetadataRef site=kawa_report_site(c,n,"guard",message,NULL);
-    kawa_report_attach(c,br,site);
+    LLVMMetadataRef site=still_report_site(c,n,"guard",message,NULL);
+    still_report_attach(c,br,site);
 	set_branch_weights(c, br, 2000, 1);
 	LLVMPositionBuilderAtEnd(c->builder, trap);
 	LLVMValueRef fn = get_or_declare_trap_fn(c);
 	const char *file=c->source_filename;
 	int line=n && n->line>0 ? n->line : c->source_line;
-	kdiag_location(line,&file,&line);
+	still_diag_location(line,&file,&line);
 	LLVMValueRef args[] = {
 		LLVMBuildGlobalStringPtr(c->builder, message, "trap_msg"),
 		LLVMBuildGlobalStringPtr(c->builder, file ? file : "?", "trap_file"),
 		LLVMConstInt(LLVMInt32TypeInContext(c->context), line, 0)};
     LLVMValueRef call=LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, args, 3, "");
-    kawa_report_attach(c,call,site);
+    still_report_attach(c,call,site);
 	LLVMBuildUnreachable(c->builder);
 	LLVMPositionBuilderAtEnd(c->builder, cont);
 }

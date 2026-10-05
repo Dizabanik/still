@@ -1,0 +1,44 @@
+import stdc;
+
+// --- compile-time constants ----------------------------------------------
+// `const` + constant init: must appear as `@... = constant` and fold into
+// every use -- no load, no wky_globals_init entry.
+const u32 ANSWER = 6 * 7;
+const i64 DEPTH = 1000 - 3;
+const f64 RATIO = 2.5;
+
+// Plain globals with constant inits (mutable, so no `constant` marker, but
+// still initialized statically).
+u32 counter = 42;
+[4]i32 table = {1, 2, 3, 4};
+
+// Runtime-initialized global: forces a wky_globals_init body.
+let g_runtime = 99;
+let g_call = compute();
+
+struct Bean {
+    u32 mass;
+    u32 roast;
+}
+
+// Struct/array global with constant init.
+Bean bean = {13, 2};
+
+fn u32 compute() {
+    u32 acc = 1;
+    acc += 41;
+    return acc;
+}
+
+fn i32 main() {
+    stdc.printf("answer=%d depth=%lld\n", ANSWER, DEPTH);
+    stdc.printf("ratio=%.2f\n", RATIO);
+    stdc.printf("counter=%d\n", counter);
+    stdc.printf("table: %d %d %d %d\n", table[0], table[1], table[2], table[3]);
+    stdc.printf("g_runtime=%d g_call=%d\n", g_runtime, g_call);
+    stdc.printf("bean: %d %d\n", bean.mass, bean.roast);
+
+    // Mutating a plain global works.
+    counter += 8;
+    stdc.printf("counter+8=%d\n", counter);
+}

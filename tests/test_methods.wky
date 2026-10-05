@@ -1,0 +1,88 @@
+#!/usr/bin/env wky run
+// Methods and associated functions (impl system):
+//   - `self` value receiver: immutable access, `self.field` spelling.
+//   - `self*` pointer receiver (optional alias): mutation through the
+//     caller's object, `self->field` or alias spelling.
+//   - Associated functions: no receiver, called as `Type.name(...)`.
+//   - Field-init shorthand: `{ x, y }` == `.x = x, .y = y`.
+// All of it lowers to plain struct-passing calls -- zero runtime cost over
+// hand-written C.
+
+struct Vec {
+    f64 x;
+    f64 y;
+}
+impl Vec {
+    // Associated constructor: Type.fn(...) call, no receiver injected.
+    fn Vec new(f64 px, f64 py) {
+        Vec v = { .x = px, .y = py };
+        return v;
+    }
+    fn f64 mag2(self) {
+        return self.x * self.x + self.y * self.y;
+    }
+    fn f64 dot(self, Vec o) {
+        return self.x * o.x + self.y * o.y;
+    }
+    fn void scale(self* v, f64 k) {
+        v->x = v->x * k;
+        v->y = v->y * k;
+    }
+    fn void scale_self(self*, f64 k) {
+        self->x = self->x * k;
+        self->y = self->y * k;
+    }
+}
+
+struct Counter {
+    i32 n;
+}
+impl Counter {
+    fn void bump(self*) {
+        self->n = self->n + 1;
+    }
+    fn void add(self*, i32 k) {
+        self->n = self->n + k;
+    }
+    fn i32 get(self) {
+        return self.n;
+    }
+}
+
+fn f64 mag2(Vec v) {
+    return v.x * v.x + v.y * v.y;
+}
+
+fn i32 main() {
+    // 1. Value receiver + shorthand literal: local names feed fields.
+    let x = 3.0;
+    let y = 4.0;
+    Vec a = { x, y };
+    printf("1: %.1f\n", a.mag2());
+
+    // 2. Associated constructor as the initializer.
+    Vec b = Vec.new(5.0, 6.0);
+    printf("2: %.1f\n", b.mag2());
+
+    // 3. Explicit receiver style still works on the same methods.
+    printf("3: %.1f\n", mag2(a));
+
+    // 4. Pointer receiver mutates through method sugar.
+    a.scale(2.0);
+    printf("4: %.1f %.1f\n", a.x, a.y);
+
+    // 5. Bare `self*` spelling mutates identically.
+    b.scale_self(0.5);
+    printf("5: %.1f %.1f\n", b.x, b.y);
+
+    // 6. Mixed receivers in one expression.
+    Counter c = { .n = 0 };
+    c.bump();
+    c.bump();
+    c.add(40);
+    printf("6: %d\n", c.get());
+
+    // 7. dot with self value receiver takes both operands.
+    printf("7: %.1f\n", a.dot(b));
+    return 0;
+}

@@ -16,6 +16,6 @@ indent_size = 4
 [{*.c,*.h,Makefile}]
 indent_style = tab
 
-[*.kawa.out]
+[*.wky.out]
 insert_final_newline = unset
 trim_trailing_whitespace = false

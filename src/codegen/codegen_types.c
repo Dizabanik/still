@@ -1,10 +1,10 @@
 #include "codegen_internal.h"
 
 // --- Type Registries ---
-// Heads of singly-linked lists; both live on the KawaCompiler struct so each
+// Heads of singly-linked lists; both live on the StillCompiler struct so each
 // compiler owns its own. Nodes are arena-allocated.
 
-void register_alias(KawaCompiler *c, const char *name, Type *target) {
+void register_alias(StillCompiler *c, const char *name, Type *target) {
 	AliasDef *ad = arena_alloc(c->arena, sizeof(AliasDef));
 	ad->name = arena_strdup(c->arena, name);
 	ad->target = target;
@@ -12,7 +12,7 @@ void register_alias(KawaCompiler *c, const char *name, Type *target) {
 	c->alias_defs = ad;
 }
 
-Type *resolve_alias_type(KawaCompiler *c, const char *name) {
+Type *resolve_alias_type(StillCompiler *c, const char *name) {
 	for (AliasDef *cur = c->alias_defs; cur; cur = cur->next) {
 		if (strcmp(cur->name, name) == 0)
 			return cur->target;
@@ -20,7 +20,7 @@ Type *resolve_alias_type(KawaCompiler *c, const char *name) {
 	return NULL;
 }
 
-Type *kawa_resolve_type(KawaCompiler *c, Type *type) {
+Type *wky_resolve_type(StillCompiler *c, Type *type) {
 	if (!type) return NULL;
 	Type *start = type;
 	for (unsigned depth = 0; type && depth < 64; ++depth) {
@@ -35,15 +35,15 @@ Type *kawa_resolve_type(KawaCompiler *c, Type *type) {
 		if (!next) return type;
 		type = next;
 	}
-	kdiag_error_at(KAWA_E_TYPE, c->source_filename, NULL, 0,
+	still_diag_error_at(STILL_E_TYPE, c->source_filename, NULL, 0,
 		"cyclic or excessively deep type alias `%s`", start && start->name ? start->name : "?");
 	exit(1);
 }
 
-Type *kawa_concrete_type(KawaCompiler *c, Type *type) {
-	type=kawa_resolve_type(c,type);
+Type *wky_concrete_type(StillCompiler *c, Type *type) {
+	type=wky_resolve_type(c,type);
 	if (!type || !type->inner) return type;
-	Type *inner=kawa_concrete_type(c,type->inner);
+	Type *inner=wky_concrete_type(c,type->inner);
 	if (inner==type->inner) return type;
 	Type *result=arena_alloc(c->arena,sizeof(*result));
 	*result=*type; result->inner=inner;
@@ -53,7 +53,7 @@ Type *kawa_concrete_type(KawaCompiler *c, Type *type) {
 // Register a struct by name and LLVMTypeRef. Populates the field table from
 // the AST field list (so callers don't need a separate "fill" pass that can
 // disagree with what `register_struct` already saw).
-void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
+void register_struct(StillCompiler *c, const char *name, LLVMTypeRef type,
 					 ASTNode *fields) {
 	StructDef *sd = arena_alloc(c->arena, sizeof(StructDef));
 	sd->name = arena_strdup(c->arena, name);
@@ -66,7 +66,7 @@ void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 	for (ASTNode *f = fields; f && idx < 64; f = f->next) {
 		sd->fields[idx].name = arena_strdup(c->arena, f->data.var_decl.name);
 		sd->fields[idx].type = get_llvm_type(c, f->data_type);
-		sd->fields[idx].ast_type = kawa_concrete_type(c,f->data_type);
+		sd->fields[idx].ast_type = wky_concrete_type(c,f->data_type);
 		sd->fields[idx].default_expr =
 			f->data.var_decl.field_default;
 		idx++;
@@ -76,7 +76,7 @@ void register_struct(KawaCompiler *c, const char *name, LLVMTypeRef type,
 
 // Locate the StructDef whose LLVM type matches `struct_type` (pointer
 // identity on LLVMTypeRef, since each named struct has a unique handle).
-static StructDef *find_struct_def(KawaCompiler *c, LLVMTypeRef struct_type) {
+static StructDef *find_struct_def(StillCompiler *c, LLVMTypeRef struct_type) {
 	for (StructDef *sd = c->struct_defs; sd; sd = sd->next) {
 		if (sd->type == struct_type)
 			return sd;
@@ -84,7 +84,7 @@ static StructDef *find_struct_def(KawaCompiler *c, LLVMTypeRef struct_type) {
 	return NULL;
 }
 
-StructDef *find_struct_def_pub(KawaCompiler *c, LLVMTypeRef struct_type) {
+StructDef *find_struct_def_pub(StillCompiler *c, LLVMTypeRef struct_type) {
 	return find_struct_def(c, struct_type);
 }
 
@@ -93,10 +93,10 @@ StructDef *find_struct_def_pub(KawaCompiler *c, LLVMTypeRef struct_type) {
 // field whose own surface declares it. *out_mid gets the embedded field's
 // index, *out_field the member's index inside it. Direct fields always win
 // (callers check first); shallowest embedded match wins (Go's depth rule).
-int try_promoted_field(KawaCompiler *c, LLVMTypeRef struct_type,
+int try_promoted_field(StillCompiler *c, LLVMTypeRef struct_type,
 					   const char *field, int *out_mid, int *out_field);
 
-static int promoted_one_hop(KawaCompiler *c, LLVMTypeRef struct_type,
+static int promoted_one_hop(StillCompiler *c, LLVMTypeRef struct_type,
 							const char *field, int *out_mid,
 							int *out_field) {
 	StructDef *sd = find_struct_def(c, struct_type);
@@ -119,7 +119,7 @@ static int promoted_one_hop(KawaCompiler *c, LLVMTypeRef struct_type,
 	return 0;
 }
 
-static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
+static int promoted_deep(StillCompiler *c, LLVMTypeRef struct_type,
 						 const char *field, int *out_mid, int *out_field,
 						 int depth);
 
@@ -127,7 +127,7 @@ static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
 // Shallowest-first search over the whole embed tree. Returns the FIRST HOP
 // (this level's embedded field index); the access site loops, re-resolving
 // from the new container until the member is direct there.
-static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
+static int promoted_deep(StillCompiler *c, LLVMTypeRef struct_type,
 						 const char *field, int *out_mid, int *out_field,
 						 int depth) {
 	if (depth > 16)
@@ -151,14 +151,14 @@ static int promoted_deep(KawaCompiler *c, LLVMTypeRef struct_type,
 	return 0;
 }
 
-int try_promoted_field(KawaCompiler *c, LLVMTypeRef struct_type,
+int try_promoted_field(StillCompiler *c, LLVMTypeRef struct_type,
 					   const char *field, int *out_mid, int *out_field) {
 	return promoted_deep(c, struct_type, field, out_mid, out_field, 0);
 }
 
 // True when `struct_type` has a direct field named `field`. Promotion never
 // shadows real members.
-int has_direct_field(KawaCompiler *c, LLVMTypeRef struct_type,
+int has_direct_field(StillCompiler *c, LLVMTypeRef struct_type,
 					 const char *field) {
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd)
@@ -182,7 +182,7 @@ int has_direct_field(KawaCompiler *c, LLVMTypeRef struct_type,
 }
 
 // Name of the field at `index` in `struct_type`.
-const char *sd_field_name(KawaCompiler *c, LLVMTypeRef struct_type,
+const char *sd_field_name(StillCompiler *c, LLVMTypeRef struct_type,
 						  int index) {
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd || index < 0 || index >= sd->field_count)
@@ -192,7 +192,7 @@ const char *sd_field_name(KawaCompiler *c, LLVMTypeRef struct_type,
 
 // Resolve the struct type of an indexing base (`g[i]`): the parser stamps
 // data_type on computed bases but leaves plain VAR_REFs to scope lookup.
-Type *index_base_struct_type(KawaCompiler *c, ASTNode *obj) {
+Type *index_base_struct_type(StillCompiler *c, ASTNode *obj) {
 	Type *bt = obj->data_type;
 	if (!bt && obj->type == NODE_VAR_REF) {
 		Scope *bs = scope_find(c, obj->data.var_ref.name);
@@ -204,12 +204,12 @@ Type *index_base_struct_type(KawaCompiler *c, ASTNode *obj) {
 	return NULL;
 }
 
-int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
+int get_field_index(StillCompiler *c, LLVMTypeRef struct_type,
 					const char *field_name) {
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd) {
 		char *name = LLVMPrintTypeToString(struct_type);
-		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+		still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
 					   "unknown struct type in get_field_index "
 					   "(type=%s, field=%s)", // internal
 					   name, field_name);
@@ -231,17 +231,17 @@ int get_field_index(KawaCompiler *c, LLVMTypeRef struct_type,
 		if (idx >= 0 && idx < sd->field_count)
 			return idx;
 	}
-	kdiag_error_at(KAWA_E_MEMBER, c->source_filename, NULL, 0,
+	still_diag_error_at(STILL_E_MEMBER, c->source_filename, NULL, 0,
 				   "no field `%s` on struct", // internal
 				   field_name);
 	exit(1);
 }
 
-LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
+LLVMTypeRef get_field_type(StillCompiler *c, LLVMTypeRef struct_type,
 						   const char *field_name) {
 	StructDef *sd = find_struct_def(c, struct_type);
 	if (!sd) {
-		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+		still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
 					   "unknown struct type in get_field_type"); // internal
 		exit(1);
 	}
@@ -260,7 +260,7 @@ LLVMTypeRef get_field_type(KawaCompiler *c, LLVMTypeRef struct_type,
 		if (idx >= 0 && idx < sd->field_count)
 			return sd->fields[idx].type;
 	}
-	kdiag_error_at(KAWA_E_MEMBER, c->source_filename, NULL, 0,
+	still_diag_error_at(STILL_E_MEMBER, c->source_filename, NULL, 0,
 				   "no field `%s` on struct", // internal
 				   field_name);
 	exit(1);
@@ -281,7 +281,7 @@ static int kind_is_signed_int(TypeKind k) {
 	}
 }
 
-int type_is_signed(KawaCompiler *c, Type *t) {
+int type_is_signed(StillCompiler *c, Type *t) {
 	if (!t)
 		return 0;
 	// Inside an instantiated generic, sign comes from the concrete type.
@@ -291,10 +291,10 @@ int type_is_signed(KawaCompiler *c, Type *t) {
 				return type_is_signed(c, c->generic_param_types[gi]);
 		}
 	}
-	return kind_is_signed_int(kawa_resolve_type(c, t)->kind);
+	return kind_is_signed_int(wky_resolve_type(c, t)->kind);
 }
 
-ASTNode *find_enum_decl(KawaCompiler *c, const char *name) {
+ASTNode *find_enum_decl(StillCompiler *c, const char *name) {
 	if (!name || !c || !c->program_root)
 		return NULL;
 	for (ASTNode *s = c->program_root->next; s; s = s->next) {
@@ -315,7 +315,7 @@ EnumVariant *find_enum_variant(ASTNode *enum_decl, const char *variant_name) {
 	return NULL;
 }
 
-int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
+int get_enum_max_payload_words(StillCompiler *c, const char *name) {
 	ASTNode *en = find_enum_decl(c, name);
 	if (!en)
 		return 1;
@@ -324,13 +324,13 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
 		LLVMTypeRef fields[16];
 		for (int i = 0; i < v->payload_count; i++) {
 			Type *pt = v->payload_types[i];
-			if (kawa_contains_managed(c, pt, 1)) {
-				kerr(KAWA_E_TYPE, en, "enum owners require recursive drop support; borrow with ref<T>");
+			if (wky_contains_managed(c, pt, 1)) {
+				still_error(STILL_E_TYPE, en, "enum owners require recursive drop support; borrow with ref<T>");
 				exit(1);
 			}
 			fields[i] = get_llvm_type(c, pt);
 			if (!LLVMTypeIsSized(fields[i])) {
-				kerr(KAWA_E_TYPE, en, "enum payload must have a finite, known layout");
+				still_error(STILL_E_TYPE, en, "enum payload must have a finite, known layout");
 				exit(1);
 			}
 		}
@@ -339,7 +339,7 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
 		if (bytes > max_bytes) max_bytes = bytes;
 	}
 	if (max_bytes > (uint64_t)INT32_MAX * 8) {
-		kerr(KAWA_E_TYPE, en, "enum payload layout is too large");
+		still_error(STILL_E_TYPE, en, "enum payload layout is too large");
 		exit(1);
 	}
 	return max_bytes ? (int)((max_bytes + 7) / 8) : 1;
@@ -347,10 +347,10 @@ int get_enum_max_payload_words(KawaCompiler *c, const char *name) {
 
 // Map a Type* to an LLVMTypeRef. Sets t->is_signed as a side effect for
 // integer kinds (so callers can read sign without re-checking the kind).
-LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
+LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 	if (!t)
 		return LLVMInt32TypeInContext(c->context);
-	Type *resolved = kawa_resolve_type(c, t);
+	Type *resolved = wky_resolve_type(c, t);
 	if (resolved != t) {
 		// Generic ASTs are reused by later specializations. Never overwrite T
 		// with the first instance's concrete type.
@@ -358,8 +358,8 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 		*t = *resolved;
 	}
     if ((t->kind == TYPE_SLICE || t->kind == TYPE_CHAN ||
-		 t->kind == TYPE_PTR || t->kind == TYPE_AMP) && kawa_contains_managed(c, t->inner, 1)) {
-		kdiag_error_at(KAWA_E_TYPE, c->source_filename, NULL, 0,
+		 t->kind == TYPE_PTR || t->kind == TYPE_AMP) && wky_contains_managed(c, t->inner, 1)) {
+		still_diag_error_at(STILL_E_TYPE, c->source_filename, NULL, 0,
 			"owners cannot be embedded in unmanaged storage");
 		exit(1);
 	}
@@ -421,7 +421,7 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 
 	case TYPE_AMP: {
 		// `&x` produces a pointer to the pointee's value type, same as TYPE_PTR
-		// in Kawa's memory model.
+		// in Whisky's memory model.
 		LLVMTypeRef inner = t->inner ? get_llvm_type(c, t->inner)
 									 : LLVMInt8TypeInContext(c->context);
 		t->is_signed = 0;
@@ -539,7 +539,7 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 	default:
 		// An unknown TypeKind is a compiler bug -- refuse to silently
 		// emit i32 (which previously caused miscompiles).
-		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
+		still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
 					   "unknown TypeKind %d in get_llvm_type", // internal
 				  t->kind);
 		exit(1);
@@ -550,7 +550,7 @@ LLVMTypeRef get_llvm_type(KawaCompiler *c, Type *t) {
 
 // Canonical name of a type for symbol mangling. Structs use their own
 // names; slices/arrays/pointers wrap the element name.
-static const char *mangle_type_name(KawaCompiler *c, Type *t, char *buf,
+static const char *mangle_type_name(StillCompiler *c, Type *t, char *buf,
 									size_t bufsz) {
 	(void)c;
 	switch (t->kind) {
@@ -593,7 +593,7 @@ static const char *mangle_type_name(KawaCompiler *c, Type *t, char *buf,
 
 // Structural type equality for overload resolution: kinds must match,
 // element/inner types recursively.
-int kawa_types_same(Type *a, Type *b) {
+int wky_types_same(Type *a, Type *b) {
 	while (a && b) {
 		if (a->kind != b->kind)
 			return 0;
@@ -606,7 +606,7 @@ int kawa_types_same(Type *a, Type *b) {
 			// the name is the identity.
             return a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS || a->kind == TYPE_ENUM
 					   ? 1
-					   : kawa_types_same(a->inner, b->inner);
+					   : wky_types_same(a->inner, b->inner);
 		}
 		if (a->kind == TYPE_ARRAY && a->array_len != b->array_len)
 			return 0;
@@ -617,7 +617,7 @@ int kawa_types_same(Type *a, Type *b) {
 }
 
 // Build `bare__t1_t2` from declared param types. Result is arena-owned.
-static char *overload_mangled_name(KawaCompiler *c, const char *bare,
+static char *overload_mangled_name(StillCompiler *c, const char *bare,
 								   ASTNode *args) {
 	size_t need = strlen(bare) + 4;
 	for (ASTNode *a = args; a; a = a->next)
@@ -641,7 +641,7 @@ static char *overload_mangled_name(KawaCompiler *c, const char *bare,
 // Pass over all decls: register every NODE_FUNC_DECL whose bare name is
 // declared more than once (with distinct param lists). Called before the
 // emission walk so codegen_func_decl can rename overloads on the way by.
-void collect_overloads(KawaCompiler *c, ASTNode *root) {
+void collect_overloads(StillCompiler *c, ASTNode *root) {
 	// Count decls per bare name.
 	struct { const char *name; int count; } names[64];
 	int nn = 0;
@@ -700,7 +700,7 @@ void collect_overloads(KawaCompiler *c, ASTNode *root) {
 // Pre-register every impl method as "Struct__method" so bodies can check
 // method existence regardless of emission order (operator overloading,
 // self_index). Also fills the overload registry's needs.
-void collect_impl_methods(KawaCompiler *c, ASTNode *root) {
+void collect_impl_methods(StillCompiler *c, ASTNode *root) {
 	for (ASTNode *g = root; g; g = g->next) {
 		if (g->type != NODE_IMPL_BLOCK ||
 			c->impl_method_count >= 256)
@@ -719,7 +719,7 @@ void collect_impl_methods(KawaCompiler *c, ASTNode *root) {
 	}
 }
 
-int impl_has_method(KawaCompiler *c, const char *struct_name,
+int impl_has_method(StillCompiler *c, const char *struct_name,
 					const char *method) {
 	if (!struct_name)
 		return 0;
@@ -732,7 +732,7 @@ int impl_has_method(KawaCompiler *c, const char *struct_name,
 }
 
 // Is this bare name part of an overload set?
-int is_overloaded_name(KawaCompiler *c, const char *bare) {
+int is_overloaded_name(StillCompiler *c, const char *bare) {
 	for (int i = 0; i < c->overload_name_count; i++)
 		if (strcmp(c->overload_names[i], bare) == 0)
 			return 1;
@@ -741,7 +741,7 @@ int is_overloaded_name(KawaCompiler *c, const char *bare) {
 
 // Find the overload whose param list matches the given argument types
 // exactly. Returns the mangled symbol or NULL. Ambiguity reports and exits.
-const char *resolve_overload(KawaCompiler *c, ASTNode *call,
+const char *resolve_overload(StillCompiler *c, ASTNode *call,
 							 const char *bare, ASTNode *args) {
 	Type *argt[16];
 	int na = 0;
@@ -765,7 +765,7 @@ const char *resolve_overload(KawaCompiler *c, ASTNode *call,
 		int ok = 1;
 		for (int pi = 0; pi < na && ok; pi++) {
 			if (!of->params[pi] || !argt[pi] ||
-				!kawa_types_same(of->params[pi], argt[pi]))
+				!wky_types_same(of->params[pi], argt[pi]))
 				ok = 0;
 		}
 		if (!ok)
@@ -776,7 +776,7 @@ const char *resolve_overload(KawaCompiler *c, ASTNode *call,
 	if (matches == 1)
 		return match->mangled;
 	if (matches > 1) {
-		kerr(KAWA_E_TYPE, call, "ambiguous call to `%s`: %d overloads "
+		still_error(STILL_E_TYPE, call, "ambiguous call to `%s`: %d overloads "
 			  "match these argument types", bare, matches);
 		exit(1);
 	}

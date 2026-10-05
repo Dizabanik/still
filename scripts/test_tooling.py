@@ -17,7 +17,7 @@ def main():
     args = parser.parse_args()
     compiler = str(Path(args.compiler).resolve())
     repository = Path(__file__).resolve().parents[1]
-    with tempfile.TemporaryDirectory(prefix='kawa-tools-') as directory:
+    with tempfile.TemporaryDirectory(prefix='still-tools-') as directory:
         root = Path(directory).resolve()
 
         def run(*arguments, status=0, cwd=root):
@@ -25,11 +25,11 @@ def main():
             assert result.returncode == status, (arguments, result)
             return result
 
-        source = root / 'input.kawa'
+        source = root / 'input.wky'
         raw = r'''import stdc;
-// import "missing-comment.kawa"; untouched comment ż
+// import "missing-comment.wky"; untouched comment ż
 #[nocapture] fn i32 read(i32* p){return *p;}
-fn main(){let text="import \"missing-string.kawa\"; ż\x00Z";
+fn main(){let text="import \"missing-string.wky\"; ż\x00Z";
 i32 x=41; stdc.printf("%d %d %d\n",read(&x),text.len,(i32)'\x41');
 if(x==41){println("yes");}else{println("no");}return 0;}
 '''.encode()
@@ -37,10 +37,10 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         before = set(root.iterdir())
         formatted = run('--format', source).stdout
         assert set(root.iterdir()) == before, 'formatting emitted build artifacts'
-        for spelling in ('// import "missing-comment.kawa"; untouched comment ż'.encode(),
-                         r'"import \"missing-string.kawa\"; ż\x00Z"'.encode(), br"'\x41'"):
+        for spelling in ('// import "missing-comment.wky"; untouched comment ż'.encode(),
+                         r'"import \"missing-string.wky\"; ż\x00Z"'.encode(), br"'\x41'"):
             assert spelling in formatted, (spelling, formatted)
-        target = root / 'formatted.kawa'
+        target = root / 'formatted.wky'
         target.write_bytes(formatted)
         assert run('--format', target).stdout == formatted, 'formatter is not idempotent'
         run('--format-check', source, status=1)
@@ -55,11 +55,11 @@ if(x==41){println("yes");}else{println("no");}return 0;}
                 assert executed.returncode == 0 and not executed.stderr, executed
                 outputs.append(executed.stdout)
             # Length is a byte count, including NUL and both bytes of the UTF-8 character.
-            assert outputs == [b'41 34 65\nyes\n'] * 2, outputs
+            assert outputs == [b'41 33 65\nyes\n'] * 2, outputs
         for case in ('fn main( {', 'fn main(){ let s="unterminated; }',
                      'fn main(){ let s="escape' + '\\', "fn main(){ let c='",
                      "fn main(){ let c='" + '\\', '#[unfinished'):
-            bad = root / 'syntax.kawa'
+            bad = root / 'syntax.wky'
             bad.write_text(case)
             before = set(root.iterdir())
             result = run('--format', '--diagnostic-format=json', bad, status=1)
@@ -70,9 +70,9 @@ if(x==41){println("yes");}else{println("no");}return 0;}
 
         # Representative language constructs, including generics, enums, managed
         # access, macros and coroutine syntax. This is syntax validation only.
-        for relative in ('tests/test_struct_defaults.kawa', 'tests/contracts/named_evaluation.kawa',
-                         'tests/managed/alias_move_clone.kawa', 'tests/test_generics.kawa',
-                         'tests/ir/fp_permissions.kawa', 'tests/numeric/comptime_width.kawa'):
+        for relative in ('tests/test_struct_defaults.wky', 'tests/contracts/named_evaluation.wky',
+                         'tests/managed/alias_move_clone.wky', 'tests/test_generics.wky',
+                         'tests/ir/fp_permissions.wky', 'tests/numeric/comptime_width.wky'):
             path = repository / relative
             if not path.exists():
                 continue
@@ -92,15 +92,15 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         assert location['column_unit'] == 'byte', location
         assert location['source_line'] == source.read_text(), location
 
-        library = root / 'lib.kawa'
+        library = root / 'lib.wky'
         library.write_text('pub fn i32 value(){\n    return missing;\n}\n')
-        source.write_text('// import "ignored.kawa";\nimport "lib.kawa";\nfn main(){return value();}\n')
+        source.write_text('// import "ignored.wky";\nimport "lib.wky";\nfn main(){return value();}\n')
         diagnostic = json.loads(run('--check', '--diagnostic-format=json', source, status=1).stderr.splitlines()[0])
         assert diagnostic['code'] == 'E0002', diagnostic
         assert diagnostic['location']['file'] == str(library), diagnostic
         assert diagnostic['location']['line'] == 2, diagnostic
         library.write_text('pub fn i32 value(){return 42;}\n')
-        source.write_text('import "lib.kawa";\n\nfn main(){\n    return missing;\n}\n')
+        source.write_text('import "lib.wky";\n\nfn main(){\n    return missing;\n}\n')
         diagnostic = json.loads(run('--check', '--diagnostic-format=json', source, status=1).stderr.splitlines()[0])
         assert diagnostic['location']['file'] == str(source) and diagnostic['location']['line'] == 4, diagnostic
         source.write_bytes(b'// non-UTF8 comment: \xff\nfn main(){return missing;}\n')
@@ -109,13 +109,13 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         source.write_bytes(b'fn main(){println("\xff");return missing;}\n')
         records = [json.loads(line) for line in run('--check', '--diagnostic-format=json', source, status=1).stderr.splitlines()]
         assert records[0]['code'] == 'E0002', records
-        quoted = root / 'quote"and\\slash.kawa'
+        quoted = root / 'quote"and\\slash.wky'
         quoted.write_text('pub fn i32 quoted(){return missing;}\n')
-        source.write_text('import "quote\\"and\\\\slash.kawa"; fn main(){return quoted();}\n')
+        source.write_text('import "quote\\"and\\\\slash.wky"; fn main(){return quoted();}\n')
         diagnostic = json.loads(run('--check', '--diagnostic-format=json', source, status=1).stderr.splitlines()[0])
         assert diagnostic['location']['file'] == str(quoted), diagnostic
         quoted.write_text('pub fn i32 quoted(){return 42;}\n')
-        source.write_text('import "quote\\"and\\\\slash.kawa"; fn main(){return missing;}\n')
+        source.write_text('import "quote\\"and\\\\slash.wky"; fn main(){return missing;}\n')
         diagnostic = json.loads(run('--check', '--diagnostic-format=json', source, status=1).stderr.splitlines()[0])
         assert diagnostic['location']['line'] == 1, diagnostic
         assert diagnostic['location']['column'] == source.read_bytes().index(b'missing')+1, diagnostic
@@ -130,10 +130,10 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         print('PASS diagnostics: UTF-8 byte spans, imports, warnings, JSON and explain codes')
 
         (root / 'sub').mkdir()
-        library.write_text('import "sub/../input.kawa";\npub fn i32 value(){return 42;}\n')
-        (root / 'left.kawa').write_text('import "./lib.kawa";\n')
-        (root / 'right.kawa').write_text('import "sub/../lib.kawa";\n')
-        source.write_text('import "left.kawa";\nimport "right.kawa";\nfn main(){println("{value()}");return 0;}\n')
+        library.write_text('import "sub/../input.wky";\npub fn i32 value(){return 42;}\n')
+        (root / 'left.wky').write_text('import "./lib.wky";\n')
+        (root / 'right.wky').write_text('import "sub/../lib.wky";\n')
+        source.write_text('import "left.wky";\nimport "right.wky";\nfn main(){println("{value()}");return 0;}\n')
         run('--check', source)
         # The executable name is literal argv data, even with shell metacharacters.
         exe = root / "program';touch INJECTED;#"
@@ -145,7 +145,7 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         print('PASS driver: canonical cyclic/diamond imports and literal linker arguments')
 
         library.write_text('pub fn i32 divide(i32 divisor){\n    return 42/divisor;\n}\n')
-        source.write_text('import "lib.kawa";\nfn main(){return divide(0);}\n')
+        source.write_text('import "lib.wky";\nfn main(){return divide(0);}\n')
         for opt in (0, 3):
             run(f'-O{opt}', '-g', source, '-o', root / 'trap')
             trapped = invoke([str(root / 'trap')], root)
@@ -172,7 +172,7 @@ if(x==41){println("yes");}else{println("no");}return 0;}
             work.mkdir()
             (work/artifact).mkdir()
             result=run('-O3','-c',source,cwd=work,status=1)
-            assert b'[Kawa] Wrote' not in result.stdout and b'error' in result.stderr,result
+            assert b'[Whisky] Wrote' not in result.stdout and b'error' in result.stderr,result
         print('PASS artifact errors: bitcode, IR and object write failures report failure')
         if platform.system()=='Darwin':
             deployment=environment({'MACOSX_DEPLOYMENT_TARGET':'13.0'})

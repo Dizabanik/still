@@ -71,7 +71,7 @@ def checksum(path):
 
 
 def package_source(output_dir, ver, identity):
-    prefix = f'kawac-{ver}-source'
+    prefix = f'still-{ver}-source'
     path = output_dir / f'{prefix}.tar.gz'
     with archive(path, identity['source_date_epoch']) as output:
         for repo, base in [(ROOT, prefix + '/'), (ROOT / 'timbr', prefix + '/timbr/')]:
@@ -96,8 +96,8 @@ def package_binary(output_dir, build_dir, ver, identity):
         if line and not line.startswith(('#', '//')) and '=' in line and ':' in line:
             key, value = line.split('=', 1)
             cache[key.split(':', 1)[0]] = value
-    if cache.get('KAWA_NATIVE_CPU') != 'OFF':
-        raise ValueError('release binaries require -DKAWA_NATIVE_CPU=OFF')
+    if cache.get('STILL_NATIVE_CPU') != 'OFF':
+        raise ValueError('release binaries require -DSTILL_NATIVE_CPU=OFF')
     if cache.get('CMAKE_BUILD_TYPE') != 'Release':
         raise ValueError('release binaries require -DCMAKE_BUILD_TYPE=Release')
     if Path(cache.get('CMAKE_HOME_DIRECTORY', '')).resolve() != ROOT:
@@ -109,9 +109,9 @@ def package_binary(output_dir, build_dir, ver, identity):
     llvm = run([cache['LLVM_CONFIG_EXECUTABLE'], '--version']).decode().strip()
     if not llvm.startswith('21.'):
         raise ValueError('release compiler must use LLVM 21')
-    prefix = f'kawac-{ver}-{system}-{arch}'
+    prefix = f'still-{ver}-{system}-{arch}'
     path = output_dir / f'{prefix}.tar.gz'
-    with tempfile.TemporaryDirectory(prefix='kawa-package-') as directory:
+    with tempfile.TemporaryDirectory(prefix='still-package-') as directory:
         work = Path(directory)
         stage = work / prefix
         subprocess.run(['cmake', '--install', str(build_dir), '--prefix', str(stage)], check=True)
@@ -133,10 +133,10 @@ def package_binary(output_dir, build_dir, ver, identity):
                 if Path(info.name).is_absolute() or '..' in Path(info.name).parts or not (info.isfile() or info.isdir()):
                     raise ValueError('unexpected unsafe archive entry')
             packaged.extractall(unpacked)
-        compiler = unpacked / prefix / 'bin/kawac'
-        if run([compiler, '--version'], work) != f'kawac {ver}\n'.encode():
+        compiler = unpacked / prefix / 'bin/still'
+        if run([compiler, '--version'], work) != f'still {ver}\n'.encode():
             raise ValueError('installed compiler version does not match VERSION')
-        subprocess.run([str(compiler), '-O3', str(ROOT / 'examples/hello.kawa'),
+        subprocess.run([str(compiler), '-O3', str(ROOT / 'examples/hello.wky'),
                         '-o', str(work / 'hello')], cwd=work, check=True)
         if run([work / 'hello'], work) != b'42\n':
             raise ValueError('packaged compiler failed its managed-memory/printing smoke test')

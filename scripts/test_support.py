@@ -11,7 +11,7 @@ import tempfile
 
 def environment(extra=None):
     env = dict(os.environ)
-    for key in ("KAWA_NO_OPT", "KAWA_NO_PRINTF", "KAWA_DUMP_BAD"):
+    for key in ("STILL_NO_OPT", "STILL_NO_PRINTF", "STILL_DUMP_BAD"):
         env.pop(key, None)
     env.update(LC_ALL="C", LANG="C", NO_COLOR="1")
     env.update(extra or {})
@@ -76,9 +76,9 @@ def _text(data):
     return data.decode("utf-8", errors="replace")
 
 
-def _check_variant(src, kawac, spec, opt, work):
+def _check_variant(src, still, spec, opt, work):
     exe = work / "program"
-    cmd = [kawac, f"-O{opt}", *spec["flags"], str(src)]
+    cmd = [still, f"-O{opt}", *spec["flags"], str(src)]
     cmd += ["-c"] if spec["kind"] in {"reject", "ir"} else ["-o", str(exe)]
     compiled = invoke(cmd, work, spec.get("compile_timeout", 60))
     diagnostic = _text(compiled.stdout + compiled.stderr)
@@ -150,7 +150,7 @@ def classify(phase, detail, xfail, opt):
     return "FAIL", phase + ": " + detail
 
 
-def run_case(src, kawac):
+def run_case(src, still):
     src = Path(src).resolve()
     try:
         spec = load_case(src)
@@ -158,9 +158,9 @@ def run_case(src, kawac):
             return [{"status": "FAIL", "detail": "no output oracle or case manifest"}]
         results = []
         for opt in spec["optimizations"]:
-            with tempfile.TemporaryDirectory(prefix="kawa-test-") as folder:
+            with tempfile.TemporaryDirectory(prefix="wky-test-") as folder:
                 try:
-                    phase, detail = _check_variant(src, kawac, spec, opt, Path(folder))
+                    phase, detail = _check_variant(src, still, spec, opt, Path(folder))
                 except subprocess.TimeoutExpired:
                     phase, detail = "timeout", "subprocess exceeded its time limit"
                 except (OSError, KeyError, ValueError, TypeError, re.error) as exc:

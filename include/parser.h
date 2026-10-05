@@ -1,5 +1,5 @@
-#ifndef KAWA_PARSER_H
-#define KAWA_PARSER_H
+#ifndef STILL_PARSER_H
+#define STILL_PARSER_H
 #include "ast.h"
 #include "lexer.h"
 

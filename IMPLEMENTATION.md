@@ -77,7 +77,7 @@ Managed lowering, ownership analysis, numeric policies, effects, aggregate
 literals, optimization reporting, import expansion, and formatting have
 separate source files.
 Local builds optimize the embedded runtimes for the native CPU at O3.
-Distribution builds use KAWA_NATIVE_CPU=OFF so the compiler and embedded
+Distribution builds use STILL_NATIVE_CPU=OFF so the compiler and embedded
 bitcode do not require the build runner's CPU features. Both I/O and memory
 runtime headers are generated with LLVM 21 during the build.
 Reserved compiler runtime helpers have internal linkage for specialization
@@ -153,7 +153,7 @@ individual OS high-water RSS samples, binary sizes, hashes, and compiler
 versions. These are whole-process timings, not isolated cleanup latency.
 
 The 100,000-node/eight-trial native lifecycle measurement was 83.963/83.073 ms
-for Kawa/C chains (MAD 2.531/1.011 ms) and 67.305/62.691 ms for fanout
+for Whisky/C chains (MAD 2.531/1.011 ms) and 67.305/62.691 ms for fanout
 (MAD 1.000/1.025 ms). Allocation, free, copied-byte, descriptor-byte, and
 index-check counters match. These local
 measurements do not establish performance on other workloads or machines.
@@ -161,20 +161,20 @@ The Homebrew sanitizer runtime on this host stalls before main; verification
 uses the working Xcode sanitizer runtime and records its separate version.
 
 The field-view workload constructs two bounded views per iteration in both
-Kawa and C, with identical runtime, row layout, initialization and arithmetic.
+Whisky and C, with identical runtime, row layout, initialization and arithmetic.
 Its instrumented runs verify four indexed validations per checked iteration,
 or zero indexed validations with two pins per iteration plus one outer pin.
 Both modes create exactly two views per iteration. The stable variant measures
 guard churn deliberately; it is not a claim that per-iteration pins are faster.
 At ten million sequential iterations, private runtime helpers reduced the
-local Kawa median from 83.876 to 77.021 ms (MAD 0.307/0.159 ms), with C at
-71.240/72.049 ms. The Kawa executable shrank from 70,376 to 51,896 bytes.
+local Whisky median from 83.876 to 77.021 ms (MAD 0.307/0.159 ms), with C at
+71.240/72.049 ms. The Whisky executable shrank from 70,376 to 51,896 bytes.
 Each run uses seven samples/two warmups and verifies the full timed input.
 
 The owning-value workload clones four buffers inside a 136-byte value and
 transfers that value either between stack bindings or through a managed heap
 slot. Its static layout shape matches C's. With 100,000 elements per buffer
-and 64 trials, the local Kawa/C medians were 66.029/65.493 ms for stack
+and 64 trials, the local Whisky/C medians were 66.029/65.493 ms for stack
 transfers (MAD 0.566/0.640 ms) and 65.383/65.109 ms for heap transfers
 (MAD 0.183/0.918 ms). Seven samples/two warmups run without instrumentation.
 The separate instrumentation verifies 512/576 allocations and frees,

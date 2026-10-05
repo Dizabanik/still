@@ -4,12 +4,12 @@
  * adds no new effect, but every other outgoing edge is still examined. */
 static int noalloc_leaf(const char *name) {
     const char *safe[] = {"free", "memcmp", "memcpy", "memmove", "memset", "strlen",
-        "kawa_trap", "__kawa_mem_address", "__kawa_mem_slice", "__kawa_mem_pin",
-        "__kawa_mem_try_pin", "__kawa_mem_unpin", "__kawa_mem_drop", "__kawa_mem_remove",
-        "__kawa_mem_metric", "__kawa_mem_budget", "__kawa_mem_capacity",
-        "__kawa_mem_store_owner", "__kawa_mem_take", "__kawa_mem_write_address",
-        "__kawa_mem_replace", "__kawa_mem_view", "__kawa_mem_value_drop",
-        "__kawa_mem_value_take", "__kawa_mem_value_store", "__kawa_mem_value_clear", NULL};
+        "wky_trap", "__wky_mem_address", "__wky_mem_slice", "__wky_mem_pin",
+        "__wky_mem_try_pin", "__wky_mem_unpin", "__wky_mem_drop", "__wky_mem_remove",
+        "__wky_mem_metric", "__wky_mem_budget", "__wky_mem_capacity",
+        "__wky_mem_store_owner", "__wky_mem_take", "__wky_mem_write_address",
+        "__wky_mem_replace", "__wky_mem_view", "__wky_mem_value_drop",
+        "__wky_mem_value_take", "__wky_mem_value_store", "__wky_mem_value_clear", NULL};
     for (unsigned i=0; safe[i]; ++i) if (!strcmp(name,safe[i])) return 1;
     // Memory/arithmetic/lifetime/debug intrinsics do not acquire heap storage.
     return !strncmp(name,"llvm.",5) && strncmp(name,"llvm.coro.",10);
@@ -21,7 +21,7 @@ static int allocation_trace(LLVMValueRef fn, LLVMValueRef *path, unsigned depth,
         snprintf(trace,capacity,"%s",name); return 1;
     }
     for (unsigned i=0;i<depth;++i) if (path[i]==fn) return 0;
-    if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11) &&
+    if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1) &&
         noalloc_leaf(name)) return 0;
     if (!LLVMCountBasicBlocks(fn)) {
         snprintf(trace,capacity,"%s (allocation effect is unknown)",name); return 1;
@@ -38,17 +38,17 @@ static int allocation_trace(LLVMValueRef fn, LLVMValueRef *path, unsigned depth,
     }
     return 0;
 }
-void kawa_verify_effects(KawaCompiler *c) {
+void wky_verify_effects(StillCompiler *c) {
     for (LLVMValueRef fn=LLVMGetFirstFunction(c->module);fn;fn=LLVMGetNextFunction(fn)) {
-        if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.noalloc",12)) continue;
+        if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.noalloc", sizeof("wky.noalloc") - 1)) continue;
         LLVMValueRef path[128]; char trace[2048];
         if (allocation_trace(fn,path,0,trace,sizeof(trace))) {
-            LLVMAttributeRef source=LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11);
+            LLVMAttributeRef source=LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1);
             unsigned size=0;
             const char *value=source ? LLVMGetStringAttributeValue(source,&size) : NULL;
             char line[32]={0};
             if (value) memcpy(line,value,size<31 ? size : 31);
-            kdiag_error_at(KAWA_E_EFFECT,c->source_filename,NULL,atoi(line),
+            still_diag_error_at(STILL_E_EFFECT,c->source_filename,NULL,atoi(line),
                           "noalloc contract failed: %s",trace);
             exit(1);
         }

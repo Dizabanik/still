@@ -4,10 +4,10 @@
 #include <ucontext.h>
 #include <string.h>
 
-// C twin of b6_chan.kawa: same four-stage pipeline over capacity-64 rings,
+// C twin of b6_chan.wky: same four-stage pipeline over capacity-64 rings,
 // but stages are real coroutines (ucontext) with blocking send/recv that
 // swap back to the driver on contention -- the closest plain-C analogue of
-// kawac's brew/sip channels.
+// still's brew/sip channels.
 
 #define N 2000000
 #define CAP 64

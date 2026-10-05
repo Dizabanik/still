@@ -5,15 +5,15 @@ body:
     id: environment
     attributes:
       label: Toolchain and platform
-      description: Include the Kawa commit/version, OS/architecture, and LLVM/Clang versions.
-      placeholder: kawac --version; llvm-config --version; clang --version
+      description: Include the Whisky commit/version, OS/architecture, and LLVM/Clang versions.
+      placeholder: still --version; llvm-config --version; clang --version
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
       label: Reproduction
-      description: Provide a minimal Kawa program and the exact commands, flags, and inputs.
+      description: Provide a minimal Whisky program and the exact commands, flags, and inputs.
     validations:
       required: true
   - type: textarea

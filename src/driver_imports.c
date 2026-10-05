@@ -17,7 +17,7 @@ static char *quoted_path(const char **cursor,const char *end) {
 	const char *p=*cursor;
 	if (p>=end || *p++!='"') return NULL;
 	char *path=malloc((size_t)(end-p)+1); size_t length=0;
-	if (!path) { fputs("kawac: out of memory\n",stderr); exit(2); }
+	if (!path) { fputs("still: out of memory\n",stderr); exit(2); }
 	while (p<end && *p!='"') {
 		unsigned char ch=(unsigned char)*p++;
 		if (ch=='\\') {
@@ -59,7 +59,7 @@ int driver_module_location(const char *text,size_t length,char **filename,int *l
 char *read_file(const char *path) {
 	FILE *f = fopen(path, "rb");
 	if (!f) {
-		fprintf(stderr, "kawac: cannot open '%s'\n", path);
+		fprintf(stderr, "still: cannot open '%s'\n", path);
 		exit(2);
 	}
 	fseek(f, 0, SEEK_END);
@@ -67,7 +67,7 @@ char *read_file(const char *path) {
 	fseek(f, 0, SEEK_SET);
 	char *buf = malloc(len + 1);
 	if (fread(buf, 1, len, f) != (size_t)len) {
-		fprintf(stderr, "kawac: short read on '%s'\n", path);
+		fprintf(stderr, "still: short read on '%s'\n", path);
 		exit(2);
 	}
 	buf[len] = '\0';
@@ -76,7 +76,7 @@ char *read_file(const char *path) {
 }
 
 // --- Multi-file imports ---------------------------------------------------
-// `import "dir/file.kawa";` splices the named file's text in place of the
+// `import "dir/file.wky";` splices the named file's text in place of the
 // import statement before lexing. Paths are relative to the importing
 // file's directory; each file expands at most once (first use wins), so
 // diamond includes are safe and cycles terminate.
@@ -98,7 +98,7 @@ static void append_char(char **out, size_t *len, size_t *cap, char ch) {
 		*cap = *cap ? *cap * 2 : 4096;
 		*out = realloc(*out, *cap);
 		if (!*out) {
-			fprintf(stderr, "kawac: out of memory\n");
+			fprintf(stderr, "still: out of memory\n");
 			exit(2);
 		}
 	}
@@ -126,7 +126,7 @@ static char *dir_name(const char *path, Arena *a) {
 		return arena_strdup(a, ".");
 	size_t len = slash - path;
 	if (len == 0)
-		len = 1; // "/foo.kawa" -> "/"
+		len = 1; // "/foo.wky" -> "/"
 	char *out = arena_alloc(a, len + 1);
 	memcpy(out, path, len);
 	out[len] = '\0';
@@ -223,7 +223,7 @@ static void expand_file(ImportCtx *ctx, const char *abs_path, Arena *a,
 			return;
 	}
 	if (ctx->count >= MAX_IMPORT_FILES) {
-		fprintf(stderr, "kawac: too many imported files (max %d)\n",
+		fprintf(stderr, "still: too many imported files (max %d)\n",
 				MAX_IMPORT_FILES);
 		exit(2);
 	}

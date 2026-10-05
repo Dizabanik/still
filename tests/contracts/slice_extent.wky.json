@@ -1,0 +1,7 @@
+{
+  "kind": "trap",
+  "diagnostic": "Whisky: trap: .*bounds",
+  "flags": [
+    "--bounds-check=always"
+  ]
+}

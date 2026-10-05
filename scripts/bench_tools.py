@@ -41,19 +41,19 @@ def corpus(functions,depth=0):
 def artifacts(work):
     return {name:digest(work/name) for name in ('output.bc','output.ll','output.o')}
 def verify_build_output(output,expected_hash,exe):
-    expected=f"hash: {expected_hash}\n[Kawa] Built '{exe}'\n".encode()
+    expected=f"hash: {expected_hash}\n[Whisky] Built '{exe}'\n".encode()
     assert output==expected,('incorrect build/hash output',output,expected)
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--kawac',default=str(ROOT/'build-cmake/kawac'))
+    p.add_argument('--still',default=str(ROOT/'build-cmake/still'))
     p.add_argument('--samples',type=int,default=7)
     p.add_argument('--warmups',type=int,default=2)
     p.add_argument('--verify-only',action='store_true')
     p.add_argument('--json',type=Path,default=ROOT/'build/compiler-tools-benchmark.json')
     a=p.parse_args()
     if a.samples<3 or a.warmups<1: p.error('need at least three samples and one warmup')
-    compiler=Path(shutil.which(a.kawac) or a.kawac).resolve()
+    compiler=Path(shutil.which(a.still) or a.still).resolve()
     report={'corpus_version':CORPUS_VERSION,'compiler_sha256':digest(compiler),
         'machine':platform.machine(),'platform':platform.platform(),
         'llvm_version':invoke(['llvm-config','--version'],ROOT).decode().strip(),
@@ -63,18 +63,18 @@ def main():
         'rss_scope':'Per-child OS wait4 high-water resident bytes; may include waited-for descendants, not summed concurrent process memory.',
         'reproducibility_scope':['output.bc','output.ll','output.o'],
         'samples':a.samples,'warmups':a.warmups,'corpus':[],'cases':[]}
-    with tempfile.TemporaryDirectory(prefix='kawa-tool-bench-') as directory:
+    with tempfile.TemporaryDirectory(prefix='still-tool-bench-') as directory:
         root=Path(directory); configurations={}; fixed={}
         for name,count,depth in [('small',12,0),('large',256,0),('generic_depth_16',64,16)]:
             text,expected=corpus(count,depth)
-            source=root/f'{name}.kawa'; source.write_text(text)
+            source=root/f'{name}.wky'; source.write_text(text)
             work=root/name; work.mkdir()
             before=set(work.iterdir())
             assert not invoke([compiler,'--check','-O3',source],work)
             assert set(work.iterdir())==before,'check mode created artifacts'
             formatted=invoke([compiler,'--format',source],work)
             assert set(work.iterdir())==before,'formatter created artifacts'
-            canonical=root/f'{name}-formatted.kawa'; canonical.write_bytes(formatted)
+            canonical=root/f'{name}-formatted.wky'; canonical.write_bytes(formatted)
             assert invoke([compiler,'--format',canonical],work)==formatted,'formatter is not idempotent'
             exe=work/'program'
             for candidate in (canonical,source):

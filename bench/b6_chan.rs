@@ -1,4 +1,4 @@
-// Rust twin of b6_chan.kawa: four-stage pipeline (src -> s1 -> s2 -> drain)
+// Rust twin of b6_chan.wky: four-stage pipeline (src -> s1 -> s2 -> drain)
 // over capacity-64 channels with blocking send/recv -- expressed with the
 // standard library's bounded sync channels and real OS threads, which is
 // the idiomatic Rust shape of this program.

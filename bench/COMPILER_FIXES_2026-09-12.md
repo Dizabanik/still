@@ -25,7 +25,7 @@ The strongest result is the checked matrix recurrence. In 11 randomly ordered be
 
 **2.61× faster** in this paired measurement. Inspection of the optimized IR confirms the redundant stack copies are gone; a regression test checks this alongside independently calculated numerical output.
 
-The complete six-workload runs used seven samples and two warmups per language, with 50 million iterations. The table below shows Kawa medians from the separate full-suite runs; only the matrix result was additionally checked in paired before/after order.
+The complete six-workload runs used seven samples and two warmups per language, with 50 million iterations. The table below shows Whisky medians from the separate full-suite runs; only the matrix result was additionally checked in paired before/after order.
 
 | Workload | Before | After |
 | --- | ---: | ---: |
@@ -40,7 +40,7 @@ The other differences are small or accompanied by similar changes in the C contr
 
 ## Reproduction and raw evidence
 
-The before compiler was preserved from commit `79ba376`; the after compiler is this change. Reports contain binary/source hashes, exact build commands, input/output hashes, sample order and raw durations. The benchmark Kawa sources changed only in an explanatory argument-parser comment during this work; the paired matrix run used byte-identical source for both builds.
+The before compiler was preserved from commit `79ba376`; the after compiler is this change. Reports contain binary/source hashes, exact build commands, input/output hashes, sample order and raw durations. The benchmark Whisky sources changed only in an explanatory argument-parser comment during this work; the paired matrix run used byte-identical source for both builds.
 
 ```sh
 ctest --test-dir build-cmake --output-on-failure
@@ -57,4 +57,4 @@ Local reports (build artifacts, not checked-in universal performance claims):
 - [All 23 benchmark correctness and C sanitizer checks](../build/benchmark-fixes-verification.json)
 - [Historical verification after the final string change](../build/historical-fixes-verification.json)
 
-The six matched workloads were reverified in the final measured run. C sanitizer runs are untimed and validate the C reference programs, not generated Kawa machine code. All validation here ran on macOS; the Linux CI workflow has not been executed locally.
+The six matched workloads were reverified in the final measured run. C sanitizer runs are untimed and validate the C reference programs, not generated Whisky machine code. All validation here ran on macOS; the Linux CI workflow has not been executed locally.

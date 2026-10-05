@@ -17,9 +17,9 @@ case "${RUNNER_OS:-}" in
     curl --fail --silent --show-error --location --retry 3 \
       https://apt.llvm.org/llvm-snapshot.gpg.key --output "$work/llvm.key"
     gpg --batch --dearmor --output "$work/llvm.gpg" "$work/llvm.key"
-    run_root install -m 644 "$work/llvm.gpg" /usr/share/keyrings/kawa-llvm.gpg
-    printf '%s\n' 'deb [signed-by=/usr/share/keyrings/kawa-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' > "$work/llvm.list"
-    run_root install -m 644 "$work/llvm.list" /etc/apt/sources.list.d/kawa-llvm.list
+    run_root install -m 644 "$work/llvm.gpg" /usr/share/keyrings/still-llvm.gpg
+    printf '%s\n' 'deb [signed-by=/usr/share/keyrings/still-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' > "$work/llvm.list"
+    run_root install -m 644 "$work/llvm.list" /etc/apt/sources.list.d/still-llvm.list
     run_root apt-get update
     run_root apt-get install -y --no-install-recommends clang-21 llvm-21-dev llvm-21-tools libclang-rt-21-dev lld-21
     llvm_bin=/usr/lib/llvm-21/bin

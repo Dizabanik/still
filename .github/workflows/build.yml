@@ -63,14 +63,14 @@ jobs:
           CC: ${{ matrix.cc }}
         run: |
           cmake -S . -B build-ci -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DKAWA_NATIVE_CPU="$NATIVE_CPU"
+            -DCMAKE_BUILD_TYPE=Release -DSTILL_NATIVE_CPU="$NATIVE_CPU"
           cmake --build build-ci --parallel 2
-          cmake --build build-ci --target kawac_debug --parallel 2
+          cmake --build build-ci --target still_debug --parallel 2
       - name: Compiler contracts and sanitized runtime
         run: |
           python3 scripts/generate_property_cases.py --check
           ctest --test-dir build-ci --output-on-failure --parallel 2
-          bash scripts/smoke.sh build-ci/kawac_debug
+          bash scripts/smoke.sh build-ci/still_debug
       - name: Benchmark correctness and safety counters
         run: bash scripts/ci/verify_benchmarks.sh build-ci
       - name: Package and smoke-test the installed compiler

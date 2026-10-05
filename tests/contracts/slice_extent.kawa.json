@@ -1,7 +1,0 @@
-{
-  "kind": "trap",
-  "diagnostic": "kawa: trap: .*bounds",
-  "flags": [
-    "--bounds-check=always"
-  ]
-}

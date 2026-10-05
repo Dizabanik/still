@@ -40,7 +40,7 @@ release runs are serialized by tag and are not cancelled midway.
 3. Create an annotated tag matching `VERSION`, then push the tag:
 
    ```sh
-   git tag -a "v$(cat VERSION)" -m "Kawa $(cat VERSION)"
+   git tag -a "v$(cat VERSION)" -m "Whisky $(cat VERSION)"
    git push origin "v$(cat VERSION)"
    ```
 
@@ -48,7 +48,7 @@ Pushing a `v*` version tag starts `release.yml`. A manual run can use an
 existing tag; it does not create one. The workflow rejects tags outside the
 `main` history and tags that disagree with `VERSION`.
 
-Release builds set `KAWA_NATIVE_CPU=OFF`, repeat all verification, install the
+Release builds set `STILL_NATIVE_CPU=OFF`, repeat all verification, install the
 compiler into a temporary prefix, and compile/run the managed-memory example
 from the **unpacked** binary archive. Packages include Apache/MIT notices,
 documentation, and a build manifest. The source archive includes the exact
@@ -63,7 +63,7 @@ an already published release.
 Local package verification, from a clean committed checkout:
 
 ```sh
-cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAWA_NATIVE_CPU=OFF
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTILL_NATIVE_CPU=OFF
 cmake --build build-release --parallel
 ctest --test-dir build-release --output-on-failure --parallel 2
 python3 scripts/package_release.py --build-dir build-release --output dist --source --binary

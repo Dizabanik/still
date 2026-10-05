@@ -8,8 +8,8 @@
 /CTestTestfile.cmake
 /Testing/
 /compile_commands.json
-/kawac
-/kawac_debug
+/still
+/still_debug
 *.o
 *.a
 *.so
@@ -28,7 +28,7 @@
 *.gcda
 *.gcno
 /optimization.json
-/src/codegen/kawa_runtime_bc.h
+/src/codegen/wky_runtime_bc.h
 
 # Historical benchmark executables; source triples remain versioned.
 /bench/*_c
@@ -65,4 +65,4 @@ Thumbs.db
 .env.*
 !.env.example
 
-# Do not ignore *.out: tests/*.kawa.out are byte-exact output fixtures.
+# Do not ignore *.out: tests/*.wky.out are byte-exact output fixtures.

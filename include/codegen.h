@@ -1,5 +1,5 @@
-#ifndef KAWA_CODEGEN_H
-#define KAWA_CODEGEN_H
+#ifndef STILL_CODEGEN_H
+#define STILL_CODEGEN_H
 
 #include "arena.h"
 #include "ast.h"
@@ -76,10 +76,10 @@ typedef struct {
     int check_only;
     const char *optimization_report;
     const char *executable_path;
-    struct KawaOptimizationSite *optimization_sites;
+    struct StillOptimizationSite *optimization_sites;
     unsigned optimization_site_count;
 	StableFrame *stable_stack;
-	struct KawaValueLayoutCache *value_layouts;
+	struct WkyValueLayoutCache *value_layouts;
 	FunctionSignature *function_signatures;
 	unsigned fp_permissions;
 
@@ -110,7 +110,7 @@ typedef struct {
 	int generic_impl_method_count;
 
 	// Optimization level from -O0..-O3 (default 2). Selects the pass
-	// pipeline in kawa_optimize_and_write; -O3 adds aggressive vectorize
+	// pipeline in still_optimize_and_write; -O3 adds aggressive vectorize
 	// + loop unrolling on top of default<O2>.
 	int opt_level;
 
@@ -124,7 +124,7 @@ typedef struct {
 	struct ASTNode *program_root; // for comptime fn lookup
 	int test_fn_count;
 
-	// Lazily-declared noreturn trap: kawa_trap(msg, file, line).
+	// Lazily-declared noreturn trap: wky_trap(msg, file, line).
 	LLVMValueRef trap_fn;
 
 	// Debug info (-g). DIBuilder + CU/file/subprogram metadata; NULL when
@@ -137,7 +137,7 @@ typedef struct {
 	int source_line; // expanded source line, retained even without debug info
 
 	// Source filename + full source text for diagnostics (owned by the
-	// driver). source_text backs kdiag_line(), which pulls the offending
+	// driver). source_text backs still_diag_line(), which pulls the offending
 	// line out of the program for caret rendering.
 	const char *source_filename;
 	const char *source_text;
@@ -266,23 +266,23 @@ typedef struct {
 		struct LoopRange *parent;
 	} *loop_ranges;
 
-} KawaCompiler;
+} StillCompiler;
 
 // Initialize a compiler. The caller owns `arena` and must keep it alive for
 // the lifetime of `c`. The arena is used for all codegen-side heap
 // allocations (scope frames, struct/alias registries, duplicated names).
-void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena);
-// Enable debug-build instrumentation (bounds traps). Call after kawa_init,
-// before kawa_compile.
-void kawa_set_debug(KawaCompiler *c, int debug);
+void still_init(StillCompiler *c, const char *module_name, Arena *arena);
+// Enable debug-build instrumentation (bounds traps). Call after still_init,
+// before still_compile.
+void still_set_debug(StillCompiler *c, int debug);
 // Source filename used in trap diagnostics.
-void kawa_set_source_file(KawaCompiler *c, const char *filename);
-void kawa_compile(KawaCompiler *c, ASTNode *root);
+void still_set_source_file(StillCompiler *c, const char *filename);
+void still_compile(StillCompiler *c, ASTNode *root);
 // Comptime: evaluate `n` as an integer constant, interpreting calls to pure
 // functions with the tree-walking evaluator (recursion-guarded). Returns an
 // LLVMConstantRef of the requested width or NULL when not foldable.
-LLVMValueRef kawa_comptime_eval(KawaCompiler *c, ASTNode *n,
+LLVMValueRef wky_comptime_eval(StillCompiler *c, ASTNode *n,
 								unsigned result_width, int *out_signed);
-void kawa_optimize_and_write(KawaCompiler *c, const char *filename);
+void still_optimize_and_write(StillCompiler *c, const char *filename);
 
 #endif

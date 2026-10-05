@@ -34,7 +34,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--check',action='store_true')
     args=ap.parse_args()
-    path=ROOT/'tests/contracts/runtime_integer_stream.kawa.json'
+    path=ROOT/'tests/contracts/runtime_integer_stream.wky.json'
     rendered=json.dumps(document(),indent=2)+'\n'
     if args.check:
         if path.read_text()!=rendered: raise SystemExit('stale property vectors: rerun scripts/generate_property_cases.py')

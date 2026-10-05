@@ -1,5 +1,5 @@
-#ifndef KAWA_ARENA_H
-#define KAWA_ARENA_H
+#ifndef STILL_ARENA_H
+#define STILL_ARENA_H
 #include <stddef.h>
 #include <stdint.h>
 

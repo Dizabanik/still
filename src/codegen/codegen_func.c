@@ -1,6 +1,6 @@
 #include "codegen_internal.h"
 
-void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
+void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 					   const char *implicit_self_struct) {
 	Scope *caller_scope = c->scope_stack;
 	Scope *caller_locals = c->function_locals;
@@ -8,9 +8,9 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	c->function_locals = NULL;
 	LLVMContextRef ctx = c->context;
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
-    kawa_check_value_type(c,cur,cur->data.func.ret_type);
+    wky_check_value_type(c,cur,cur->data.func.ret_type);
     for (ASTNode *a=cur->data.func.args; a; a=a->next) {
-        kawa_check_value_type(c,a,a->data_type);
+        wky_check_value_type(c,a,a->data_type);
     }
 
 	// Explicit return type wins (`fn f64 accel(...)`, `fn void log(...)`).
@@ -29,11 +29,11 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 		explicit_arg_cnt++;
 
 	// Methods declare their receiver explicitly as the first parameter
-	// (Kawa style), so there is no hidden self argument: the declared
+	// (Whisky style), so there is no hidden self argument: the declared
 	// signature IS the ABI. implicit_self_struct only contributes the
 	// `Struct__` mangling prefix.
 	int total_arg_cnt = explicit_arg_cnt;
-	kawa_verify_ownership(c,cur);
+	wky_verify_ownership(c,cur);
 
 	LLVMTypeRef *param_types =
 		arena_alloc(c->arena, sizeof(LLVMTypeRef) *
@@ -58,10 +58,10 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			 (b->inner->kind == TYPE_SLICE && b->inner->inner && b->inner->inner->kind == TYPE_U8));
 		if ((explicit_arg_cnt != 0 && !(explicit_arg_cnt == 2 && a && a->kind == TYPE_I32 && argv_ok)) ||
 			(LLVMGetTypeKind(ret_t) != LLVMIntegerTypeKind && LLVMGetTypeKind(ret_t) != LLVMVoidTypeKind) || cur->data.func.is_drip) {
-			kerr(KAWA_E_TYPE, cur, "main expects no arguments or (i32, str*/char**), and returns an integer or void");
+			still_error(STILL_E_TYPE, cur, "main expects no arguments or (i32, str*/char**), and returns an integer or void");
 			exit(1);
 		}
-		llvm_name = "kawa_main";
+		llvm_name = "wky_main";
 		c->main_argv_views = argv_ok && b->inner->kind == TYPE_SLICE;
 		c->main_ret_ast = cur->data.func.ret_type;
 	}
@@ -92,19 +92,19 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	signature->parameters=arena_alloc(c->arena,sizeof(Type*)*(total_arg_cnt ? total_arg_cnt : 1));
 	int signature_index=0;
 	for (ASTNode *a=cur->data.func.args; a; a=a->next)
-		signature->parameters[signature_index++]=kawa_concrete_type(c,a->data_type);
-	signature->return_type=kawa_concrete_type(c,cur->data.func.ret_type);
+		signature->parameters[signature_index++]=wky_concrete_type(c,a->data_type);
+	signature->return_type=wky_concrete_type(c,cur->data.func.ret_type);
 	signature->next = c->function_signatures;
 	c->function_signatures = signature;
 	char line_buf[32];
 	snprintf(line_buf, sizeof(line_buf), "%d", cur->line);
-	LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.source", line_buf);
+	LLVMAddTargetDependentFunctionAttr(c->current_func, "wky.source", line_buf);
 	if (cur->data.func.is_pure)
-		LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.pure", "true");
+		LLVMAddTargetDependentFunctionAttr(c->current_func, "wky.pure", "true");
 	if (cur->data.func.is_noalloc)
-		LLVMAddTargetDependentFunctionAttr(c->current_func, "kawa.noalloc", "true");
+		LLVMAddTargetDependentFunctionAttr(c->current_func, "wky.noalloc", "true");
 	if (cur->data.func.is_nocapture)
-		LLVMAddTargetDependentFunctionAttr(c->current_func,"kawa.nocapture","true");
+		LLVMAddTargetDependentFunctionAttr(c->current_func,"wky.nocapture","true");
 	unsigned saved_fp_permissions = c->fp_permissions;
 	c->fp_permissions = cur->data.func.fp_permissions;
 	c->current_ret_type = ret_t;
@@ -112,7 +112,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 
 	// Debug info: attach a DISubprogram so stacks/profiles show real names.
 	// fn_node line isn't tracked at decl granularity; use 1 (file scope).
-	kawa_di_attach_subprogram(c, llvm_name, cur);
+	still_di_attach_subprogram(c, llvm_name, cur);
 
 	// Optimization attributes: nounwind enables exception-free codegen and
 	// better scheduling. LLVM infers memory effects; noinline keeps drips from
@@ -158,7 +158,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 	// LLVM infers memory effects from verified bodies; a pure function may
 	// still read through pointers, so it must not promise memory(none).
 
-	LLVMBasicBlockRef entry = kawa_append_block(c->current_func, "entry");
+	LLVMBasicBlockRef entry = wky_append_block(c->current_func, "entry");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
 
 	// Clear any debug location left over from the previous function --
@@ -194,12 +194,12 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			create_entry_block_alloca(c, arg_type, a->data.var_decl.name);
 		LLVMBuildStore(c->builder, p_val, p_alloc);
 		scope_push(c, a->data.var_decl.name, p_alloc, arg_type, a);
-		if (kawa_contains_managed(c,a->data_type,1)) {
+		if (wky_contains_managed(c,a->data_type,1)) {
 			if (cur->data.func.is_drip) {
-				kerr(KAWA_E_TYPE, a, "managed owners in coroutines require cancellation cleanup support");
+				still_error(STILL_E_TYPE, a, "managed owners in coroutines require cancellation cleanup support");
 				exit(1);
 			}
-			kawa_memory_defer_value(c,p_alloc,a->data_type);
+			wky_memory_defer_value(c,p_alloc,a->data_type);
 		}
 	}
 
@@ -231,7 +231,7 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 		LLVMMetadataRef md_args[] = {md_str};
 		LLVMMetadataRef md = LLVMMDNodeInContext2(ctx, md_args, 1);
 		unsigned KIND =
-			LLVMGetMDKindID("kawa.coro.kind", strlen("kawa.coro.kind"));
+			LLVMGetMDKindID("wky.coro.kind", strlen("wky.coro.kind"));
 		LLVMSetMetadata(hdl, KIND, LLVMMetadataAsValue(ctx, md));
 		LLVMBuildRet(c->builder, hdl);
 
@@ -261,8 +261,8 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 				continue;
 			ASTNode *dn = sc->node;
 			int pline = dn ? dn->line : 0;
-			kdiag_warn_at(KAWA_W_UNUSED,
-						  c->source_filename ? c->source_filename : "<kawa>",
+			still_diag_warn_at(STILL_W_UNUSED,
+						  c->source_filename ? c->source_filename : "<wky>",
 						  NULL, pline > 0 ? pline : 0,
 						  "variable `%s` is never used", sc->name);
 		}

@@ -109,7 +109,7 @@ jobs:
             [[ "$(cat is-draft.txt)" == true ]]
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes \
-              --title "Kawa ${RELEASE_TAG#v}" "${extra[@]}"
+              --title "Whisky ${RELEASE_TAG#v}" "${extra[@]}"
           fi
           gh release upload "$RELEASE_TAG" ./*.tar.gz ./*.sha256 --clobber
           gh release edit "$RELEASE_TAG" --draft=false "${extra[@]}"

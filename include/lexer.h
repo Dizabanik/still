@@ -1,5 +1,5 @@
-#ifndef KAWA_LEXER_H
-#define KAWA_LEXER_H
+#ifndef STILL_LEXER_H
+#define STILL_LEXER_H
 
 #include "arena.h"
 #include <stddef.h>

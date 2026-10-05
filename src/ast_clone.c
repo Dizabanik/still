@@ -157,7 +157,7 @@ static ASTNode *node_copy(Clone *c,ASTNode *source) {
     }
     return copy;
 }
-ASTNode *kawa_clone_ast(Arena *arena,ASTNode *source,int count,char **parameters,
+ASTNode *wky_clone_ast(Arena *arena,ASTNode *source,int count,char **parameters,
                         Type **concretes,const char *generic_struct,const char *instance_struct) {
     Clone c={.arena=arena,.count=count,.parameters=parameters,.concretes=concretes,
              .generic_struct=generic_struct,.instance_struct=instance_struct};

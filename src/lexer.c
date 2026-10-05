@@ -48,7 +48,7 @@ static Token make_token(Lexer *l, TokenType type, char *text) {
 	t.len = l->pos - t.pos;
 	if (l->source_offsets) {
 		int column;
-		kdiag_offset_location(l->source_offsets[t.pos],&t.line,&column);
+		still_diag_offset_location(l->source_offsets[t.pos],&t.line,&column);
 		t.posA=(size_t)column;
 		t.len=l->source_offsets[l->pos]-l->source_offsets[t.pos];
 	}
@@ -78,8 +78,8 @@ char *get_line_text_lexer(Lexer *l) {
 }
 static Token error_token(Lexer *l, const char *msg) {
 	Token token=make_token(l,TOK_ERROR,"Error");
-	char *lT = l->source_offsets ? kdiag_line(token.line) : get_line_text_lexer(l);
-	kdiag_error(KAWA_E_PARSE, l->filename, lT, token.line, token.posA,
+	char *lT = l->source_offsets ? still_diag_line(token.line) : get_line_text_lexer(l);
+	still_diag_error(STILL_E_PARSE, l->filename, lT, token.line, token.posA,
 				(int)token.len, "Lex error: %s", msg);
 	free(lT);
 	l->had_error = 1;
@@ -106,7 +106,7 @@ Token lexer_next(Lexer *l) {
 			continue;
 		}
 
-		// `#` comments: shell-script shebangs (`#!/usr/bin/env kawa run`)
+		// `#` comments: shell-script shebangs (`#!/usr/bin/env wky run`)
 		// become possible. Only a line comment -- `#` has no other meaning
 		// in the grammar today.
 		if (c == '#') {

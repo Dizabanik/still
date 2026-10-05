@@ -357,7 +357,7 @@
         {
           "id": "ffi.ffi_retention",
           "arrange": "Pass a scoped buffer to C that retains it or calls back",
-          "action": "Return to Kawa and attempt deferred access",
+          "action": "Return to Whisky and attempt deferred access",
           "expect": "Wrapper must establish a valid ownership/lifetime contract; annotations alone are insufficient."
         }
       ]

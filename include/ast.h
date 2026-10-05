@@ -1,5 +1,5 @@
-#ifndef KAWA_AST_H
-#define KAWA_AST_H
+#ifndef STILL_AST_H
+#define STILL_AST_H
 
 #include "arena.h"
 
@@ -366,6 +366,6 @@ struct ASTNode {
 /* Clone an AST specialization without mutating its template. Linked child
  * lists and dependency edges preserve shared node identity. Strings are
  * immutable arena bytes; types and mutable nodes belong to the new instance. */
-ASTNode *kawa_clone_ast(Arena *, ASTNode *, int parameter_count, char **parameters,
+ASTNode *wky_clone_ast(Arena *, ASTNode *, int parameter_count, char **parameters,
                         Type **concretes, const char *generic_struct, const char *instance_struct);
 #endif

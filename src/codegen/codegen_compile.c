@@ -2,11 +2,11 @@
 #include <llvm-c/BitReader.h>
 #include <llvm-c/Linker.h>
 #include <llvm-c/Error.h>
-#include <kawa_runtime_bc.h>
+#include <wky_runtime_bc.h>
 /* Embedded runtime bitcode uses the compiler's target and SDK metadata. The
  * print runtime may have been generated with an older SDK; its code is linked
  * for this host, so reconcile that descriptive flag before module linking. */
-static void runtime_target(KawaCompiler *c,LLVMModuleRef runtime) {
+static void runtime_target(StillCompiler *c,LLVMModuleRef runtime) {
 	LLVMSetTarget(runtime,LLVMGetTarget(c->module));
 	LLVMSetModuleDataLayout(runtime,c->target_data);
 	LLVMMetadataRef sdk=LLVMGetModuleFlag(c->module,"SDK Version",11);
@@ -23,10 +23,10 @@ static void runtime_target(KawaCompiler *c,LLVMModuleRef runtime) {
 	}
 	free(flags);
 }
-#include "kawa_memory_bc.h"
-#include "kawa_memory_metrics_bc.h"
+#include "wky_memory_bc.h"
+#include "wky_memory_metrics_bc.h"
 
-// Runtime-initialized globals can't emit their kawa_globals_init body during
+// Runtime-initialized globals can't emit their wky_globals_init body during
 // pass 3 -- user functions don't exist yet, so a call like `let g = make();`
 // would fail to resolve its callee. Pass 3 records them here; the bodies are
 // emitted after all functions are generated.
@@ -37,7 +37,7 @@ typedef struct PendingGlobalInit {
 	struct PendingGlobalInit *next;
 } PendingGlobalInit;
 
-static void emit_runtime_global_inits(KawaCompiler *c,
+static void emit_runtime_global_inits(StillCompiler *c,
 									  PendingGlobalInit *pending,
 									  LLVMValueRef *init_fn,
 									  LLVMTypeRef *init_fn_type);
@@ -45,11 +45,11 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 // Lower a top-level `let x = ...;` / `[N]i32 arr = {...};` declaration into a
 // module-level global. Constant initializers become LLVM constants (zero
 // runtime cost, folded into every use); anything else gets queued for the
-// synthesized `kawa_globals_init` that main() calls first.
-static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
+// synthesized `wky_globals_init` that main() calls first.
+static void codegen_global_decl(StillCompiler *c, ASTNode *n,
                                 PendingGlobalInit **pending) {
-    if (kawa_contains_managed(c,n->data_type,1)) {
-        kerr(KAWA_E_TYPE,n,"global owners require explicit program-lifetime cleanup support");
+    if (wky_contains_managed(c,n->data_type,1)) {
+        still_error(STILL_E_TYPE,n,"global owners require explicit program-lifetime cleanup support");
         exit(1);
     }
 	LLVMTypeRef g_type = get_llvm_type(c, n->data_type);
@@ -69,7 +69,7 @@ static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
 			init_const = const_eval_global_init(c, n->data.var_decl.init,
 												g_type, n->data_type);
 		if (!needs_runtime_init && !init_const) {
-			kerr(KAWA_E_SEMANTIC, n, "global initializer is not a valid constant (overflow or invalid operation)");
+			still_error(STILL_E_SEMANTIC, n, "global initializer is not a valid constant (overflow or invalid operation)");
 			exit(1);
 		}
 	}
@@ -104,10 +104,10 @@ static void codegen_global_decl(KawaCompiler *c, ASTNode *n,
 	}
 }
 
-// Emit kawa_globals_init after all user functions exist, so initializers may
+// Emit wky_globals_init after all user functions exist, so initializers may
 // call any of them. Declaration order is preserved by walking the pending
 // list back to front.
-static void emit_runtime_global_inits(KawaCompiler *c,
+static void emit_runtime_global_inits(StillCompiler *c,
 									  PendingGlobalInit *pending,
 									  LLVMValueRef *init_fn,
 									  LLVMTypeRef *init_fn_type) {
@@ -126,12 +126,12 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 
 	*init_fn_type = LLVMFunctionType(LLVMVoidTypeInContext(c->context), NULL,
 									 0, 0);
-	*init_fn = LLVMAddFunction(c->module, "kawa_globals_init", *init_fn_type);
+	*init_fn = LLVMAddFunction(c->module, "wky_globals_init", *init_fn_type);
 	unsigned nw_id = LLVMGetEnumAttributeKindForName("nounwind", 8);
 	LLVMAddAttributeAtIndex(*init_fn, LLVMAttributeFunctionIndex,
 							LLVMCreateEnumAttribute(c->context, nw_id, 0));
 	LLVMPositionBuilderAtEnd(c->builder,
-							 kawa_append_block(*init_fn, "entry"));
+							 wky_append_block(*init_fn, "entry"));
 
 	LLVMValueRef saved_func = c->current_func;
 	LLVMTypeRef saved_ret = c->current_ret_type;
@@ -154,7 +154,7 @@ static void emit_runtime_global_inits(KawaCompiler *c,
 	c->current_ret_type = saved_ret;
 }
 
-static void register_enum_constructor(KawaCompiler *c, LLVMValueRef fn, ASTNode *en,
+static void register_enum_constructor(StillCompiler *c, LLVMValueRef fn, ASTNode *en,
                                      EnumVariant *variant, Type *type) {
 	ASTNode *decl = arena_alloc(c->arena, sizeof(*decl));
 	decl->type = NODE_FUNC_DECL;
@@ -174,15 +174,15 @@ static void register_enum_constructor(KawaCompiler *c, LLVMValueRef fn, ASTNode 
 	FunctionSignature *sig = arena_alloc(c->arena, sizeof(*sig));
 	sig->function = fn; sig->declaration = decl;
 	sig->next = c->function_signatures; c->function_signatures = sig;
-	LLVMAddTargetDependentFunctionAttr(fn,"kawa.pure","true");
-	LLVMAddTargetDependentFunctionAttr(fn,"kawa.noalloc","true");
+	LLVMAddTargetDependentFunctionAttr(fn,"wky.pure","true");
+	LLVMAddTargetDependentFunctionAttr(fn,"wky.noalloc","true");
 }
 
 static int reserved_symbol(const char *name) {
-    return name && (!strncmp(name,"__kawa_",7) || !strcmp(name,"kawa_trap") ||
-        !strcmp(name,"kawa_main") || !strcmp(name,"kawa_globals_init"));
+    return name && (!strncmp(name,"__wky_", sizeof("__wky_") - 1) || !strcmp(name,"wky_trap") ||
+        !strcmp(name,"wky_main") || !strcmp(name,"wky_globals_init"));
 }
-static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
+static void emit_enum_constructors(StillCompiler *c, ASTNode *en) {
 	const char *enum_name = en->data.enum_decl.name;
 	Type *en_type = arena_alloc(c->arena,sizeof(*en_type));
 	en_type->kind = TYPE_ENUM;
@@ -193,7 +193,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 		char mangled[256];
 		snprintf(mangled, sizeof(mangled), "%s_%s", enum_name, ev->name);
         if (reserved_symbol(mangled) || reserved_symbol(ev->name)) {
-            kerr(KAWA_E_TYPE,en,"enum constructor name is reserved for compiler runtime symbols");
+            still_error(STILL_E_TYPE,en,"enum constructor name is reserved for compiler runtime symbols");
             exit(1);
         }
 
@@ -213,7 +213,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
 
 			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
-			LLVMBasicBlockRef entry = kawa_append_block(fn, "entry");
+			LLVMBasicBlockRef entry = wky_append_block(fn, "entry");
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
@@ -249,7 +249,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 			LLVMAddAttributeAtIndex(bare_fn, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c->context, ai_id, 0));
 
 			LLVMBasicBlockRef prev_bb = LLVMGetInsertBlock(c->builder);
-			LLVMBasicBlockRef entry = kawa_append_block(bare_fn, "entry");
+			LLVMBasicBlockRef entry = wky_append_block(bare_fn, "entry");
 			LLVMPositionBuilderAtEnd(c->builder, entry);
 
 			LLVMValueRef alloca_s = LLVMBuildAlloca(c->builder, llvm_en_type, "enum_val");
@@ -277,7 +277,7 @@ static void emit_enum_constructors(KawaCompiler *c, ASTNode *en) {
 	}
 }
 
-void kawa_compile(KawaCompiler *c, ASTNode *root) {
+void still_compile(StillCompiler *c, ASTNode *root) {
 	c->program_root = root; // comptime fn lookup
     ASTNode *cur = root->next;
     for (ASTNode *n=cur; n; n=n->next) {
@@ -285,7 +285,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
             n->type==NODE_EXTERN_FN ? n->data.extern_fn.name :
             n->type==NODE_VAR_DECL ? n->data.var_decl.name : NULL;
         if (reserved_symbol(name)) {
-            kerr(KAWA_E_TYPE,n,"name is reserved for compiler runtime symbols");
+            still_error(STILL_E_TYPE,n,"name is reserved for compiler runtime symbols");
             exit(1);
         }
     }
@@ -394,14 +394,14 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 	while (cur) {
 		if (cur->type == NODE_EXTERN_FN) {
-			if (!strncmp(cur->data.extern_fn.name, "__kawa_mem_", 11) ||
-				kawa_contains_managed(c, cur->data.extern_fn.ret_type, 0)) {
-				kerr(KAWA_E_TYPE, cur, "extern declarations cannot expose managed representations");
+			if (!strncmp(cur->data.extern_fn.name, "__wky_mem_", sizeof("__wky_mem_") - 1) ||
+				wky_contains_managed(c, cur->data.extern_fn.ret_type, 0)) {
+				still_error(STILL_E_TYPE, cur, "extern declarations cannot expose managed representations");
 				exit(1);
 			}
 			for (ASTNode *a = cur->data.extern_fn.args; a; a = a->next)
-				if (kawa_contains_managed(c, a->data_type, 0)) {
-					kerr(KAWA_E_TYPE, a, "extern parameters cannot expose managed representations");
+				if (wky_contains_managed(c, a->data_type, 0)) {
+					still_error(STILL_E_TYPE, a, "extern parameters cannot expose managed representations");
 					exit(1);
 				}
 			// Declare the C symbol with its exact prototype. External
@@ -463,7 +463,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 							  &globals_init_type);
 
 
-	// Test mode: synthesize kawa__run_all_tests() -- calls each #[test] fn
+	// Test mode: synthesize wky__run_all_tests() -- calls each #[test] fn
 	// in order, prints PASS/FAIL, returns the failure count. @main then
 	// calls the runner instead of user main; exit code is the failures.
 	if (c->test_mode && c->test_fn_count > 0) {
@@ -478,8 +478,8 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 		LLVMTypeRef runner_t = LLVMFunctionType(i32_t, NULL, 0, 0);
 		LLVMValueRef runner =
-			LLVMAddFunction(c->module, "kawa__run_all_tests", runner_t);
-		LLVMBasicBlockRef rb = kawa_append_block(runner, "entry");
+			LLVMAddFunction(c->module, "wky__run_all_tests", runner_t);
+		LLVMBasicBlockRef rb = wky_append_block(runner, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, rb);
 
 		for (int ti = 0; ti < c->test_fn_count; ti++) {
@@ -496,7 +496,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			char fmtbuf[64];
 			snprintf(fmtbuf, sizeof(fmtbuf),
 					 "PASS %s\n", nm);
-			if (getenv("KAWA_NO_PRINTF"))
+			if (getenv("STILL_NO_PRINTF"))
 				continue;
 			// LLVMBuildGlobalStringPtr is the same path user string
 			// literals take: it creates a properly-typed private constant
@@ -510,13 +510,13 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 					 LLVMConstInt(LLVMInt32TypeInContext(c->context), 0, 0));
 	}
 
-	// If user `main` was renamed kawa_main (any signature that isn't
+	// If user `main` was renamed wky_main (any signature that isn't
 	// exactly (i32 argc, ptr argv)), synthesize the real entry point:
-	//   i32 @main(i32 argc, ptr argv) { return kawa_main(); }
-	LLVMValueRef renamed = LLVMGetNamedFunction(c->module, "kawa_main");
+	//   i32 @main(i32 argc, ptr argv) { return wky_main(); }
+	LLVMValueRef renamed = LLVMGetNamedFunction(c->module, "wky_main");
 	LLVMValueRef test_runner =
 		c->test_mode ? LLVMGetNamedFunction(c->module,
-											"kawa__run_all_tests")
+											"wky__run_all_tests")
 					 : NULL;
 	int wrapper_handled_globals_init = 0;
 	if (c->test_mode && test_runner && !renamed) {
@@ -527,7 +527,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMValueRef wrapper = LLVMAddFunction(
 			c->module, "main",
 			LLVMFunctionType(i32_t, (LLVMTypeRef[]){i32_t, i8ptr}, 2, 0));
-		LLVMBasicBlockRef bb = kawa_append_block(wrapper, "entry");
+		LLVMBasicBlockRef bb = wky_append_block(wrapper, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 		if (globals_init_fn) {
 			LLVMBuildCall2(c->builder, globals_init_type, globals_init_fn,
@@ -537,7 +537,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(test_runner),
 					   test_runner, NULL, 0, "");
 		if (c->uses_print) {
-			LLVMValueRef flush_fn1 = declare_kawa_runtime_fn(c, "__kawa_flush");
+			LLVMValueRef flush_fn1 = declare_wky_runtime_fn(c, "__wky_flush");
 			if (flush_fn1)
 				LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn1), flush_fn1, NULL, 0, "");
 		}
@@ -550,7 +550,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		LLVMTypeRef params[] = {i32_t, i8ptr};
 		LLVMTypeRef main_t = LLVMFunctionType(i32_t, params, 2, 0);
 		LLVMValueRef wrapper = LLVMAddFunction(c->module, "main", main_t);
-		LLVMBasicBlockRef bb = kawa_append_block(wrapper, "entry");
+		LLVMBasicBlockRef bb = wky_append_block(wrapper, "entry");
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 		// The globals-init injection below targets @main's entry; build the
 		// call AFTER positioning so it lands inside this new block.
@@ -572,9 +572,9 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 				LLVMValueRef count = LLVMBuildZExt(c->builder, args[0], i64_t, "argc64");
 				LLVMValueRef views = LLVMBuildArrayAlloca(c->builder, view_t, count, "argv_views");
 				LLVMBasicBlockRef start = LLVMGetInsertBlock(c->builder);
-				LLVMBasicBlockRef loop = kawa_append_block(wrapper, "argv_loop");
-				LLVMBasicBlockRef body = kawa_append_block(wrapper, "argv_body");
-				LLVMBasicBlockRef done = kawa_append_block(wrapper, "argv_done");
+				LLVMBasicBlockRef loop = wky_append_block(wrapper, "argv_loop");
+				LLVMBasicBlockRef body = wky_append_block(wrapper, "argv_body");
+				LLVMBasicBlockRef done = wky_append_block(wrapper, "argv_done");
 				LLVMBuildBr(c->builder, loop);
 				LLVMPositionBuilderAtEnd(c->builder, loop);
 				LLVMValueRef idx = LLVMBuildPhi(c->builder, i64_t, "argv_i");
@@ -600,7 +600,7 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			result = LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(renamed), renamed, args, argc, "");
 		}
 		if (c->uses_print) {
-			LLVMValueRef flush_fn2 = declare_kawa_runtime_fn(c, "__kawa_flush");
+			LLVMValueRef flush_fn2 = declare_wky_runtime_fn(c, "__wky_flush");
 			if (flush_fn2)
 				LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(flush_fn2), flush_fn2, NULL, 0, "");
 		}
@@ -619,18 +619,18 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			LLVMTypeRef i8t =
 				LLVMInt8TypeInContext(c->context);
 			LLVMValueRef argc_g = LLVMGetNamedGlobal(c->module,
-													 "__kawa_argc");
+													 "__wky_argc");
 			if (!argc_g) {
-				argc_g = LLVMAddGlobal(c->module, i32_t, "__kawa_argc");
+				argc_g = LLVMAddGlobal(c->module, i32_t, "__wky_argc");
 				LLVMSetInitializer(argc_g, LLVMConstNull(i32_t));
 				LLVMSetLinkage(argc_g, LLVMPrivateLinkage);
 			}
 			LLVMValueRef argv_g = LLVMGetNamedGlobal(c->module,
-													 "__kawa_argv");
+													 "__wky_argv");
 			if (!argv_g) {
 				argv_g = LLVMAddGlobal(
 					c->module, LLVMPointerType(LLVMPointerType(i8t, 0), 0),
-					"__kawa_argv");
+					"__wky_argv");
 				LLVMSetInitializer(
 					argv_g,
 					LLVMConstNull(LLVMPointerType(
@@ -650,10 +650,10 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 		}
 	}
 
-	// Inject a call to kawa_globals_init at the top of main() so runtime-
+	// Inject a call to wky_globals_init at the top of main() so runtime-
 	// initialized globals are ready before any user code runs. Constant-
 	// initialized globals need no call at all. (Skipped when the synthesized
-	// kawa_main wrapper already emitted the call -- it would run twice.)
+	// wky_main wrapper already emitted the call -- it would run twice.)
 	if (globals_init_fn && !wrapper_handled_globals_init) {
 		LLVMValueRef main_fn = LLVMGetNamedFunction(c->module, "main");
 		if (main_fn) {
@@ -672,24 +672,24 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 
 	if (c->uses_memory) {
 		LLVMMemoryBufferRef memory = LLVMCreateMemoryBufferWithMemoryRange(
-			(const char *)(c->memory_metrics ? kawa_memory_metrics_bc : kawa_memory_bc),
-			c->memory_metrics ? kawa_memory_metrics_bc_len : kawa_memory_bc_len, "kawa_memory", 0);
+			(const char *)(c->memory_metrics ? wky_memory_metrics_bc : wky_memory_bc),
+			c->memory_metrics ? wky_memory_metrics_bc_len : wky_memory_bc_len, "wky_memory", 0);
 		LLVMModuleRef runtime = NULL;
 		if (LLVMParseBitcodeInContext2(c->context, memory, &runtime)) {
-			kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL, 0,
+			still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL, 0,
 				"could not link the managed-memory runtime");
 			exit(1);
 		}
 		runtime_target(c,runtime);
 		if (LLVMLinkModules2(c->module,runtime)) {
-			kdiag_error_at(KAWA_E_SEMANTIC,c->source_filename,NULL,0,"could not link the managed-memory runtime");
+			still_diag_error_at(STILL_E_SEMANTIC,c->source_filename,NULL,0,"could not link the managed-memory runtime");
 			exit(1);
 		}
 		LLVMDisposeMemoryBuffer(memory);
 	}
 	if (c->uses_print) {
 		LLVMMemoryBufferRef rt_mem = LLVMCreateMemoryBufferWithMemoryRange(
-			(const char *)kawa_runtime_bc, kawa_runtime_bc_len, "kawa_runtime", 0);
+			(const char *)wky_runtime_bc, wky_runtime_bc_len, "wky_runtime", 0);
 		LLVMModuleRef rt_mod = NULL;
 		if (!LLVMParseBitcodeInContext2(c->context, rt_mem, &rt_mod)) {
 			runtime_target(c,rt_mod);
@@ -701,8 +701,8 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
      * enables specialization and removes unused runtime entry points while
      * public source functions retain their ABI. */
     for (LLVMValueRef fn=LLVMGetFirstFunction(c->module); fn; fn=LLVMGetNextFunction(fn)) {
-        if (LLVMCountBasicBlocks(fn) && !strncmp(LLVMGetValueName(fn),"__kawa_",7) &&
-            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11))
+        if (LLVMCountBasicBlocks(fn) && !strncmp(LLVMGetValueName(fn),"__wky_", sizeof("__wky_") - 1) &&
+            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1))
             LLVMSetLinkage(fn,LLVMInternalLinkage);
     }
 }
@@ -787,8 +787,8 @@ static void compute_sha256_hex(const unsigned char *data, size_t len, char out_h
 	out_hex[64] = '\0';
 }
 
-void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
-	kawa_di_finalize(c); // Finish metadata before verification or optimization.
+void still_optimize_and_write(StillCompiler *c, const char *filename) {
+	still_di_finalize(c); // Finish metadata before verification or optimization.
 
 	// Verify the module *before* any optimization runs. This catches
 	// malformed metadata, type mismatches, and structural IR errors with
@@ -797,10 +797,10 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	{
 		char *error = NULL;
 		if (LLVMVerifyModule(c->module, LLVMPrintMessageAction, &error)) {
-			if (!c->check_only && getenv("KAWA_DUMP_BAD"))
+			if (!c->check_only && getenv("STILL_DUMP_BAD"))
 				LLVMPrintModuleToFile(c->module, "tmp/bad2.ll", NULL);
-			kdiag_error_at(KAWA_E_SEMANTIC,
-						   c->source_filename ? c->source_filename : "<kawa>",
+			still_diag_error_at(STILL_E_SEMANTIC,
+						   c->source_filename ? c->source_filename : "<wky>",
 						   NULL, 0, "LLVM module verification failed:\n%s",
 						   error);
 			LLVMDumpModule(c->module);
@@ -813,7 +813,7 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 
 	char *error_msg = NULL;
 	LLVMTargetMachineRef machine = c->target_machine;
-	kawa_verify_safety(c, machine);
+	wky_verify_safety(c, machine);
 	if (c->check_only) {
 		LLVMDisposeTargetMachine(machine);
 		LLVMDisposeTargetData(c->target_data);
@@ -822,19 +822,19 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 		return;
     }
 
-    KawaOptimizationSnapshot *report_before=kawa_report_snapshot(c);
+    StillOptimizationSnapshot *report_before=still_report_snapshot(c);
     // Coroutine transforms must run before the main pipeline so coro-split
 	// lowers the frame before inlining decisions are made. The pass
 	// pipeline follows the -O level: O0 skips optimization entirely, O1/O2
-	// use LLVM's curated defaults (O2 is kawac's default), and O3 layers
+	// use LLVM's curated defaults (O2 is still's default), and O3 layers
 	// aggressive vectorization + unrolling on top.
     LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
     char pipeline[2048] = "";
-    if (!getenv("KAWA_NO_OPT")) {
+    if (!getenv("STILL_NO_OPT")) {
 		if (c->pgo_use) {
 			char pgo_opt[1024];
 			snprintf(pgo_opt, sizeof(pgo_opt), "-pgo-test-profile-file=%s", c->pgo_use);
-			const char *pgo_argv[] = { "kawac", pgo_opt };
+			const char *pgo_argv[] = { "still", pgo_opt };
 			LLVMParseCommandLineOptions(2, pgo_argv, "");
 		}
 
@@ -869,23 +869,23 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 		LLVMErrorRef pass_error = LLVMRunPasses(c->module, pipeline, machine, opts);
 		if (pass_error) {
 			char *message = LLVMGetErrorMessage(pass_error);
-			kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL, 0, "optimization failed: %s", message);
+			still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL, 0, "optimization failed: %s", message);
 			LLVMDisposeErrorMessage(message);
 			exit(1);
 		}
 	}
     LLVMDisposePassBuilderOptions(opts);
-    kawa_report_write(c,report_before,*pipeline ? pipeline : "disabled by KAWA_NO_OPT");
+    still_report_write(c,report_before,*pipeline ? pipeline : "disabled by STILL_NO_OPT");
 
     if (LLVMWriteBitcodeToFile(c->module, filename) != 0) {
-		kdiag_error_at(KAWA_E_SEMANTIC,
-					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+		still_diag_error_at(STILL_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<wky>", NULL,
                        0, "error writing bitcode");
         exit(1);
     }
 	if (LLVMPrintModuleToFile(c->module, "output.ll", &error_msg)) {
-		kdiag_error_at(KAWA_E_SEMANTIC,
-					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+		still_diag_error_at(STILL_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<wky>", NULL,
 					   0, "writing file failed: %s", error_msg);
         LLVMDisposeMessage(error_msg);
         exit(1);
@@ -897,8 +897,8 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 	const char *obj_path = "output.o";
 	if (LLVMTargetMachineEmitToFile(machine, c->module, obj_path,
 									LLVMObjectFile, &error_msg)) {
-		kdiag_error_at(KAWA_E_SEMANTIC,
-					   c->source_filename ? c->source_filename : "<kawa>", NULL,
+		still_diag_error_at(STILL_E_SEMANTIC,
+					   c->source_filename ? c->source_filename : "<wky>", NULL,
 					   0, "emitting object failed: %s", error_msg);
         LLVMDisposeMessage(error_msg);
         exit(1);

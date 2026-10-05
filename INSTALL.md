@@ -26,10 +26,10 @@ for the pinned Ubuntu `noble` suite:
 ```sh
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl gnupg cmake ninja-build python3
-curl -fL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/kawa-llvm.key
-gpg --batch --yes --dearmor -o /tmp/kawa-llvm.gpg /tmp/kawa-llvm.key
-sudo install -m 644 /tmp/kawa-llvm.gpg /usr/share/keyrings/kawa-llvm.gpg
-echo 'deb [signed-by=/usr/share/keyrings/kawa-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/kawa-llvm.list
+curl -fL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/still-llvm.key
+gpg --batch --yes --dearmor -o /tmp/still-llvm.gpg /tmp/still-llvm.key
+sudo install -m 644 /tmp/still-llvm.gpg /usr/share/keyrings/still-llvm.gpg
+echo 'deb [signed-by=/usr/share/keyrings/still-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/still-llvm.list
 sudo apt-get update
 sudo apt-get install -y clang-21 llvm-21-dev llvm-21-tools libclang-rt-21-dev lld-21
 export PATH="/usr/lib/llvm-21/bin:$PATH"
@@ -42,8 +42,8 @@ Both systems should report LLVM 21 from `llvm-config --version` and have
 ## Build and install from source
 
 ```sh
-git clone --recurse-submodules https://github.com/Dizabanik/kawac.git
-cd kawac
+git clone --recurse-submodules https://github.com/Dizabanik/still.git still
+cd still
 cmake -S . -B build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-cmake --parallel
 ctest --test-dir build-cmake --output-on-failure --parallel 2
@@ -54,10 +54,10 @@ The release source archive includes the pinned timbr sources, so it also
 builds without Git or submodule fetching. GitHub's automatically generated
 source archives omit submodule contents; use the attached `*-source.tar.gz`.
 
-Local builds default to `-DKAWA_NATIVE_CPU=ON` for performance. Set
-`-DKAWA_NATIVE_CPU=OFF` when distributing a compiler to other CPUs of the same
+Local builds default to `-DSTILL_NATIVE_CPU=ON` for performance. Set
+`-DSTILL_NATIVE_CPU=OFF` when distributing a compiler to other CPUs of the same
 architecture. This controls the compiler and its embedded runtime bitcode;
-compiled Kawa programs still target the machine running `kawac`.
+compiled Whisky programs still target the machine running `still`.
 
 To build without test binaries, pass `-DBUILD_TESTING=OFF`. Python remains
 required for runtime generation. `make -j4` remains available as an alternate
@@ -66,21 +66,21 @@ local build; use a fresh build directory when changing `NATIVE_CPU`.
 ## Binary releases
 
 Download the archive for your OS and architecture and its `.sha256` file from
-[GitHub Releases](https://github.com/Dizabanik/kawac/releases). Verify before
+[GitHub Releases](https://github.com/Dizabanik/still/releases). Verify before
 extracting:
 
 ```sh
 # Linux
-sha256sum --check kawac-0.1.0-linux-x86_64.tar.gz.sha256
+sha256sum --check still-0.1.0-linux-x86_64.tar.gz.sha256
 # macOS
-shasum -a 256 --check kawac-0.1.0-macos-arm64.tar.gz.sha256
+shasum -a 256 --check still-0.1.0-macos-arm64.tar.gz.sha256
 ```
 
 Extract the archive and add its `bin/` directory to `PATH`, or install its
 contents under a prefix of your choice. `BUILD.json` records the exact source
 and submodule commits, build host, LLVM version, architecture, and CPU policy.
-Licenses are under `share/licenses/kawac/`; documentation is under
-`share/doc/kawac/`.
+Licenses are under `share/licenses/still/`; documentation is under
+`share/doc/still/`.
 
 These archives do **not** bundle LLVM, Clang, or an SDK. Install LLVM/Clang 21
 as above, with its `bin/` directory on `PATH`. Linux binaries require the

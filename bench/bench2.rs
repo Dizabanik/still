@@ -1,4 +1,4 @@
-// Rust twin of bench2.kawa: hash-chain over a 256-entry table.
+// Rust twin of bench2.wky: hash-chain over a 256-entry table.
 static DATA_INIT: [u32; 256] = {
     let mut d = [0u32; 256];
     let mut i = 0usize;

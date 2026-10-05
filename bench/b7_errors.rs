@@ -1,5 +1,5 @@
-// Rust twin of b7_errors.kawa: the idiomatic Result pattern. validate()
-// returns Ok(()) or Err(ParseErr) -- what Kawa's filter/press/dregs lowers
+// Rust twin of b7_errors.wky: the idiomatic Result pattern. validate()
+// returns Ok(()) or Err(ParseErr) -- what Whisky's filter/press/dregs lowers
 // to, written the way a Rust programmer would.
 const N: i64 = 200_000_000;
 

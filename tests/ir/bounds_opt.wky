@@ -1,0 +1,9 @@
+// Constant in-range access remains check-free with safety explicitly enabled.
+// The argument is unknown at compilation: retain an observable load/result.
+// OPT: 2
+// FLAGS: --bounds-check=safe
+pub fn i64 last([16]i64 values) { return values[15]; }
+pub fn i32 main() { [16]i64 a; for (i64 i=0;i<16;i+=1) { a[i]=i; } println("{last(a)}"); return 0; }
+// CHECK-LABEL: define i64 @last(
+// CHECK-NOT: call void @wky_trap
+// CHECK: ret i64

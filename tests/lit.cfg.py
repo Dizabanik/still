@@ -1,15 +1,15 @@
-# lit config for the kawac test suite.
+# lit config for the still test suite.
 #
 # Two test kinds, both needing NO RUN: boilerplate in the source files:
 #
-#   1. Golden output:  tests/foo.kawa + tests/foo.kawa.out
-#      kawac compiles foo.kawa, the binary runs, stdout must match the
-#      .kawa.out twin byte-for-byte.
+#   1. Golden output:  tests/foo.wky + tests/foo.wky.out
+#      still compiles foo.wky, the binary runs, stdout must match the
+#      .wky.out twin byte-for-byte.
 #
-#   2. IR shape:       tests/ir/foo.kawa
+#   2. IR shape:       tests/ir/foo.wky
 #      The file's first comment block carries `CHECK:` / `CHECK-NOT:` lines
 #      (FileCheck syntax) plus optional `OPT:` to pick the -O level (default
-#      O0 so checks see unoptimized IR). kawac emits output.ll; FileCheck
+#      O0 so checks see unoptimized IR). still emits output.ll; FileCheck
 #      verifies instruction-level shape -- sext vs zext, nuw/nsw flags,
 #      call signatures -- things output comparison cannot see.
 
@@ -19,30 +19,30 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from kawa_format import KawaTestFormat
+from wky_format import WkyTestFormat
 
-config.name = "kawa"
-config.suffixes = [".kawa"]
+config.name = "wky"
+config.suffixes = [".wky"]
 config.excludes = ["lib"]
 config.test_source_root = os.path.dirname(__file__)
-config.test_exec_root = os.environ.get("KAWA_TEST_WORK", config.test_source_root)
+config.test_exec_root = os.environ.get("STILL_TEST_WORK", config.test_source_root)
 
 config.substitutions.append(("%lli", shlex.quote(os.environ.get("LLI", "lli"))))
 
 
-def _find_kawac():
-    got = os.environ.get("KAWAC")
+def _find_still():
+    got = os.environ.get("STILL")
     if got:
         return os.path.abspath(got)
     here = os.path.dirname(os.path.abspath(__file__))
-    cand = os.path.abspath(os.path.join(here, "..", "build-cmake", "kawac"))
+    cand = os.path.abspath(os.path.join(here, "..", "build-cmake", "still"))
     if os.path.exists(cand):
         return cand
-    return "kawac"
+    return "still"
 
 
-KAWAC = _find_kawac()
+STILL = _find_still()
 
 
 
-config.test_format = KawaTestFormat(KAWAC)
+config.test_format = WkyTestFormat(STILL)

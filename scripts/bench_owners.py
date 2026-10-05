@@ -33,7 +33,7 @@ def verify(output,args,instrumented,workload='owner_tree'):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--kawac',default=str(ROOT/'build-cmake/kawac'))
+    p.add_argument('--still',default=str(ROOT/'build-cmake/still'))
     p.add_argument('--workload',choices=['owner_tree','owned_values'],default='owner_tree')
     p.add_argument('--clang',default=str(Path(invoke(['llvm-config','--bindir'],ROOT).decode().strip())/'clang'))
     p.add_argument('--sanitizer-clang',default='/usr/bin/clang' if platform.system()=='Darwin' else 'clang')
@@ -50,8 +50,8 @@ def main():
         a.json=ROOT/'build'/('owned-values-benchmark.json' if a.workload=='owned_values' else 'owners-benchmark.json')
     if not (0<=a.size<=10**6 and 1<=a.trials<=100 and 0<=a.seed<=65535 and a.samples>=3 and a.warmups>=1):
         p.error('invalid workload or insufficient sampling')
-    compiler=Path(shutil.which(a.kawac) or a.kawac).resolve()
-    sources={lang:ROOT/f'bench/managed/{a.workload}.{ext}' for lang,ext in [('kawa','kawa'),('c','c')]}
+    compiler=Path(shutil.which(a.still) or a.still).resolve()
+    sources={lang:ROOT/f'bench/managed/{a.workload}.{ext}' for lang,ext in [('wky','wky'),('c','c')]}
     check=lambda output,args,metrics:verify(output,args,metrics,a.workload)
     result={'workload':a.workload,
         'contract':'Same zero initialization, unsigned arithmetic, runtime, checked accesses, moves, clone and lexical cleanup.',
@@ -59,18 +59,18 @@ def main():
         'rss_scope':'OS wait4 ru_maxrss for each fresh child; high-water resident bytes, not total allocations or cumulative child usage.',
         'timing_counters':False,'platform':platform.platform(),'machine':platform.machine(),
         'compiler_sha256':digest(compiler),'sources':{l:digest(s) for l,s in sources.items()},
-        'runtime_sha256':digest(ROOT/'src/runtime/kawa_memory.c'),
-        'runtime_header_sha256':digest(ROOT/'src/runtime/kawa_memory.h'),
+        'runtime_sha256':digest(ROOT/'src/runtime/wky_memory.c'),
+        'runtime_header_sha256':digest(ROOT/'src/runtime/wky_memory.h'),
         'clang_version':invoke([a.clang,'--version'],ROOT).decode().splitlines()[0],
         'sanitizer_clang_version':invoke([a.sanitizer_clang,'--version'],ROOT).decode().splitlines()[0],
         'sdkroot':os.environ.get('SDKROOT'),'samples':a.samples,'warmups':a.warmups,'cases':[]}
-    with tempfile.TemporaryDirectory(prefix='kawa-owner-bench-') as d:
+    with tempfile.TemporaryDirectory(prefix='wky-owner-bench-') as d:
         work=Path(d); bins={}
         for lang in sources:
             for metrics in (False,True):
                 exe=work/f'{lang}-{int(metrics)}'
-                command=[compiler,'-O3',*(['--memory-metrics'] if metrics else []),sources[lang],'-o',exe] if lang=='kawa' else [
-                    a.clang,'-O3','-march=native','-std=c11',*(['-DKAWA_MEMORY_METRICS'] if metrics else []),sources[lang],'-o',exe,'-pthread']
+                command=[compiler,'-O3',*(['--memory-metrics'] if metrics else []),sources[lang],'-o',exe] if lang=='wky' else [
+                    a.clang,'-O3','-march=native','-std=c11',*(['-DWKY_MEMORY_METRICS'] if metrics else []),sources[lang],'-o',exe,'-pthread']
                 invoke(command,work); bins[lang,metrics]=exe
         for size,trials,seed in [(0,1,0),(1,3,65535),(2,2,7),(17,1,31),(1025,2,42)]:
             for shape in (0,1):
@@ -95,7 +95,7 @@ def main():
                 'reference_bytes':32,
                 **({'aggregate_bytes':136} if a.workload=='owned_values' else {'chain_node_bytes':40})}
         for shape in (0,1):
-            assert instrumentation['kawa',shape]==instrumentation['c',shape],('different policies/layout/counters',shape,instrumentation)
+            assert instrumentation['wky',shape]==instrumentation['c',shape],('different policies/layout/counters',shape,instrumentation)
         if not a.verify_only:
             rng=random.Random(729104)
             for round_index in range(a.warmups+a.samples):

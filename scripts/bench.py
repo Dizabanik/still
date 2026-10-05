@@ -71,7 +71,7 @@ def build_commands(entry, compilers, directory, sanitize=False):
     for lang, source in entry["sources"].items():
         src = str(ROOT / "bench" / source)
         exe = str(directory / lang)
-        if lang == "kawa":
+        if lang == "wky":
             flags = ["-O3", "--bounds-check=safe"]
         elif lang == "c":
             flags = ["-O3", "-march=native", "-std=c11", "-ffp-contract=off"]
@@ -174,8 +174,8 @@ def benchmark(entry, compilers, args, work, rng):
                 row["warnings"].append(lang + ": MAD exceeds 5% of median; rerun on an idle host")
         # Only reviewed matched-algorithm workloads receive comparative ratios.
         if entry["suite"] == "matched":
-            row["ratios"] = {"kawa_over_"+k: row["timings"]["kawa"]["median_seconds"] / v["median_seconds"]
-                             for k,v in row["timings"].items() if k != "kawa"}
+            row["ratios"] = {"wky_over_"+k: row["timings"]["wky"]["median_seconds"] / v["median_seconds"]
+                             for k,v in row["timings"].items() if k != "wky"}
         row["status"] = "measured"
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         row["error"] = str(exc)
@@ -187,7 +187,7 @@ def benchmark(entry, compilers, args, work, rng):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--kawac", default=str(ROOT/"build-cmake/kawac"))
+    ap.add_argument("--still", default=str(ROOT/"build-cmake/still"))
     ap.add_argument("--cc", default="clang")
     ap.add_argument("--rustc", default="rustc")
     ap.add_argument("--suite", choices=["matched", "historical", "all"], default="matched")
@@ -216,7 +216,7 @@ def main():
         for entry in selected:
             print(f"{entry['name']}: {entry['suite']} — {entry['contract']}")
         return 0
-    compilers = {"kawa": args.kawac, "c": args.cc, "rust": args.rustc}
+    compilers = {"wky": args.still, "c": args.cc, "rust": args.rustc}
     for lang, compiler in compilers.items():
         found = shutil.which(compiler)
         if not found:
@@ -231,7 +231,7 @@ def main():
               "environment": {k:environment()[k] for k in ["LC_ALL","LANG","NO_COLOR"]},
               "note": "Matched means algorithm/data/layout/scheduling and valid-input semantics. Index checks are enabled; signed arithmetic is bounded by the input domain. CLI/runtime allocation costs can differ and are included. No temporal safety or aggregate language ranking is claimed."},
               "compilers": {}, "results": []}
-    with tempfile.TemporaryDirectory(prefix="kawa-bench-") as folder:
+    with tempfile.TemporaryDirectory(prefix="wky-bench-") as folder:
         work = Path(folder)
         for lang, compiler in compilers.items():
             result = invoke([compiler, "--version"], work)

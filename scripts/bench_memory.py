@@ -21,7 +21,7 @@ UNAVAILABLE=2**64-1
 def invoke(command, work, extra_env=None):
     env=dict(os.environ)
     if extra_env: env.update(extra_env)
-    for key in ('KAWA_NO_OPT','KAWA_NO_PRINTF','KAWA_DUMP_BAD'):
+    for key in ('STILL_NO_OPT','STILL_NO_PRINTF','STILL_DUMP_BAD'):
         env.pop(key,None)
     result=subprocess.run([str(x) for x in command],cwd=work,env=env,capture_output=True,timeout=120)
     if result.returncode or result.stderr:
@@ -55,7 +55,7 @@ def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--kawac',default=str(ROOT/'build-cmake/kawac'))
+    p.add_argument('--still',default=str(ROOT/'build-cmake/still'))
     p.add_argument('--clang',default=str(Path(invoke(['llvm-config','--bindir'],ROOT).decode().strip())/'clang'))
     p.add_argument('--rounds',type=int,default=50000000)
     p.add_argument('--samples',type=int,default=7)
@@ -73,25 +73,25 @@ def main():
     if not (0<=a.rounds<=10**9 and 0<=a.seed<=65535 and 1<=a.size<=1048576 and
             a.size&(a.size-1)==0 and a.samples>=3 and a.warmups>=1):
         p.error('invalid workload or insufficient sampling')
-    compiler=Path(shutil.which(a.kawac) or a.kawac).resolve()
-    sources={lang:ROOT/f'bench/managed/{a.workload}.{ext}' for lang,ext in [('kawa','kawa'),('c','c')]}
+    compiler=Path(shutil.which(a.still) or a.still).resolve()
+    sources={lang:ROOT/f'bench/managed/{a.workload}.{ext}' for lang,ext in [('wky','wky'),('c','c')]}
     result={'contract':'Equal descriptor runtime and safety; process timing includes initialization and cleanup.',
             'workload':a.workload,'timing_counters':False,'platform':platform.platform(),'machine':platform.machine(),
             'compiler_sha256':digest(compiler),'sources':{l:digest(s) for l,s in sources.items()},
-            'runtime_sha256':digest(ROOT/'src/runtime/kawa_memory.c'),
-            'runtime_header_sha256':digest(ROOT/'src/runtime/kawa_memory.h'),
+            'runtime_sha256':digest(ROOT/'src/runtime/wky_memory.c'),
+            'runtime_header_sha256':digest(ROOT/'src/runtime/wky_memory.h'),
             'clang_version':invoke([a.clang,'--version'],ROOT).decode().splitlines()[0],
             'sdkroot':os.environ.get('SDKROOT'),'cases':[],'samples':a.samples,'warmups':a.warmups}
     if a.sanitize_c:
         result['sanitizer_clang_version']=invoke([sanitizer_clang,'--version'],ROOT).decode().splitlines()[0]
     sanitized_runs=0
-    with tempfile.TemporaryDirectory(prefix='kawa-memory-bench-') as d:
+    with tempfile.TemporaryDirectory(prefix='wky-memory-bench-') as d:
         work=Path(d); bins={}
         for lang in sources:
             for metrics in (False,True):
                 exe=work/f'{lang}-{int(metrics)}'
-                cmd=[compiler,'-O3',*(['--memory-metrics'] if metrics else []),sources[lang],'-o',exe] if lang=='kawa' else [
-                    a.clang,'-O3','-march=native','-std=c11',*(['-DKAWA_MEMORY_METRICS'] if metrics else []),sources[lang],'-o',exe,'-pthread']
+                cmd=[compiler,'-O3',*(['--memory-metrics'] if metrics else []),sources[lang],'-o',exe] if lang=='wky' else [
+                    a.clang,'-O3','-march=native','-std=c11',*(['-DWKY_MEMORY_METRICS'] if metrics else []),sources[lang],'-o',exe,'-pthread']
                 invoke(cmd,work); bins[lang,metrics]=exe
         for n,seed,size in [(0,0,1),(1,1,1),(17,7,8),(65,65535,64),(1025,42,1024)]:
             for mode in (0,1):
@@ -110,7 +110,7 @@ def main():
             if a.workload=='subobject_walk': instrumentation[lang,mode,scatter]['subobject_views']=values[9]
         for mode in (0,1):
             for scatter in (0,1):
-                assert instrumentation['kawa',mode,scatter]==instrumentation['c',mode,scatter],('different policies/layout/counters',mode,scatter)
+                assert instrumentation['wky',mode,scatter]==instrumentation['c',mode,scatter],('different policies/layout/counters',mode,scatter)
         if a.sanitize_c:
             exe=work/'c-sanitized'
             invoke([sanitizer_clang,'-O1','-g','-std=c11','-fsanitize=address,undefined',

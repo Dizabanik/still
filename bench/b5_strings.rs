@@ -1,7 +1,7 @@
-// Rust twin of b5_strings.kawa: tokenize a fixed corpus in place, FNV-1a
+// Rust twin of b5_strings.wky: tokenize a fixed corpus in place, FNV-1a
 // each word over raw bytes, fold into an accumulator, content-compare every
 // 16th word. Words are (start,len) slices of one static byte buffer -- the
-// manual analogue of Kawa's fat str views.
+// manual analogue of Whisky's fat str views.
 static CORPUS: &[u8] = b"the quick brown fox jumps over the lazy dog the quick brown fox pack my box with five dozen liquor jugs pack my box with five how vexingly quick daft zebras jump how vexingly quick daft zebras sphinx of black quartz judge my vow sphinx of black quartz judge ";
 
 #[inline]

@@ -1,0 +1,30 @@
+import stdc;
+
+fn void greet(str name) {
+    stdc.printf("hi %s\n", name);
+}
+
+fn void maybe_twice(i32 n) {
+    if (n <= 0) { return; }
+    stdc.printf("tick %d\n", n);
+    return;
+}
+
+fn void noop() { return; }
+
+struct Counter { u32 hits; }
+impl Counter {
+    fn void add(Counter* self, u32 by) { (*self).hits = (*self).hits + by; return; }
+}
+
+fn i32 main() {
+    greet("wky");
+    maybe_twice(1);
+    maybe_twice(0);
+    noop();
+    Counter c = {0,};
+    c.add(&c, 40);
+    c.add(&c, 2);
+    stdc.printf("%d\n", c.hits);
+    return 0;
+}

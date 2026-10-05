@@ -1,4 +1,4 @@
-// Rust twin of b4_reductions.kawa: same reduction mix over fixed arrays --
+// Rust twin of b4_reductions.wky: same reduction mix over fixed arrays --
 // i32 sum, f32 dot accumulated in f64, i32 max.
 static mut XI: [i32; 262144] = [0; 262144];
 static mut XF: [f32; 131072] = [0.0; 131072];

@@ -8,7 +8,7 @@ import time
 
 def run_measured(command,work,timeout=120):
     env=dict(os.environ)
-    for key in ('KAWA_NO_OPT','KAWA_NO_PRINTF','KAWA_DUMP_BAD'):
+    for key in ('STILL_NO_OPT','STILL_NO_PRINTF','STILL_DUMP_BAD'):
         env.pop(key,None)
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         started=time.perf_counter_ns()

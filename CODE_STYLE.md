@@ -1,0 +1,76 @@
+# Whisky and still code conventions
+
+## Names and namespaces
+
+**Whisky** is the language. **`wky`** is its machine-readable abbreviation and
+**`.wky`** is its source extension. **`still`** is the compiler executable and
+compiler distribution. Choose names by what they represent:
+
+| Domain | Convention | Examples |
+| --- | --- | --- |
+| Language in prose and diagnostics | `Whisky` | Whisky memory trap, Whisky program |
+| Source files, code fences, language keys | `wky`, `.wky` | `hello.wky`, benchmark `sources.wky` |
+| Compiler executable, build targets, release archives | `still` | `still_debug`, `still-0.1.0-linux-x86_64.tar.gz` |
+| Compiler lifecycle, diagnostics, reports, debug emission | `still_`, `Still` | `still_compile`, `still_diag_error`, `StillCompiler` |
+| Language semantics, lowering, runtime data types | `wky_`, `Wky` | `wky_comptime_eval`, `wky_memory_layout`, `WkyRef` |
+| Compiler controls, diagnostic constants, compiler header guards | `STILL_` | `STILL_NATIVE_CPU`, `STILL_NO_OPT`, `STILL_E_TYPE`, `STILL_CODEGEN_H` |
+| Runtime controls and language execution policies | `WKY_` | `WKY_MEMORY_METRICS`, `WKY_GENERATION_MAX`, `WKY_COMPTIME_MAX_STEPS` |
+| Generated runtime symbols and LLVM type/attribute/metadata names | `__wky_`, `wky.` | `__wky_mem_address`, `wky.site`, `wky.source` |
+
+Use **`wky_`**, not `why_` or a full `whisky_` prefix, for language interfaces.
+Use **`still_`** when an API manages the compiler or its output. For example,
+`still_init` initializes a compiler; `wky_memory_layout` describes a language
+value's runtime representation even though the implementation lives in codegen.
+
+Keep useful subsystem names such as `arena_`, `lexer_`, `parser_`, and
+`codegen_`. Local helpers and user programs do not need a brand prefix.
+Do not rename LLVM, libc, or timbr interfaces: those namespaces belong to their
+dependencies. Update repository links and Git remotes together for an
+authorized repository rename; preserve unrelated dependency URLs.
+
+`__wky_` names are reserved for compiler-generated code. The backend entry
+points `wky_main`, `wky_globals_init`, and `wky_trap` are also reserved. User
+declarations must not impersonate these symbols. C runtime definitions share
+their emitted symbol names so bitcode linking does not require an adapter.
+Derive literal prefix and LLVM name lengths with `sizeof("literal") - 1`;
+never hard-code a length next to a name that can change.
+
+Use `snake_case` for C functions, variables, and files; `PascalCase` for named
+types; and `UPPER_SNAKE_CASE` for constants and configuration macros. A compiler
+context can be called `c` in lowering functions or `compiler` in the driver.
+Stable diagnostic numbers (`E0001`, etc.) remain independent of branding.
+
+## Formatting and file organization
+
+Use C11, `.clang-format`, and `.editorconfig`. Follow the surrounding indentation
+when making a focused change; avoid reformatting unrelated code. Keep headers
+self-contained, use include guards, and put private declarations in the relevant
+subsystem rather than expanding the public compiler API.
+
+Split files by responsibility when that makes ownership or invariants clearer.
+Keep runtime code in `src/runtime/`, executable language contracts in `tests/`,
+and independent benchmark models in `scripts/bench_oracles.py`. Generate runtime
+bitcode headers in the build directory. Build outputs, caches, and measurement
+reports must stay in ignored directories.
+
+## Correctness and performance
+
+Document ownership, bounds, and lifetime assumptions at interface boundaries.
+Preserve the distinction between owners, bounded references, and stability
+guards. Check overflow and allocation failure before committing a mutation.
+Do not bypass safety checks to improve a timing result.
+
+Avoid work in hot paths unless it is required by semantics: prefer compile-time
+facts, reuse metadata, and keep allocation and instrumentation deliberate. Changes
+to representations or calling conventions must update both lowering and runtime
+contracts. Gate metrics so normal builds do not pay for measurement.
+
+Regression tests need independent expected behavior. Preserve `.wky.out`
+fixtures byte-for-byte except when an intentional behavior change requires a
+reviewed update. A memory-safety test must prove the intended diagnostic or trap;
+a crash alone is not success. Rejection tests should pin stable diagnostic codes.
+
+Benchmarks must rebuild all implementations, validate outputs before timing,
+use equivalent workloads for comparisons, and report samples, toolchains, and
+median/MAD. Keep sanitizers and correctness counters outside timed runs. Hosted
+CI validates correctness; it does not establish a performance ranking.

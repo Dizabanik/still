@@ -5,7 +5,7 @@
       "name": "runtime_mix",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/runtime_mix.kawa",
+        "wky": "matched/runtime_mix.wky",
         "c": "matched/runtime_mix.c",
         "rust": "matched/runtime_mix.rs"
       },
@@ -58,7 +58,7 @@
       "name": "dynamic_gather",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/dynamic_gather.kawa",
+        "wky": "matched/dynamic_gather.wky",
         "c": "matched/dynamic_gather.c",
         "rust": "matched/dynamic_gather.rs"
       },
@@ -121,7 +121,7 @@
       "name": "indexed_graph",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/indexed_graph.kawa",
+        "wky": "matched/indexed_graph.wky",
         "c": "matched/indexed_graph.c",
         "rust": "matched/indexed_graph.rs"
       },
@@ -184,7 +184,7 @@
       "name": "overlap_views",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/overlap_views.kawa",
+        "wky": "matched/overlap_views.wky",
         "c": "matched/overlap_views.c",
         "rust": "matched/overlap_views.rs"
       },
@@ -247,7 +247,7 @@
       "name": "matrix4",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/matrix4.kawa",
+        "wky": "matched/matrix4.wky",
         "c": "matched/matrix4.c",
         "rust": "matched/matrix4.rs"
       },
@@ -300,7 +300,7 @@
       "name": "ring_pipeline",
       "suite": "matched",
       "sources": {
-        "kawa": "matched/ring_pipeline.kawa",
+        "wky": "matched/ring_pipeline.wky",
         "c": "matched/ring_pipeline.c",
         "rust": "matched/ring_pipeline.rs"
       },
@@ -353,7 +353,7 @@
       "name": "b10_assoc_const",
       "suite": "historical",
       "sources": {
-        "kawa": "b10_assoc_const.kawa",
+        "wky": "b10_assoc_const.wky",
         "c": "b10_assoc_const.c",
         "rust": "b10_assoc_const.rs"
       },
@@ -363,7 +363,7 @@
       "name": "b11_tagged_union",
       "suite": "historical",
       "sources": {
-        "kawa": "b11_tagged_union.kawa",
+        "wky": "b11_tagged_union.wky",
         "c": "b11_tagged_union.c",
         "rust": "b11_tagged_union.rs"
       },
@@ -373,7 +373,7 @@
       "name": "b12_range_slice",
       "suite": "historical",
       "sources": {
-        "kawa": "b12_range_slice.kawa",
+        "wky": "b12_range_slice.wky",
         "c": "b12_range_slice.c",
         "rust": "b12_range_slice.rs"
       },
@@ -383,7 +383,7 @@
       "name": "b13_bounds",
       "suite": "historical",
       "sources": {
-        "kawa": "b13_bounds.kawa",
+        "wky": "b13_bounds.wky",
         "c": "b13_bounds.c",
         "rust": "b13_bounds.rs"
       },
@@ -393,7 +393,7 @@
       "name": "b14_format",
       "suite": "historical",
       "sources": {
-        "kawa": "b14_format.kawa",
+        "wky": "b14_format.wky",
         "c": "b14_format.c",
         "rust": "b14_format.rs"
       },
@@ -403,7 +403,7 @@
       "name": "b15_tuples",
       "suite": "historical",
       "sources": {
-        "kawa": "b15_tuples.kawa",
+        "wky": "b15_tuples.wky",
         "c": "b15_tuples.c",
         "rust": "b15_tuples.rs"
       },
@@ -413,7 +413,7 @@
       "name": "b16_generics_multi",
       "suite": "historical",
       "sources": {
-        "kawa": "b16_generics_multi.kawa",
+        "wky": "b16_generics_multi.wky",
         "c": "b16_generics_multi.c",
         "rust": "b16_generics_multi.rs"
       },
@@ -423,7 +423,7 @@
       "name": "b1_hash",
       "suite": "historical",
       "sources": {
-        "kawa": "b1_hash.kawa",
+        "wky": "b1_hash.wky",
         "c": "b1_hash.c",
         "rust": "b1_hash.rs"
       },
@@ -433,7 +433,7 @@
       "name": "b2_mem",
       "suite": "historical",
       "sources": {
-        "kawa": "b2_mem.kawa",
+        "wky": "b2_mem.wky",
         "c": "b2_mem.c",
         "rust": "b2_mem.rs"
       },
@@ -443,7 +443,7 @@
       "name": "b3_particles",
       "suite": "historical",
       "sources": {
-        "kawa": "b3_particles.kawa",
+        "wky": "b3_particles.wky",
         "c": "b3_particles.c",
         "rust": "b3_particles.rs"
       },
@@ -460,7 +460,7 @@
       "name": "b4_reductions",
       "suite": "historical",
       "sources": {
-        "kawa": "b4_reductions.kawa",
+        "wky": "b4_reductions.wky",
         "c": "b4_reductions.c",
         "rust": "b4_reductions.rs"
       },
@@ -470,7 +470,7 @@
       "name": "b5_strings",
       "suite": "historical",
       "sources": {
-        "kawa": "b5_strings.kawa",
+        "wky": "b5_strings.wky",
         "c": "b5_strings.c",
         "rust": "b5_strings.rs"
       },
@@ -480,17 +480,17 @@
       "name": "b6_chan",
       "suite": "historical",
       "sources": {
-        "kawa": "b6_chan.kawa",
+        "wky": "b6_chan.wky",
         "c": "b6_chan.c",
         "rust": "b6_chan.rs"
       },
-      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Different scheduling: Kawa coroutines, C ucontext, Rust threads; implementation comparison only. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
+      "contract": "Historical fixed-input workload; differential output verification only; no independent oracle or cross-language ranking. Different scheduling: Whisky coroutines, C ucontext, Rust threads; implementation comparison only. Arithmetic was revised to avoid signed overflow; old outputs and timing claims do not describe this version."
     },
     {
       "name": "b7_errors",
       "suite": "historical",
       "sources": {
-        "kawa": "b7_errors.kawa",
+        "wky": "b7_errors.wky",
         "c": "b7_errors.c",
         "rust": "b7_errors.rs"
       },
@@ -500,7 +500,7 @@
       "name": "b8_generics",
       "suite": "historical",
       "sources": {
-        "kawa": "b8_generics.kawa",
+        "wky": "b8_generics.wky",
         "c": "b8_generics.c",
         "rust": "b8_generics.rs"
       },
@@ -510,7 +510,7 @@
       "name": "b9_destructure",
       "suite": "historical",
       "sources": {
-        "kawa": "b9_destructure.kawa",
+        "wky": "b9_destructure.wky",
         "c": "b9_destructure.c",
         "rust": "b9_destructure.rs"
       },
@@ -520,7 +520,7 @@
       "name": "bench2",
       "suite": "historical",
       "sources": {
-        "kawa": "bench2.kawa",
+        "wky": "bench2.wky",
         "c": "bench2.c",
         "rust": "bench2.rs"
       },

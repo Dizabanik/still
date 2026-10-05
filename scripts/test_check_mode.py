@@ -10,13 +10,13 @@ p = argparse.ArgumentParser()
 p.add_argument('compiler')
 a = p.parse_args()
 compiler = str(Path(a.compiler).resolve())
-with tempfile.TemporaryDirectory(prefix='kawa-check-') as directory:
+with tempfile.TemporaryDirectory(prefix='wky-check-') as directory:
     root = Path(directory)
     for name in ('clang', 'cc'):
         fake = root / name
         fake.write_text('#!/bin/sh\necho invoked > linker-was-run\nexit 97\n')
         fake.chmod(0o755)
-    source = root / 'input.kawa'
+    source = root / 'input.wky'
     for body, status in [
         ('fn main() { let a: owner<i64> = own(2); a[1]=42; return 0; }', 0),
         ('fn main() { let a: owner<i64> = own(2); let b=a; return 0; }', 1),

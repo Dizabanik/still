@@ -6,7 +6,7 @@
 #include <sys/sysctl.h>
 #endif
 
-static char *native_triple(KawaCompiler *c,const char *default_triple) {
+static char *native_triple(StillCompiler *c,const char *default_triple) {
 #ifdef __APPLE__
 	/* A Darwin kernel version is not a macOS deployment version. LLVM's
 	 * kernel-to-product mapping can lag a new OS; use the product version
@@ -33,7 +33,7 @@ static char *native_triple(KawaCompiler *c,const char *default_triple) {
 		part=end+1;
 	}
 	if (!valid || !components[0]) {
-		kdiag_error_at(KAWA_E_SEMANTIC,"<kawa>",NULL,0,"invalid macOS deployment version");
+		still_diag_error_at(STILL_E_SEMANTIC,"<wky>",NULL,0,"invalid macOS deployment version");
 		exit(1);
 	}
 	if (!getenv("MACOSX_DEPLOYMENT_TARGET")) components[2]=0;
@@ -49,21 +49,21 @@ static char *native_triple(KawaCompiler *c,const char *default_triple) {
 	return arena_strdup(c->arena,default_triple);
 }
 
-void kawa_set_debug(KawaCompiler *c, int debug) { c->debug_build = debug; }
+void still_set_debug(StillCompiler *c, int debug) { c->debug_build = debug; }
 
-void kawa_set_source_file(KawaCompiler *c, const char *filename) {
+void still_set_source_file(StillCompiler *c, const char *filename) {
 	c->source_filename = filename;
-	kawa_di_init(c, filename); // no-op unless debug_build is set
+	still_di_init(c, filename); // no-op unless debug_build is set
 }
 
-void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
+void still_init(StillCompiler *c, const char *module_name, Arena *arena) {
 	// Zero everything first so any field we forget to initialize below
 	// is at least NULL/0 and not garbage.
 	memset(c, 0, sizeof(*c));
 
 	if (!arena) {
-		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0,
-					   "kawa_init: arena must not be NULL"); // internal
+		still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
+					   "still_init: arena must not be NULL"); // internal
 		exit(1);
 	}
 	c->arena = arena;
@@ -85,7 +85,7 @@ void kawa_init(KawaCompiler *c, const char *module_name, Arena *arena) {
 	LLVMTargetRef target;
 	char *target_error = NULL;
 	if (LLVMGetTargetFromTriple(triple, &target, &target_error)) {
-		kdiag_error_at(KAWA_E_SEMANTIC, "<kawa>", NULL, 0, "target selection failed: %s", target_error);
+		still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0, "target selection failed: %s", target_error);
 		LLVMDisposeMessage(target_error);
 		exit(1);
 	}

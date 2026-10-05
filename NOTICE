@@ -1,11 +1,11 @@
-Kawa compiler (kawac)
-Copyright 2026 Dizabanik and Kawa contributors
+Whisky compiler (still)
+Copyright 2026 Dizabanik and Whisky contributors
 
-Kawa is licensed under the Apache License, Version 2.0.
+Whisky is licensed under the Apache License, Version 2.0.
 
 The timbr diagnostics library is maintained by Dizabanik and is licensed
 under MIT, as declared in its README. Its license and attribution are
 reproduced in third_party/timbr.LICENSE.
 
 LLVM and Clang are external toolchain dependencies and are not bundled
-in Kawa release archives. Their upstream licenses continue to apply.
+in Whisky release archives. Their upstream licenses continue to apply.

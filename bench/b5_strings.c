@@ -2,9 +2,9 @@
 #include <stdint.h>
 #include <string.h>
 
-// C twin of b5_strings.kawa: same corpus, same tokenize + FNV-1a over each
+// C twin of b5_strings.wky: same corpus, same tokenize + FNV-1a over each
 // word, content compare every 16th word. Words are (ptr,len) pairs -- the
-// manual analogue of Kawa's fat str views.
+// manual analogue of Whisky's fat str views.
 
 static const char *CORPUS =
     "the quick brown fox jumps over the lazy dog the quick brown fox pack my "

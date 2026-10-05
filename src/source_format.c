@@ -10,13 +10,13 @@
  * separates tokens explicitly so formatting cannot accidentally fuse them. */
 typedef struct { char *text; size_t length, capacity; unsigned indent; int line_start; } Output;
 static void append(Output *out,const char *text,size_t length) {
-    if (length>SIZE_MAX-out->length-1) { fputs("kawac: formatted source is too large\n",stderr); exit(2); }
+    if (length>SIZE_MAX-out->length-1) { fputs("still: formatted source is too large\n",stderr); exit(2); }
     size_t need=out->length+length+1;
     if (need>out->capacity) {
         size_t capacity=out->capacity ? out->capacity : 4096;
         while (capacity<need) { if (capacity>SIZE_MAX/2) { capacity=need; break; } capacity*=2; }
         char *grown=realloc(out->text,capacity);
-        if (!grown) { fputs("kawac: out of memory while formatting\n",stderr); exit(2); }
+        if (!grown) { fputs("still: out of memory while formatting\n",stderr); exit(2); }
         out->text=grown; out->capacity=capacity;
     }
     memcpy(out->text+out->length,text,length); out->length+=length; out->text[out->length]=0;

@@ -38,7 +38,7 @@ for name, message in cases.items():
         assert result.returncode == 0 and result.stdout == b'memory runtime: verified\n' and not result.stderr, result
     else:
         assert result.returncode == -signal.SIGABRT, (name, result)
-        assert result.stderr == f'Kawa memory trap: {message}'.encode() or (
-            result.stderr.startswith(b'Kawa memory trap: ') and message.encode() in result.stderr
+        assert result.stderr == f'Whisky memory trap: {message}'.encode() or (
+            result.stderr.startswith(b'Whisky memory trap: ') and message.encode() in result.stderr
             and b'Sanitizer' not in result.stderr), (name, result)
     print('PASS', name)

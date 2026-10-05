@@ -11,7 +11,7 @@
 static char *pending_help;
 static char *pending_note;
 
-// Program source text (set once by the driver) for kdiag_line().
+// Program source text (set once by the driver) for still_diag_line().
 static const char *source_text;
 static int source_len;
 static int json_diagnostics;
@@ -19,9 +19,9 @@ typedef struct { const char *filename; int original_line, start, end; int owns_f
 static SourceLocation *source_locations;
 static int source_location_count;
 
-void kdiag_set_json(int enabled) { json_diagnostics=enabled; }
+void still_diag_set_json(int enabled) { json_diagnostics=enabled; }
 
-void kdiag_json_string(FILE *out,const char *text) {
+void still_diag_json_string(FILE *out,const char *text) {
 	fputc('"',out);
 	for (const unsigned char *p=(const unsigned char *)(text ? text : ""); *p; ++p) {
 		if (*p=='"' || *p=='\\') { fputc('\\',out); fputc(*p,out); }
@@ -43,9 +43,9 @@ void kdiag_json_string(FILE *out,const char *text) {
 	}
 	fputc('"',out);
 }
-#define json_string kdiag_json_string
+#define json_string still_diag_json_string
 
-void kdiag_set_source(const char *text, int len) {
+void still_diag_set_source(const char *text, int len) {
 	source_text = text;
 	source_len = len;
 	for (int i=1; i<=source_location_count; ++i)
@@ -72,14 +72,14 @@ void kdiag_set_source(const char *text, int len) {
 		source_locations[line]=(SourceLocation){filename,original,len,len,0};
 }
 
-void kdiag_location(int expanded_line,const char **filename,int *source_line) {
+void still_diag_location(int expanded_line,const char **filename,int *source_line) {
 	*source_line=expanded_line;
 	if (expanded_line<1 || expanded_line>source_location_count || !source_locations) return;
 	SourceLocation location=source_locations[expanded_line];
 	if (location.filename) { *filename=location.filename; *source_line=location.original_line; }
 }
 
-char *kdiag_line(int line_num) {
+char *still_diag_line(int line_num) {
 	if (!source_text || line_num<1 || line_num>source_location_count)
 		return calloc(1,1);
 	const char *p=source_text+source_locations[line_num].start;
@@ -91,7 +91,7 @@ char *kdiag_line(int line_num) {
 	out[e - p] = '\0';
 	return out;
 }
-void kdiag_offset_location(size_t offset,int *expanded_line,int *byte_column) {
+void still_diag_offset_location(size_t offset,int *expanded_line,int *byte_column) {
 	int low=1,high=source_location_count;
 	if (!source_locations || offset>(size_t)source_len) { *expanded_line=0; *byte_column=1; return; }
 	while (low<high) {
@@ -101,8 +101,8 @@ void kdiag_offset_location(size_t offset,int *expanded_line,int *byte_column) {
 	*expanded_line=low; *byte_column=(int)(offset-source_locations[low].start)+1;
 }
 
-int kdiag_error_count(void) { return timbr_error_count; }
-int kdiag_warn_count(void) { return timbr_warning_count; }
+int still_diag_error_count(void) { return timbr_error_count; }
+int still_diag_warn_count(void) { return timbr_warning_count; }
 
 static void vappend(char **buf, const char *fmt, va_list ap) {
 	char tmp[512];
@@ -114,14 +114,14 @@ static void vappend(char **buf, const char *fmt, va_list ap) {
 	memcpy(*buf + old, tmp, strlen(tmp) + 1);
 }
 
-void kdiag_help(const char *fmt, ...) {
+void still_diag_help(const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 	vappend(&pending_help, fmt, ap);
 	va_end(ap);
 }
 
-void kdiag_note(const char *fmt, ...) {
+void still_diag_note(const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 	vappend(&pending_note, fmt, ap);
@@ -141,7 +141,7 @@ static void emit(int level, int code, const char *filename,
 		code_str = code_buf;
 	}
 
-	kdiag_location(line_num,&filename,&line_num);
+	still_diag_location(line_num,&filename,&line_num);
 	if (json_diagnostics) {
 		FILE *out=timbr_config.output_stream ? timbr_config.output_stream : stderr;
 		if (level==TIMBR_ERROR) ++timbr_error_count;
@@ -149,7 +149,7 @@ static void emit(int level, int code, const char *filename,
 		fputs("{\"type\":\"diagnostic\",\"level\":",out); json_string(out,level==TIMBR_ERROR ? "error" : "warning");
 		fputs(",\"code\":",out); json_string(out,code_str);
 		fputs(",\"message\":",out); json_string(out,title);
-		fputs(",\"location\":{\"file\":",out); json_string(out,filename ? filename : "<kawa>");
+		fputs(",\"location\":{\"file\":",out); json_string(out,filename ? filename : "<wky>");
 		fprintf(out,",\"line\":%d,\"column\":%d,\"column_unit\":\"byte\",\"length\":%d,\"source_line\":",line_num,col_num,len>0 ? len : 1);
 		json_string(out,code_line); fputs("},\"notes\":[",out);
 		if (pending_note) json_string(out,pending_note);
@@ -159,7 +159,7 @@ static void emit(int level, int code, const char *filename,
 		return;
 	}
 	TimbrSpan span = {.code_line = code_line,
-					  .filename = filename ? filename : "<kawa>",
+					  .filename = filename ? filename : "<wky>",
 					  .line_num = line_num,
 					  .col_num = col_num,
 					  .len = len > 0 ? len : 1,
@@ -176,7 +176,7 @@ static void emit(int level, int code, const char *filename,
 	pending_note = NULL;
 }
 
-void kdiag_error(int code, const char *filename, const char *code_line,
+void still_diag_error(int code, const char *filename, const char *code_line,
 				 int line_num, int col_num, int len, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
@@ -185,11 +185,11 @@ void kdiag_error(int code, const char *filename, const char *code_line,
 	va_end(ap);
 }
 
-void kdiag_error_at(int code, const char *filename, const char *code_line,
+void still_diag_error_at(int code, const char *filename, const char *code_line,
 					int line_num, const char *fmt, ...) {
 	char *owned = NULL;
 	if (!code_line)
-		code_line = owned = kdiag_line(line_num);
+		code_line = owned = still_diag_line(line_num);
 	va_list ap;
 	va_start(ap, fmt);
 	emit(TIMBR_ERROR, code, filename, code_line, line_num, 1, 1, fmt, ap);
@@ -197,11 +197,11 @@ void kdiag_error_at(int code, const char *filename, const char *code_line,
 	free(owned);
 }
 
-void kdiag_warn_at(int code, const char *filename, const char *code_line,
+void still_diag_warn_at(int code, const char *filename, const char *code_line,
 				   int line_num, const char *fmt, ...) {
 	char *owned = NULL;
 	if (!code_line)
-		code_line = owned = kdiag_line(line_num);
+		code_line = owned = still_diag_line(line_num);
 	va_list ap;
 	va_start(ap, fmt);
 	emit(TIMBR_WARN, code, filename, code_line, line_num, 1, 1, fmt, ap);
@@ -211,15 +211,15 @@ void kdiag_warn_at(int code, const char *filename, const char *code_line,
 
 static void emit_node(int level,int code,const char *filename,const ASTNode *node,const char *fmt,va_list ap) {
 	int line=node ? node->line : 0;
-	char *source=kdiag_line(line);
+	char *source=still_diag_line(line);
 	emit(level,code,filename,source,line,node && node->column>0 ? node->column : 1,
 		node && node->span_length>0 ? node->span_length : 1,fmt,ap);
 	free(source);
 }
-void kdiag_error_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
+void still_diag_error_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
 	va_list ap; va_start(ap,fmt); emit_node(TIMBR_ERROR,code,filename,node,fmt,ap); va_end(ap);
 }
-void kdiag_warn_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
+void still_diag_warn_node(int code,const char *filename,const ASTNode *node,const char *fmt,...) {
 	va_list ap; va_start(ap,fmt); emit_node(TIMBR_WARN,code,filename,node,fmt,ap); va_end(ap);
 }
 
@@ -251,14 +251,14 @@ static int find_name_col(const char *line, const char *name, int *out_len) {
 static void emit_named(int level, int code, const char *filename,
 					   int line_num, const char *name, const char *fmt,
 					   va_list ap) {
-	char *code_line = kdiag_line(line_num);
+	char *code_line = still_diag_line(line_num);
 	int len;
 	int col = find_name_col(code_line, name, &len);
 	emit(level, code, filename, code_line, line_num, col, len, fmt, ap);
 	free(code_line);
 }
 
-void kdiag_error_named(int code, const char *filename, int line_num,
+void still_diag_error_named(int code, const char *filename, int line_num,
 					   const char *name, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
@@ -266,7 +266,7 @@ void kdiag_error_named(int code, const char *filename, int line_num,
 	va_end(ap);
 }
 
-void kdiag_warn(int code, const char *filename, const char *code_line,
+void still_diag_warn(int code, const char *filename, const char *code_line,
 				int line_num, int col_num, int len, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
@@ -275,7 +275,7 @@ void kdiag_warn(int code, const char *filename, const char *code_line,
 	va_end(ap);
 }
 
-void kdiag_summary(void) {
+void still_diag_summary(void) {
 	if (json_diagnostics) return;
 	FILE *f = timbr_config.output_stream ? timbr_config.output_stream : stderr;
 	bool color =
@@ -296,7 +296,7 @@ void kdiag_summary(void) {
 	}
 }
 
-int kdiag_explain(const char *code) {
+int still_diag_explain(const char *code) {
 	static const char *explanations[]={NULL,
 		"Syntax is invalid. Check the highlighted token and the surrounding delimiters.",
 		"A name is unavailable in this scope. Check spelling, declaration order, imports, and visibility.",
@@ -313,7 +313,7 @@ int kdiag_explain(const char *code) {
 	char *end;
 	long number=(code && (code[0]=='E' || code[0]=='W')) ? strtol(code+1,&end,10) : 0;
 	if (number<1 || number>12 || *end || strlen(code)!=5 || (number>=11)!=(code[0]=='W')) {
-		fprintf(stderr,"kawac: unknown diagnostic code '%s'\n",code ? code : ""); return 2;
+		fprintf(stderr,"still: unknown diagnostic code '%s'\n",code ? code : ""); return 2;
 	}
 	if (json_diagnostics) {
 		fputs("{\"code\":",stdout); json_string(stdout,code);
@@ -349,7 +349,7 @@ static int edit_distance(const char *a, const char *b) {
 	return row[lb];
 }
 
-const char *kdiag_closest(const char *needle, const char *const *candidates) {
+const char *still_diag_closest(const char *needle, const char *const *candidates) {
 	if (!needle)
 		return NULL;
 	int best = 9999;

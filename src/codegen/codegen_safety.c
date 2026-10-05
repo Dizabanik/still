@@ -193,8 +193,8 @@ static int origin_flow(LLVMValueRef v,LLVMValueRef origin,const unsigned *indice
         /* Runtime results never borrow a caller's slot address. Descriptor
          * metadata and allocation addresses have independent lifetimes. */
         if (LLVMIsAFunction(fn) &&
-            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11) &&
-            !strncmp(name,"__kawa_mem_",11)) return 0;
+            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1) &&
+            !strncmp(name,"__wky_mem_", sizeof("__wky_mem_") - 1)) return 0;
         int defined=LLVMIsAFunction(fn) && LLVMCountBasicBlocks(fn);
         if (!defined && !carries_pointer(LLVMTypeOf(v))) return 0;
         for (unsigned i=0; i<LLVMGetNumArgOperands(v); ++i) {
@@ -241,7 +241,7 @@ static int permitted_pure_call(LLVMValueRef call) {
 	if (!LLVMIsAFunction(callee))
 		return 0;
 	if (LLVMGetStringAttributeAtIndex(callee, LLVMAttributeFunctionIndex,
-									  "kawa.pure", 9))
+									  "wky.pure", sizeof("wky.pure") - 1))
 		return 1;
 	const char *name = LLVMGetValueName(callee);
 	// Memory intrinsics may only write local storage. Arithmetic/debug/lifetime
@@ -258,7 +258,7 @@ static int permitted_pure_call(LLVMValueRef call) {
 	for (int i = 0; prefixes[i]; i++)
 		if (strncmp(name, prefixes[i], strlen(prefixes[i])) == 0)
 			return 1;
-	return strcmp(name, "kawa_trap") == 0 ||
+	return strcmp(name, "wky_trap") == 0 ||
 		   (LLVMCountBasicBlocks(callee) == 0 &&
 			(strcmp(name, "memcmp") == 0 || strcmp(name, "strlen") == 0));
 }
@@ -271,15 +271,15 @@ static int nonretaining_leaf(const char *name) {
 		"strncmp","strchr","strrchr","printf","fprintf","sprintf","snprintf",
 		"puts","putchar","fwrite","fread","read","write","abort","free",NULL};
 	for (unsigned i=0; known[i]; ++i) if (!strcmp(name,known[i])) return 1;
-	return !strncmp(name,"llvm.",5) || !strcmp(name,"kawa_trap");
+	return !strncmp(name,"llvm.",5) || !strcmp(name,"wky_trap");
 }
 static int parameter_flow(LLVMValueRef value, LLVMValueRef param, FlowPath *path, unsigned depth) {
     return origin_flow(value,param,NULL,0,path,depth);
 }
-static int ast_carries_address(KawaCompiler *c,Type *type,unsigned depth) {
+static int ast_carries_address(StillCompiler *c,Type *type,unsigned depth) {
     if (!type) return 0;
     if (depth>=64) return 1;
-    type=kawa_resolve_type(c,type);
+    type=wky_resolve_type(c,type);
     switch (type->kind) {
     case TYPE_PTR: case TYPE_AMP: case TYPE_SLICE: case TYPE_OWNER:
     case TYPE_REF: case TYPE_ARENA: case TYPE_CHAN: case TYPE_HANDLE: return 1;
@@ -300,7 +300,7 @@ static int ast_carries_address(KawaCompiler *c,Type *type,unsigned depth) {
     default: return 0;
     }
 }
-static int address_parameter(KawaCompiler *c,LLVMValueRef fn,unsigned index) {
+static int address_parameter(StillCompiler *c,LLVMValueRef fn,unsigned index) {
     LLVMValueRef original=LLVMGetNamedFunction(c->module,LLVMGetValueName(fn));
     for (FunctionSignature *sig=c->function_signatures; sig; sig=sig->next)
         if (sig->function==original)
@@ -315,14 +315,14 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 	/* Compiler-owned runtime slots are borrowed for the call. Descriptor
 	 * pointers copied out of a slot refer to process-lived metadata, never
 	 * the caller's slot. Source functions cannot acquire this exception. */
-	if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11)) {
-		const char *runtime[]={"__kawa_mem_alloc","__kawa_mem_drop","__kawa_mem_clone",
-			"__kawa_mem_resize","__kawa_mem_capacity","__kawa_mem_address","__kawa_mem_slice",
-			"__kawa_mem_pin","__kawa_mem_try_pin","__kawa_mem_unpin","__kawa_mem_arena",
-            "__kawa_mem_arena_alloc","__kawa_mem_remove","__kawa_mem_store_owner",
-            "__kawa_mem_take","__kawa_mem_write_address","__kawa_mem_replace","__kawa_mem_view",
-            "__kawa_mem_value_drop","__kawa_mem_value_take","__kawa_mem_value_store",
-            "__kawa_mem_value_clone","__kawa_mem_value_clear",NULL};
+	if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1)) {
+		const char *runtime[]={"__wky_mem_alloc","__wky_mem_drop","__wky_mem_clone",
+			"__wky_mem_resize","__wky_mem_capacity","__wky_mem_address","__wky_mem_slice",
+			"__wky_mem_pin","__wky_mem_try_pin","__wky_mem_unpin","__wky_mem_arena",
+            "__wky_mem_arena_alloc","__wky_mem_remove","__wky_mem_store_owner",
+            "__wky_mem_take","__wky_mem_write_address","__wky_mem_replace","__wky_mem_view",
+            "__wky_mem_value_drop","__wky_mem_value_take","__wky_mem_value_store",
+            "__wky_mem_value_clone","__wky_mem_value_clear",NULL};
 		for (unsigned i=0; runtime[i]; ++i) if (!strcmp(name,runtime[i])) return 0;
 	}
 	if (!LLVMCountBasicBlocks(fn) && nonretaining_leaf(name)) return 0;
@@ -359,13 +359,13 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 	return 0;
 }
 
-void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
-    kawa_verify_effects(c);
+void wky_verify_safety(StillCompiler *c, LLVMTargetMachineRef machine) {
+    wky_verify_effects(c);
     LLVMModuleRef copy = LLVMCloneModule(c->module);
     /* Keep every source body available, including unused always-inline
      * accessors, so normalization cannot erase an invalid source contract. */
     for (LLVMValueRef fn=LLVMGetFirstFunction(copy); fn; fn=LLVMGetNextFunction(fn)) {
-        if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11))
+        if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1))
             LLVMSetLinkage(fn,LLVMExternalLinkage);
     }
 	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
@@ -374,7 +374,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 	LLVMDisposePassBuilderOptions(opts);
 	if (err) {
 		char *message = LLVMGetErrorMessage(err);
-		kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL, 0,
+		still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL, 0,
 					   "safety analysis failed: %s", message);
 		LLVMDisposeErrorMessage(message);
 		exit(1);
@@ -382,7 +382,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 	for (LLVMValueRef fn = LLVMGetFirstFunction(copy); fn;
 		 fn = LLVMGetNextFunction(fn)) {
 		LLVMAttributeRef source = LLVMGetStringAttributeAtIndex(
-			fn, LLVMAttributeFunctionIndex, "kawa.source", 11);
+			fn, LLVMAttributeFunctionIndex, "wky.source", sizeof("wky.source") - 1);
 		if (!source)
 			continue;
 		unsigned len;
@@ -391,13 +391,13 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 		memcpy(buf, line_text, len < 31 ? len : 31);
 		int line = atoi(buf);
 		int pure = LLVMGetStringAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
-												 "kawa.pure", 9) != NULL;
-		if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.nocapture",14)) {
+												 "wky.pure", sizeof("wky.pure") - 1) != NULL;
+		if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.nocapture", sizeof("wky.nocapture") - 1)) {
 			for (unsigned i=0; i<LLVMCountParams(fn); ++i) {
                 if (!address_parameter(c,fn,i)) continue;
 				CapturePath active[128]; char trace[2048];
 				if (retention_trace(fn,i,1,active,0,trace,sizeof(trace))) {
-					kdiag_error_at(KAWA_E_EFFECT,c->source_filename,NULL,line,"nocapture contract failed: %s",trace); exit(1);
+					still_diag_error_at(STILL_E_EFFECT,c->source_filename,NULL,line,"nocapture contract failed: %s",trace); exit(1);
 				}
 			}
 		}
@@ -412,7 +412,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 					 LLVMIsAAtomicRMWInst(in) || LLVMIsAAtomicCmpXchgInst(in) ||
 					 LLVMIsAFenceInst(in) ||
 					 (LLVMIsALoadInst(in) && LLVMGetVolatile(in)))) {
-					kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL,
+					still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL,
 								   line,
 								   "pure function `%s` has an external write "
 								   "or an unverified call effect",
@@ -428,7 +428,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
                 FlowPath path[256];
 				if (memory_copy(in) && !local_address(LLVMGetArgOperand(in,0),0) &&
 					contents_flow(LLVMGetArgOperand(in,1),NULL,fn,path,0,local_flow)) {
-					kdiag_error_at(KAWA_E_SEMANTIC,c->source_filename,NULL,line,
+					still_diag_error_at(STILL_E_SEMANTIC,c->source_filename,NULL,line,
 						"local address may escape through copied memory in function %s",LLVMGetValueName(fn)); exit(1);
 				}
 				if (LLVMIsACallInst(in) || LLVMIsAInvokeInst(in)) {
@@ -437,13 +437,13 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 						if (!contains_local(arg,path,0)) continue;
 						CapturePath active[128]; char trace[2048];
 						if (retention_trace(LLVMGetCalledValue(in),i,0,active,0,trace,sizeof(trace))) {
-							kdiag_note("the address originates in this function's stack; callees are checked transitively");
-							kdiag_error_at(KAWA_E_SEMANTIC,c->source_filename,NULL,line,"local address may escape through %s",trace); exit(1);
+							still_diag_note("the address originates in this function's stack; callees are checked transitively");
+							still_diag_error_at(STILL_E_SEMANTIC,c->source_filename,NULL,line,"local address may escape through %s",trace); exit(1);
 						}
 					}
 				}
 				if (value && contains_local(value, path, 0)) {
-					kdiag_error_at(KAWA_E_SEMANTIC, c->source_filename, NULL,
+					still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL,
 								   line,
 								   "local address may escape its lifetime in "
 								   "function `%s`",

@@ -2,7 +2,7 @@
 //
 // A small tree-walking interpreter over the AST: literals, const refs,
 // integer binops (via the existing folder) and -- the point of the
-// feature -- CALLS to `pure` functions whose bodies are ordinary Kawa
+// feature -- CALLS to `pure` functions whose bodies are ordinary Whisky
 // (lets, constant ifs, returns). The function's IR is never generated for
 // a comptime-only call; the compiler just runs it on i64 values.
 //
@@ -12,8 +12,8 @@
 // to ordinary runtime codegen.
 #include "codegen_internal.h"
 
-#define KAWA_COMPTIME_MAX_DEPTH 512
-#define KAWA_COMPTIME_MAX_STEPS 10000000
+#define WKY_COMPTIME_MAX_DEPTH 512
+#define WKY_COMPTIME_MAX_STEPS 10000000
 
 typedef struct {
 	long long value;
@@ -30,9 +30,9 @@ typedef struct CeEnv {
 	struct CeEnv *next;
 } CeEnv;
 
-static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env,
+static ComptimeInt ce_eval(StillCompiler *c, ASTNode *n, CeEnv *env,
 						   int depth, long long *steps);
-static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
+static ComptimeInt ce_exec_stmts(StillCompiler *c, ASTNode *stmts, CeEnv *env,
 								 int depth, long long *steps, int *returned);
 
 static ComptimeInt ce_fail(void) {
@@ -47,7 +47,7 @@ static ComptimeInt ce_bits(uint64_t bits, unsigned width, int sign) {
 	ComptimeInt result={(long long)bits,sign,1,width};
 	return result;
 }
-static ComptimeInt ce_convert(KawaCompiler *c, ComptimeInt v, Type *type, int lossy) {
+static ComptimeInt ce_convert(StillCompiler *c, ComptimeInt v, Type *type, int lossy) {
 	if (!v.ok || !type) return ce_fail();
 	LLVMTypeRef target=get_llvm_type(c,type);
 	if (LLVMGetTypeKind(target)!=LLVMIntegerTypeKind) return ce_fail();
@@ -61,7 +61,7 @@ static ComptimeInt ce_convert(KawaCompiler *c, ComptimeInt v, Type *type, int lo
 	return ce_bits((uint64_t)v.value,width,sign);
 }
 
-static ASTNode *ce_find_fn(KawaCompiler *c, const char *name) {
+static ASTNode *ce_find_fn(StillCompiler *c, const char *name) {
 	for (ASTNode *s = c->program_root ? c->program_root->next : NULL; s;
 		 s = s->next)
 		if (s->type == NODE_FUNC_DECL &&
@@ -77,7 +77,7 @@ static ComptimeInt ce_lookup(CeEnv *env, const char *name) {
 	return ce_fail();
 }
 
-static ComptimeInt ce_call(KawaCompiler *c, ASTNode *fn, ASTNode *args,
+static ComptimeInt ce_call(StillCompiler *c, ASTNode *fn, ASTNode *args,
 						   CeEnv *caller_env, int depth, long long *steps) {
 	if (!fn->data.func.is_pure)
 		return ce_fail(); // only pure fns run at comptime
@@ -115,7 +115,7 @@ static ComptimeInt ce_call(KawaCompiler *c, ASTNode *fn, ASTNode *args,
 	return ce_convert(c,result,fn->data.func.ret_type,0);
 }
 
-static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
+static ComptimeInt ce_exec_stmts(StillCompiler *c, ASTNode *stmts, CeEnv *env,
 								 int depth, long long *steps, int *returned) {
 	ComptimeInt result = ce_fail();
 	for (ASTNode *st = stmts; st && !*returned; st = st->next) {
@@ -178,11 +178,11 @@ static ComptimeInt ce_exec_stmts(KawaCompiler *c, ASTNode *stmts, CeEnv *env,
 	return result;
 }
 
-static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
+static ComptimeInt ce_eval(StillCompiler *c, ASTNode *n, CeEnv *env, int depth,
 						   long long *steps) {
-	if (++*steps > KAWA_COMPTIME_MAX_STEPS)
+	if (++*steps > WKY_COMPTIME_MAX_STEPS)
 		return ce_fail(); // runaway comptime program
-	if (depth > KAWA_COMPTIME_MAX_DEPTH)
+	if (depth > WKY_COMPTIME_MAX_DEPTH)
 		return ce_fail();
 
 	switch (n->type) {
@@ -296,7 +296,7 @@ static ComptimeInt ce_eval(KawaCompiler *c, ASTNode *n, CeEnv *env, int depth,
 	}
 }
 
-LLVMValueRef kawa_comptime_eval(KawaCompiler *c, ASTNode *n,
+LLVMValueRef wky_comptime_eval(StillCompiler *c, ASTNode *n,
 								unsigned result_width, int *out_signed) {
 	long long steps = 0;
 	ComptimeInt v = ce_eval(c, n, NULL, 0, &steps);

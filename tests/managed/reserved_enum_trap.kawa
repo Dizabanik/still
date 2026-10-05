@@ -1,2 +1,0 @@
-enum kawa { trap(i64) }
-fn main() { return 0; }

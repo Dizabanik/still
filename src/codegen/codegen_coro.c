@@ -2,12 +2,12 @@
 
 // Upper bound for elided brew frames. A frame holds the promise slot plus
 // spilled locals of the task body; our bodies are small by construction.
-#define KAWA_CORO_STACK_FRAME_BYTES 8192
+#define WKY_CORO_STACK_FRAME_BYTES 8192
 
 // Shared coroutine-frame prologue: emits llvm.coro.id / coro.alloc /
 // coro.size / coro.begin and the suspend dispatch switch. Returns the
 // coroutine handle and fills in the cleanup/suspend block out-params.
-LLVMValueRef build_coro_frame(KawaCompiler *c, LLVMValueRef fn,
+LLVMValueRef build_coro_frame(StillCompiler *c, LLVMValueRef fn,
 							  int promise_index, LLVMBasicBlockRef *cleanup_bb,
 							  LLVMBasicBlockRef *suspend_bb) {
 	return build_coro_frame_ex(c, fn, promise_index, cleanup_bb, suspend_bb, 0);
@@ -18,7 +18,7 @@ LLVMValueRef build_coro_frame(KawaCompiler *c, LLVMValueRef fn,
 // malloc branch never fires. The buffer is sized at runtime from
 // llvm.coro.size via a dynamic alloca in the CALLER's entry, so it is exact
 // (no guessing) and dies with the caller's frame.
-LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
+LLVMValueRef build_coro_frame_ex(StillCompiler *c, LLVMValueRef fn,
 								 int promise_index,
 								 LLVMBasicBlockRef *cleanup_bb,
 								 LLVMBasicBlockRef *suspend_bb,
@@ -55,8 +55,8 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 		// arm pointing at a bare ret without coro.end gets mangled into
 		// `unreachable` during splitting -- which silently deleted our
 		// mid-body suspends (the channel-blocking bug).
-		*suspend_bb = kawa_append_block(fn, "suspend");
-		*cleanup_bb = kawa_append_block(fn, "cleanup");
+		*suspend_bb = wky_append_block(fn, "suspend");
+		*cleanup_bb = wky_append_block(fn, "cleanup");
 		LLVMValueRef hdl0 = LLVMBuildCall2(
 			c->builder, c->coro_begin_type, c->coro_begin,
 			(LLVMValueRef[]){id, buf}, 2, "hdl");
@@ -72,7 +72,7 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 		LLVMValueRef sw =
 			LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
-					kawa_append_block(fn, "resume"));
+					wky_append_block(fn, "resume"));
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
 					*suspend_bb);
 		return hdl0;
@@ -83,8 +83,8 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 	LLVMValueRef size = LLVMBuildCall2(c->builder, c->coro_size_type,
 									   c->coro_size, NULL, 0, "size");
 
-	LLVMBasicBlockRef alloc_bb = kawa_append_block(fn, "alloc");
-	LLVMBasicBlockRef cont_bb = kawa_append_block(fn, "alloc_cont");
+	LLVMBasicBlockRef alloc_bb = wky_append_block(fn, "alloc");
+	LLVMBasicBlockRef cont_bb = wky_append_block(fn, "alloc_cont");
 	LLVMBuildCondBr(c->builder, need_alloc, alloc_bb, cont_bb);
 	LLVMPositionBuilderAtEnd(c->builder, alloc_bb);
 	LLVMValueRef malloc_ptr = LLVMBuildCall2(
@@ -109,11 +109,11 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 
 	// Same clang contract as the elided path: the shared exit block holds
 	// coro.end(false); case 1 (destroy) funnels through it too.
-	*suspend_bb = kawa_append_block(fn, "suspend");
-	*cleanup_bb = kawa_append_block(fn, "cleanup");
+	*suspend_bb = wky_append_block(fn, "suspend");
+	*cleanup_bb = wky_append_block(fn, "cleanup");
 	LLVMValueRef sw = LLVMBuildSwitch(c->builder, suspend, *suspend_bb, 2);
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 0, 0),
-				kawa_append_block(fn, "resume"));
+				wky_append_block(fn, "resume"));
 	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
 				*suspend_bb);
 	return hdl;
@@ -125,7 +125,7 @@ LLVMValueRef build_coro_frame_ex(KawaCompiler *c, LLVMValueRef fn,
 // converge on ONE block that calls llvm.coro.end(false) -- coro-split
 // rewrites exactly those blocks per-funclet. `cleanup_bb` (case 1 /
 // destroy path) funnels through the same exit.
-void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
+void finish_coro_body(StillCompiler *c, LLVMBasicBlockRef cleanup_bb,
 					  LLVMBasicBlockRef suspend_bb) {
 	if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
 		// Final suspend: case 1 -> shared exit; case 0 is impossible
@@ -170,7 +170,7 @@ void finish_coro_body(KawaCompiler *c, LLVMBasicBlockRef cleanup_bb,
 }
 
 // brew { ... } -- anonymous coroutine task. Compiles the body into a fresh
-// `kawa_task_N` function and returns its handle to the caller.
+// `wky_task_N` function and returns its handle to the caller.
 // Escape analysis for brew handles (IDEAS 2.6), decided from the AST of the
 // enclosing block BEFORE codegen: `let h = brew { ... }` is stack-frame
 // eligible iff every later mention of h in the same statement list is exactly
@@ -251,16 +251,16 @@ static int expr_mentions_handle_other_than_sip(ASTNode *e,
 }
 
 // Mark every stack-eligible brew node reachable from the program root.
-void kawa_mark_stack_frames(ASTNode *root) {
+void wky_mark_stack_frames(ASTNode *root) {
 	(void)root;
 	// Decided inline during codegen instead (see codegen_brew): the parser
 	// keeps no parent links, so eligibility is computed against the current
 	// statement list at emission time.
 }
 
-LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
+LLVMValueRef codegen_brew(StillCompiler *c, ASTNode *n) {
 	char task_name[64];
-	snprintf(task_name, sizeof(task_name), "kawa_task_%d", c->lambda_counter++);
+	snprintf(task_name, sizeof(task_name), "wky_task_%d", c->lambda_counter++);
 
 	// Heap elision decision: the brew's enclosing statement list decides.
 	// `let h = brew {...}; ... sip(h);` and nothing else -> stack frame.
@@ -280,7 +280,7 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
 		LLVMValueRef saved_fn = c->current_func;
 		stack_buf = create_entry_block_alloca(
 			c, LLVMArrayType(LLVMInt8TypeInContext(c->context),
-							 KAWA_CORO_STACK_FRAME_BYTES),
+							 WKY_CORO_STACK_FRAME_BYTES),
 			"coro_stack_frame");
 		LLVMPositionBuilderAtEnd(c->builder, saved_bb);
 		c->current_func = saved_fn;
@@ -318,7 +318,7 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
 	c->current_ret_type = ret_type;
 	c->in_coroutine = 1;
 	LLVMPositionBuilderAtEnd(c->builder,
-							 kawa_append_block(task_func, "entry"));
+							 wky_append_block(task_func, "entry"));
 
 	LLVMBasicBlockRef cleanup_bb, suspend_bb;
 	LLVMValueRef hdl = build_coro_frame_ex(c, task_func, c->brew_promise_index,
@@ -358,7 +358,7 @@ LLVMValueRef codegen_brew(KawaCompiler *c, ASTNode *n) {
 	LLVMMetadataRef md_str = LLVMMDStringInContext2(c->context, "brew", 4);
 	LLVMMetadataRef md_args[] = {md_str};
 	LLVMMetadataRef md = LLVMMDNodeInContext2(c->context, md_args, 1);
-	unsigned KIND = LLVMGetMDKindID("kawa.coro.kind", strlen("kawa.coro.kind"));
+	unsigned KIND = LLVMGetMDKindID("wky.coro.kind", strlen("wky.coro.kind"));
 	LLVMSetMetadata(task_handle, KIND, LLVMMetadataAsValue(c->context, md));
 	return task_handle;
 }

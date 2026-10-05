@@ -34,7 +34,7 @@ def ir_facts(text):
                 callee = re.search(r'\b(?:call|invoke)\b[^@]*@(?:"([^"]+)"|([^ (]+))\(', line)
                 name = symbol(next(x for x in callee.groups() if x is not None)) if callee else '<indirect>'
                 functions[current]['calls'][name] += 1
-            tag = re.search(r'!kawa\.site !(\d+)', line)
+            tag = re.search(r'!wky\.site !(\d+)', line)
             if tag:
                 tags[int(definitions[tag[1]])] += 1
     return functions, tags
@@ -44,9 +44,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('compiler')
     compiler = str(Path(p.parse_args().compiler).resolve())
-    with tempfile.TemporaryDirectory(prefix='kawa-report-') as directory:
+    with tempfile.TemporaryDirectory(prefix='wky-report-') as directory:
         work = Path(directory).resolve()
-        lib = work / 'lib"ż.kawa'
+        lib = work / 'lib"ż.wky'
         lib.write_text('''pub fn i64 constant_raw() {
     [4]i64 values={1,2,3,4}; return values[2];
 }
@@ -58,8 +58,8 @@ pub fn i64 stable_read(ref<i64> values,i64 index) {
     stable(values) { return values[index]; }
 }
 ''')
-        source = work / 'main.kawa'
-        source.write_text('''import "lib\\"ż.kawa";
+        source = work / 'main.wky'
+        source.write_text('''import "lib\\"ż.wky";
 fn main() {
     let owned:owner<i64>=own(4); let values=ref_of(owned); values[2]=37;
     let before_checks=mem_metric(7); let before_pins=mem_metric(8);

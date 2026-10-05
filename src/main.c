@@ -31,7 +31,7 @@ static int link_object(const char *output,int lto,int profile,const char *target
 	pid_t child;
 	int result=posix_spawnp(&child,args[0],NULL,NULL,args,environ);
 	if (result==ENOENT) { args[0]="cc"; result=posix_spawnp(&child,args[0],NULL,NULL,args,environ); }
-	if (result) { fprintf(stderr,"kawac: cannot start linker: %s\n",strerror(result)); return 2; }
+	if (result) { fprintf(stderr,"still: cannot start linker: %s\n",strerror(result)); return 2; }
 	int status;
 	while (waitpid(child,&status,0)<0) if (errno!=EINTR) return 2;
 	return WIFEXITED(status) && WEXITSTATUS(status)==0 ? 0 : 2;
@@ -40,9 +40,10 @@ static int link_object(const char *output,int lto,int profile,const char *target
 // Exit-code contract (uniform across the toolchain):
 //   0  success
 //   1  compilation failed -- any diagnostic from the parser or codegen
-//   2  kawac itself failed -- usage error, unreadable file, link failure
+//   2  still itself failed -- usage error, unreadable file, link failure
 static void usage(const char *prog) {
-	printf("Usage: %s [options] <source.kawa>\n"
+	printf("still - the Whisky compiler\n\n"
+		   "Usage: %s [options] <source.wky>\n"
 		   "\n"
 		   "Options:\n"
 		   "  -o <name>    output executable name (default: source stem)\n"
@@ -126,7 +127,7 @@ int main(int argc, char **argv) {
             optimization_report="optimization.json";
         } else if (!strncmp(argv[i],"--optimization-report=",22)) {
             optimization_report=argv[i]+22;
-            if (!*optimization_report) { fprintf(stderr,"kawac: optimization report path is empty\n"); return 2; }
+            if (!*optimization_report) { fprintf(stderr,"still: optimization report path is empty\n"); return 2; }
 		} else if (!strcmp(argv[i],"--diagnostic-format=json")) {
 			json_diagnostics=1;
 		} else if (!strcmp(argv[i],"--diagnostic-format=text")) {
@@ -147,14 +148,14 @@ int main(int argc, char **argv) {
 				   argv[i][2] >= '0' && argv[i][2] <= '3' && !argv[i][3]) {
 			opt_level = argv[i][2] - '0';
 		} else if (strcmp(argv[i], "--version") == 0) {
-			printf("kawac %s\n", KAWA_VERSION);
+			printf("still %s\n", STILL_VERSION);
 			return 0;
 		} else if (strcmp(argv[i], "-h") == 0 ||
 				   strcmp(argv[i], "--help") == 0) {
 			usage(argv[0]);
 			return 0;
 		} else if (argv[i][0] == '-') {
-			fprintf(stderr, "kawac: unknown option '%s'\n", argv[i]);
+			fprintf(stderr, "still: unknown option '%s'\n", argv[i]);
 			usage(argv[0]);
 			return 2;
 		} else {
@@ -162,21 +163,21 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	kdiag_set_json(json_diagnostics);
-	if (explain) return kdiag_explain(explain);
+	still_diag_set_json(json_diagnostics);
+	if (explain) return still_diag_explain(explain);
     if (!src_path) {
 		usage(argv[0]);
 		return 2;
     }
     if (optimization_report && (check_only || format)) {
-        fprintf(stderr,"kawac: optimization reports require code generation; --check and --format do not write artifacts\n");
+        fprintf(stderr,"still: optimization reports require code generation; --check and --format do not write artifacts\n");
         return 2;
     }
 
 	timbr_init();
 	// One summary line per process, on every exit path (parser errors exit
 	// from main; codegen errors call exit(1) deep inside emission).
-	atexit(kdiag_summary);
+	atexit(still_diag_summary);
 
     Arena a;
     arena_init(&a, 1024 * 1024 * 10);
@@ -188,7 +189,7 @@ int main(int argc, char **argv) {
     }
 
 	char *expanded = expand_imports(src_path, &a);
-	kdiag_set_source(expanded,(int)strlen(expanded));
+	still_diag_set_source(expanded,(int)strlen(expanded));
 
 	Lexer lex;
 	// src_path is const (argv); the lexer wants a char* it never mutates.
@@ -212,42 +213,42 @@ int main(int argc, char **argv) {
 		return format_check && needs_format ? 1 : 0;
 	}
 
-	KawaCompiler kc;
-	kawa_init(&kc, "kawa_main", &a);
-	kc.test_mode = test_mode;
-	kc.uses_print = p.uses_print;
-	kawa_set_debug(&kc, debug_build);
-	kawa_set_source_file(&kc, src_path);
-	kc.enable_lto = enable_lto;
-	kc.pgo_gen = pgo_gen;
-	kc.pgo_use = pgo_use;
-	kc.bounds_check_mode = bounds_check_mode;
-	kc.emit_hash = emit_hash;
-	kc.check_only = check_only;
-    kc.memory_metrics = memory_metrics;
-    kc.optimization_report=optimization_report;
-    kc.executable_path=link_exe ? out_name : NULL;
+	StillCompiler compiler;
+	still_init(&compiler, "wky_main", &a);
+	compiler.test_mode = test_mode;
+	compiler.uses_print = p.uses_print;
+	still_set_debug(&compiler, debug_build);
+	still_set_source_file(&compiler, src_path);
+	compiler.enable_lto = enable_lto;
+	compiler.pgo_gen = pgo_gen;
+	compiler.pgo_use = pgo_use;
+	compiler.bounds_check_mode = bounds_check_mode;
+	compiler.emit_hash = emit_hash;
+	compiler.check_only = check_only;
+    compiler.memory_metrics = memory_metrics;
+    compiler.optimization_report=optimization_report;
+    compiler.executable_path=link_exe ? out_name : NULL;
 	// Codegen errors only know a line number; the source text lets them
 	// render caret snippets like parser errors do.
-	kc.source_text = expanded;
-	kc.source_len = (int)strlen(expanded);
-	kawa_compile(&kc, root);
-	kc.opt_level = opt_level;
-	kawa_optimize_and_write(&kc, "output.bc");
+	compiler.source_text = expanded;
+	compiler.source_len = (int)strlen(expanded);
+	still_compile(&compiler, root);
+	compiler.opt_level = opt_level;
+	still_optimize_and_write(&compiler, "output.bc");
 	if (check_only) return 0;
 
 	if (!link_exe) {
-		printf("[Kawa] Wrote output.bc\n");
+		printf("[Whisky] Wrote output.bc\n");
 		return 0;
 	}
 
 	// Link a native executable via the system C compiler.
-	int rc = link_object(out_name,enable_lto,pgo_gen!=NULL,LLVMGetTarget(kc.module));
+	int rc = link_object(out_name,enable_lto,pgo_gen!=NULL,LLVMGetTarget(compiler.module));
 	if (rc != 0) {
-		fprintf(stderr, "kawac: linking failed\n");
+		fprintf(stderr, "still: linking failed\n");
 		return 2;
 	}
-	printf("[Kawa] Built '%s'\n", out_name);
+	printf("[Whisky] Built '%s'\n", out_name);
 
 	return 0;
 }

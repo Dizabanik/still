@@ -20,9 +20,9 @@ static int fp_kind_of(Type *t) {
 // The call-site entry point lives in codegen_expr.c; everything here is
 // the function emitter plus the type-resolution helper it shares.
 //
-// Build `define internal <ret> @kawa.<op>(ptr data, i64 len[, ptr d2, i64 len2])`
+// Build `define internal <ret> @wky.<op>(ptr data, i64 len[, ptr d2, i64 len2])`
 // with the canonical reduction loop. arity is 1 or 2 (dot).
-LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
+LLVMValueRef wky_emit_reduction_fn(StillCompiler *c, const char *op,
 									Type *elem_ast, int arity) {
 	LLVMContextRef ctx = c->context;
 	TypeKind ek = elem_ast->kind;
@@ -36,7 +36,7 @@ LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
 		acc_t = LLVMDoubleTypeInContext(ctx);
 
 	char fname[64];
-	snprintf(fname, sizeof(fname), "kawa.%s.%s", op,
+	snprintf(fname, sizeof(fname), "wky.%s.%s", op,
 			 ek == TYPE_F16	 ? "f16"
 			 : ek == TYPE_BF16 ? "bf16"
 			 : ek == TYPE_F32  ? "f32"
@@ -57,10 +57,10 @@ LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
 	LLVMValueRef fn = LLVMAddFunction(c->module, fname, fn_t);
 	LLVMSetLinkage(fn, LLVMInternalLinkage);
 
-	LLVMBasicBlockRef entry = kawa_append_block(fn, "entry");
-	LLVMBasicBlockRef loop = kawa_append_block(fn, "loop");
-	LLVMBasicBlockRef body = kawa_append_block(fn, "body");
-	LLVMBasicBlockRef exit = kawa_append_block(fn, "exit");
+	LLVMBasicBlockRef entry = wky_append_block(fn, "entry");
+	LLVMBasicBlockRef loop = wky_append_block(fn, "loop");
+	LLVMBasicBlockRef body = wky_append_block(fn, "body");
+	LLVMBasicBlockRef exit = wky_append_block(fn, "exit");
 	LLVMPositionBuilderAtEnd(c->builder, entry);
 
 	LLVMValueRef len0 = LLVMGetParam(fn, 1);
@@ -218,7 +218,7 @@ LLVMValueRef kawa_emit_reduction_fn(KawaCompiler *c, const char *op,
 // types (i8/u8/i16/u16). Computed in the widened i32 domain and clamped
 // with two branchless selects -- the same shape LLVM expands the
 // llvm.*.sat intrinsics into on arm64/x86 for scalar operands.
-LLVMValueRef kawa_build_sat_op(KawaCompiler *c, const char *op,
+LLVMValueRef wky_build_sat_op(StillCompiler *c, const char *op,
 							   Type *elem_ast, LLVMValueRef l, LLVMValueRef r) {
 	TypeKind k = elem_ast->kind;
 	if (k != TYPE_I8 && k != TYPE_U8 && k != TYPE_I16 && k != TYPE_U16)

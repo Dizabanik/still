@@ -12,7 +12,7 @@
 #include <limits.h>
 
 char *get_line_text_parser(Parser *p) {
-	if (p->lexer->source_offsets) return kdiag_line(p->cur.line);
+	if (p->lexer->source_offsets) return still_diag_line(p->cur.line);
 	const char *src = p->lexer->src;
 	size_t pos = p->cur.pos;
 
@@ -51,7 +51,7 @@ static void report_error(Parser *p, const char *fmt, ...) {
 	char buffer[256];
 	vsnprintf(buffer, sizeof(buffer), fmt, args);
 	char *lT = get_line_text_parser(p);
-	kdiag_error(KAWA_E_PARSE, p->lexer->filename, lT, p->cur.line,
+	still_diag_error(STILL_E_PARSE, p->lexer->filename, lT, p->cur.line,
 				p->cur.posA, p->cur.len > 0 ? p->cur.len : 1, "%s", buffer);
 	free(lT);
 	va_end(args);
@@ -187,7 +187,7 @@ static Type *clone_and_subst_type(Arena *arena, Type *src, int param_count,
 static ASTNode *clone_and_subst_node(Parser *p, ASTNode *src, int param_count,
                                      char **params, Type **concretes,
                                      const char *gen_struct, const char *inst_struct) {
-    return kawa_clone_ast(p->arena,src,param_count,params,concretes,gen_struct,inst_struct);
+    return wky_clone_ast(p->arena,src,param_count,params,concretes,gen_struct,inst_struct);
 }
 
 static char *instantiate_struct_if_needed(Parser *p, const char *gen_name,
@@ -1262,7 +1262,7 @@ static int peek_is_struct_literal(Parser *p) {
 	Token t = lexer_next(&temp);
 
 	// Case 1: Empty {} -> Ambiguous, default to Block (or empty struct?)
-	// In Kawa, empty blocks are common, empty structs less so.
+	// In Whisky, empty blocks are common, empty structs less so.
 	if (t.type == TOK_RBRACE)
 		return 0;
 
@@ -1986,7 +1986,7 @@ static void append_print_str_lit(Parser *p, int line, ASTNode **head, ASTNode **
 	s_node->data.str_lit.len = len;
 	ASTNode *len_node = make_i64_lit_node(p, line, (int64_t)len);
 	s_node->next = len_node;
-	ASTNode *call = make_call_node(p, line, "__kawa_print_str", s_node);
+	ASTNode *call = make_call_node(p, line, "__wky_print_str", s_node);
 	append_print_stmt(head, tail, call);
 }
 
@@ -2002,7 +2002,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 			int is_upper = (strcmp(spec, "X") == 0);
 			ASTNode *up_node = make_int_lit_node(p, line, is_upper);
 			arg->next = up_node;
-			ASTNode *call = make_call_node(p, line, "__kawa_print_hex", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_hex", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2013,7 +2013,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 			else prec = atoi(spec);
 			ASTNode *p_node = make_int_lit_node(p, line, prec);
 			arg->next = p_node;
-			ASTNode *call = make_call_node(p, line, "__kawa_print_f64_prec", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_f64_prec", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2031,7 +2031,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 			ASTNode *pad_node = make_char_lit_node(p, line, pad);
 			arg->next = w_node;
 			w_node->next = pad_node;
-			ASTNode *call = make_call_node(p, line, "__kawa_print_pad_i64", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_pad_i64", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2040,12 +2040,12 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 	if (t) {
 		switch (t->kind) {
 		case TYPE_BOOL: {
-			ASTNode *call = make_call_node(p, line, "__kawa_print_bool", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_bool", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
 		case TYPE_CHAR: {
-			ASTNode *call = make_call_node(p, line, "__kawa_print_char", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_char", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2053,7 +2053,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 		case TYPE_U16:
 		case TYPE_U32:
 		case TYPE_U64: {
-			ASTNode *call = make_call_node(p, line, "__kawa_print_u64", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_u64", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2061,7 +2061,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 		case TYPE_I16:
 		case TYPE_I32:
 		case TYPE_I64: {
-			ASTNode *call = make_call_node(p, line, "__kawa_print_i64", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_i64", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2069,7 +2069,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 		case TYPE_BF16:
 		case TYPE_F32:
 		case TYPE_F64: {
-			ASTNode *call = make_call_node(p, line, "__kawa_print_f64", arg);
+			ASTNode *call = make_call_node(p, line, "__wky_print_f64", arg);
 			append_print_stmt(head, tail, call);
 			return;
 		}
@@ -2078,7 +2078,7 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 		case TYPE_PTR:
 		case TYPE_AMP: {
 			if (t->inner && (t->inner->kind == TYPE_U8 || t->inner->kind == TYPE_CHAR)) {
-				ASTNode *call = make_call_node(p, line, "__kawa_print_cstr", arg);
+				ASTNode *call = make_call_node(p, line, "__wky_print_cstr", arg);
 				append_print_stmt(head, tail, call);
 				return;
 			}
@@ -2090,17 +2090,17 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 	}
 
 	if (arg->type == NODE_STRING_LIT) {
-		ASTNode *call = make_call_node(p, line, "__kawa_print_cstr", arg);
+		ASTNode *call = make_call_node(p, line, "__wky_print_cstr", arg);
 		append_print_stmt(head, tail, call);
 		return;
 	}
 
-	ASTNode *call = make_call_node(p, line, "__kawa_print_i64", arg);
+	ASTNode *call = make_call_node(p, line, "__wky_print_i64", arg);
 	append_print_stmt(head, tail, call);
 }
 
 static void append_print_nl(Parser *p, int line, ASTNode **head, ASTNode ***tail) {
-	ASTNode *call = make_call_node(p, line, "__kawa_print_nl", NULL);
+	ASTNode *call = make_call_node(p, line, "__wky_print_nl", NULL);
 	append_print_stmt(head, tail, call);
 }
 
@@ -2896,7 +2896,7 @@ static ASTNode *parse_postfix_inner(Parser *p) {
 					}
 				}
 
-				// 3. Receiver binding. Kawa methods declare the receiver
+				// 3. Receiver binding. Whisky methods declare the receiver
 				// explicitly (`fn u32 add(User a, User b)` called as
 				// `k.add(a, b)` binds k->a). Inject the receiver as the
 				// first argument ONLY when the declared parameter count is
@@ -5041,7 +5041,7 @@ ASTNode *parse_program(Parser *p) {
 				char *arg_name = NULL;
 				if (p->cur.type == TOK_IDENTIFIER &&
 					lexer_peek(p->lexer).type == TOK_COLON) {
-					// Kawa-style: `x: f64`.
+					// Whisky-style: `x: f64`.
 					arg_name = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Arg name");
 					consume(p, TOK_COLON, ":");
@@ -5052,7 +5052,7 @@ ASTNode *parse_program(Parser *p) {
 					arg_name = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Arg name");
 				} else {
-					// Kawa-style: `x: f64`.
+					// Whisky-style: `x: f64`.
 					arg_name = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Arg name");
 					consume(p, TOK_COLON, ":");
@@ -5234,7 +5234,7 @@ parse_soa_struct:;
 		} else if (p->cur.type == TOK_IMPORT) {
 			advance(p);
 			if (p->cur.type == TOK_STRING_LIT) {
-				// `import "lib/file.kawa";` -- a real multi-file import.
+				// `import "lib/file.wky";` -- a real multi-file import.
 				// The driver expands these before compilation (see
 				// expand_imports); the parser just validates the shape.
 				char *path = p->cur.text;

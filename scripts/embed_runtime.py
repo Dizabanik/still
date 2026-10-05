@@ -9,16 +9,16 @@ p = argparse.ArgumentParser()
 p.add_argument('--clang', required=True)
 p.add_argument('--source', required=True)
 p.add_argument('--output', required=True)
-p.add_argument('--symbol', default='kawa_memory_bc')
+p.add_argument('--symbol', default='wky_memory_bc')
 p.add_argument('--metrics', action='store_true')
 p.add_argument('--native', action='store_true', help='optimize for the build CPU; omit for distribution')
 a = p.parse_args()
-with tempfile.TemporaryDirectory(prefix='kawa-runtime-') as d:
+with tempfile.TemporaryDirectory(prefix='wky-runtime-') as d:
     bc = pathlib.Path(d) / 'runtime.bc'
     # Local native builds match the benchmark CPU policy. Distribution builds
     # must not bake the GitHub runner's instruction set into embedded bitcode.
     subprocess.run([a.clang, '-std=c11', '-O3', *(['-march=native'] if a.native else []), '-fPIC', '-emit-llvm', '-c',
-                    *(['-DKAWA_MEMORY_METRICS'] if a.metrics else []),
+                    *(['-DWKY_MEMORY_METRICS'] if a.metrics else []),
                     a.source, '-o', str(bc)], check=True)
     data = bc.read_bytes()
 out = pathlib.Path(a.output)

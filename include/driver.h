@@ -1,5 +1,5 @@
-#ifndef KAWA_DRIVER_H
-#define KAWA_DRIVER_H
+#ifndef STILL_DRIVER_H
+#define STILL_DRIVER_H
 #include "arena.h"
 char *read_file(const char *path);
 char *expand_imports(const char *entry_path,Arena *arena);

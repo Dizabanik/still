@@ -31,16 +31,16 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(classify('output','bad',expected,0)[0],'FAIL')
 
     def test_optimizer_environment_is_not_poisoned(self):
-        with patch.dict(os.environ, {'KAWA_NO_OPT':'1','KAWA_NO_PRINTF':'1'}):
+        with patch.dict(os.environ, {'STILL_NO_OPT':'1','STILL_NO_PRINTF':'1'}):
             env=environment()
-            self.assertNotIn('KAWA_NO_OPT',env)
-            self.assertNotIn('KAWA_NO_PRINTF',env)
+            self.assertNotIn('STILL_NO_OPT',env)
+            self.assertNotIn('STILL_NO_PRINTF',env)
             self.assertEqual(env['LC_ALL'],'C')
 
     def test_samples_are_balanced_and_repeatable(self):
-        order=schedule(['kawa','c','rust'],9,random.Random(42))
-        self.assertEqual(order,schedule(['kawa','c','rust'],9,random.Random(42)))
-        self.assertTrue(all(sorted(r)==['c','kawa','rust'] for r in order))
+        order=schedule(['wky','c','rust'],9,random.Random(42))
+        self.assertEqual(order,schedule(['wky','c','rust'],9,random.Random(42)))
+        self.assertTrue(all(sorted(r)==['c','rust','wky'] for r in order))
         self.assertGreater(len({tuple(r) for r in order}),1)
 
     def test_median_not_best_of(self):
@@ -64,7 +64,7 @@ class HarnessTests(unittest.TestCase):
             output=b'' if command[0]=='build' else b'incorrect\n'
             return subprocess.CompletedProcess(command,0,output,b'')
         with tempfile.TemporaryDirectory() as temp, patch('bench.build_commands',side_effect=fake_build), patch('bench.invoke',side_effect=fake_invoke) as runner:
-            row=benchmark(entry,dict(kawa='kawac',c='clang',rust='rustc'),
+            row=benchmark(entry,dict(wky='still',c='clang',rust='rustc'),
                           SimpleNamespace(compile_timeout=1,timeout=1),Path(temp),random.Random(1))
             self.assertEqual(row['status'],'failed')
             self.assertNotIn('timings',row)
@@ -81,11 +81,11 @@ class HarnessTests(unittest.TestCase):
 
     def test_builds_use_sources_and_explicit_safety_flags(self):
         entry=json.loads((ROOT/'bench/manifest.json').read_text())['benchmarks'][0]
-        commands=build_commands(entry,dict(kawa='kawac',c='clang',rust='rustc'),Path('/tmp/work'))
-        self.assertIn('--bounds-check=safe',commands['kawa'])
-        self.assertIn('-O3',commands['kawa'])
+        commands=build_commands(entry,dict(wky='still',c='clang',rust='rustc'),Path('/tmp/work'))
+        self.assertIn('--bounds-check=safe',commands['wky'])
+        self.assertIn('-O3',commands['wky'])
         self.assertIn('-O3',commands['c'])
-        for lang,extension in [('kawa','.kawa'),('c','.c'),('rust','.rs')]:
+        for lang,extension in [('wky','.wky'),('c','.c'),('rust','.rs')]:
             self.assertTrue(any(arg.endswith(extension) for arg in commands[lang]))
 
     def test_byte_exact_output(self):
@@ -110,21 +110,21 @@ class HarnessTests(unittest.TestCase):
                                        (1,b'FATAL: bad compiler','compiler_crash'),
                                        (1,b'error[E0004] arity mismatch',None)]:
                 with patch('test_support.invoke',return_value=subprocess.CompletedProcess([],code,b'',message)):
-                    self.assertEqual(_check_variant(work/'case.kawa','compiler',spec,0,work)[0],phase)
+                    self.assertEqual(_check_variant(work/'case.wky','compiler',spec,0,work)[0],phase)
 
     def test_trap_requires_both_signature_and_exit_kind(self):
-        spec={'kind':'trap','diagnostic':'kawa: trap: bounds'}
+        spec={'kind':'trap','diagnostic':'Whisky: trap: bounds'}
         with tempfile.TemporaryDirectory() as temp:
             work=Path(temp)
-            for code,message,phase in [(-11,b'kawa: trap: bounds','trap'),
+            for code,message,phase in [(-11,b'Whisky: trap: bounds','trap'),
                                        (-6,b'assertion failed','trap'),
-                                       (0,b'kawa: trap: bounds','trap'),
-                                       (-6,b'kawa: trap: bounds',None)]:
+                                       (0,b'Whisky: trap: bounds','trap'),
+                                       (-6,b'Whisky: trap: bounds',None)]:
                 with patch('test_support.invoke',return_value=subprocess.CompletedProcess([],code,b'',message)):
-                    self.assertEqual(_check_execution(work/'case.kawa',work/'program',spec,work)[0],phase)
+                    self.assertEqual(_check_execution(work/'case.wky',work/'program',spec,work)[0],phase)
             spec['exit_codes']=[-11]
-            with patch('test_support.invoke',return_value=subprocess.CompletedProcess([],-11,b'',b'kawa: trap: bounds')):
-                self.assertEqual(_check_execution(work/'case.kawa',work/'program',spec,work)[0],'trap')
+            with patch('test_support.invoke',return_value=subprocess.CompletedProcess([],-11,b'',b'Whisky: trap: bounds')):
+                self.assertEqual(_check_execution(work/'case.wky',work/'program',spec,work)[0],'trap')
 
     def test_runtime_exit_and_stderr_are_observed(self):
         spec={'kind':'run','stdout':'ok\n'}
@@ -133,10 +133,10 @@ class HarnessTests(unittest.TestCase):
             for code,out,err,phase in [(7,b'ok\n',b'','exit'),(0,b'ok\n',b'bad','stderr'),
                                        (0,b'wrong\n',b'','output'),(0,b'ok\n',b'',None)]:
                 with patch('test_support.invoke',return_value=subprocess.CompletedProcess([],code,out,err)):
-                    self.assertEqual(_check_execution(work/'case.kawa',work/'program',spec,work)[0],phase)
+                    self.assertEqual(_check_execution(work/'case.wky',work/'program',spec,work)[0],phase)
 
     def test_property_vectors_are_current(self):
-        self.assertEqual(json.loads((ROOT/'tests/contracts/runtime_integer_stream.kawa.json').read_text()),document())
+        self.assertEqual(json.loads((ROOT/'tests/contracts/runtime_integer_stream.wky.json').read_text()),document())
 
     def test_timeout(self):
         with tempfile.TemporaryDirectory() as work:
@@ -157,7 +157,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(manifest),len({e['name'] for e in manifest}))
         registered=set()
         for entry in manifest:
-            self.assertEqual(set(entry['sources']),{'kawa','c','rust'})
+            self.assertEqual(set(entry['sources']),{'wky','c','rust'})
             self.assertTrue(entry['contract'])
             for path in entry['sources'].values():
                 self.assertTrue((ROOT/'bench'/path).is_file(),path)
@@ -166,7 +166,7 @@ class HarnessTests(unittest.TestCase):
                 self.assertGreaterEqual(len(entry['cases']),8)
                 self.assertIn(0,[case[0] for case in entry['cases']])
                 for case in entry['cases']: oracle(entry['oracle'],case)
-        for path in (ROOT/'bench').glob('*.kawa'):
+        for path in (ROOT/'bench').glob('*.wky'):
             if path.with_suffix('.c').exists() and path.with_suffix('.rs').exists():
                 self.assertIn(path.name,registered)
 
@@ -185,7 +185,7 @@ class HarnessTests(unittest.TestCase):
         self.assertGreaterEqual(len(ids),50)
 
     def test_no_orphan_compiler_tests(self):
-        for path in (ROOT/'tests').rglob('*.kawa'):
+        for path in (ROOT/'tests').rglob('*.wky'):
             if 'lib' not in path.relative_to(ROOT/'tests').parts:
                 self.assertIsNotNone(load_case(path),str(path))
 

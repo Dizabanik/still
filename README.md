@@ -1,10 +1,11 @@
-# Kawa
+# Whisky
 
-[![CI](https://github.com/Dizabanik/kawac/actions/workflows/tests.yml/badge.svg)](https://github.com/Dizabanik/kawac/actions/workflows/tests.yml)
+[![CI](https://github.com/Dizabanik/still/actions/workflows/tests.yml/badge.svg)](https://github.com/Dizabanik/still/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Kawa is an experimental systems language and native compiler written in C,
-using LLVM 21. It combines direct control over data and pointers with managed
+Whisky is an experimental systems language. Its compiler, **still**, is written
+in C using LLVM 21. Whisky source files use **`.wky`**. The language combines
+direct control over data and pointers with managed
 owners, bounded references, arenas, and explicit stability scopes.
 
 The language is under active development. Managed memory and ownership have
@@ -19,8 +20,8 @@ and a POSIX host. CI covers Ubuntu 24.04 x86-64 and macOS 15 ARM64.
 Rust is required only for the comparison benchmarks.
 
 ```sh
-git clone --recurse-submodules https://github.com/Dizabanik/kawac.git
-cd kawac
+git clone --recurse-submodules https://github.com/Dizabanik/still.git still
+cd still
 ```
 
 On macOS, install the toolchain and use Apple's compiler for the sanitized C tests:
@@ -45,11 +46,11 @@ Already cloned without submodules? Run `git submodule update --init --recursive`
 CMake and Make generate all embedded runtimes with the selected LLVM toolchain;
 no generated bitcode header needs to be committed.
 
-## Try Kawa
+## Try Whisky
 
-[examples/hello.kawa](examples/hello.kawa):
+[examples/hello.wky](examples/hello.wky):
 
-```kawa
+```wky
 fn main() -> i32 {
     let numbers: owner<i64> = own(2);
     numbers[0] = 20;
@@ -63,10 +64,10 @@ fn main() -> i32 {
 ```
 
 ```sh
-./build-cmake/kawac examples/hello.kawa -o build-cmake/hello
+./build-cmake/still examples/hello.wky -o build-cmake/hello
 ./build-cmake/hello             # prints 42
-./build-cmake/kawac --check examples/hello.kawa
-./build-cmake/kawac --help
+./build-cmake/still --check examples/hello.wky
+./build-cmake/still --help
 ```
 
 The compiler currently writes `output.bc`, `output.ll`, and `output.o` in the
@@ -85,7 +86,7 @@ checks, compiler tooling, and the harness itself.
 bash scripts/ci/verify_benchmarks.sh build-cmake
 
 # Actual measurements: run on an idle machine, separate from CI.
-python3 scripts/bench.py --kawac build-cmake/kawac \
+python3 scripts/bench.py --still build-cmake/still \
   --runs 9 --warmups 2 --json build-cmake/bench.json
 ```
 
@@ -106,11 +107,12 @@ for workload policies and measurement limits.
 | `.github/` | Linux/macOS CI, verified releases, and contribution templates |
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers changes and validation.
+[CODE_STYLE.md](CODE_STYLE.md) defines naming and code conventions.
 [.github/REPOSITORY_SETUP.md](.github/REPOSITORY_SETUP.md) documents the required
 GitHub check and the tagged release process.
 
 ## License
 
-Kawa is licensed under [Apache 2.0](LICENSE). Attribution is in [NOTICE](NOTICE).
+Whisky is licensed under [Apache 2.0](LICENSE). Attribution is in [NOTICE](NOTICE).
 The timbr dependency retains its [MIT license](third_party/timbr.LICENSE).
 LLVM and Clang are external dependencies and are not bundled in release archives.

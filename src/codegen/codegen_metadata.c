@@ -3,7 +3,7 @@
 // Initialize TBAA + branch-weight + loop-metadata caches for this compiler.
 // Idempotent: safe to call more than once (subsequent calls are no-ops once
 // tbaa_root is set).
-void init_metadata(KawaCompiler *c) {
+void init_metadata(StillCompiler *c) {
 	if (c->tbaa_root)
 		return;
 
@@ -14,7 +14,7 @@ void init_metadata(KawaCompiler *c) {
 	// with any other rooted access by default. Disjoint fields opt in to
 	// more precise tags (tbaa_scalar / tbaa_int / tbaa_ptr).
 	LLVMMetadataRef root_name =
-		LLVMMDStringInContext2(ctx, "Kawa TBAA", 9);
+		LLVMMDStringInContext2(ctx, "Whisky TBAA", sizeof("Whisky TBAA") - 1);
 	LLVMMetadataRef root_args[] = {root_name};
 	c->tbaa_root = LLVMMDNodeInContext2(ctx, root_args, 1);
 	// Replace first operand with self-reference. LLVM requires the root node
@@ -51,7 +51,7 @@ void init_metadata(KawaCompiler *c) {
 // TBAA at the field granularity is not modeled here -- we skip attaching TBAA
 // entirely for those, since attaching a scalar tag to a struct load would
 // produce incorrect aliasing results that defeat CSE within a struct.
-void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type) {
+void attach_tbaa(StillCompiler *c, LLVMValueRef instr, LLVMTypeRef type) {
 	if (!instr || !type)
 		return;
 	LLVMTypeKind kind = LLVMGetTypeKind(type);
@@ -80,7 +80,7 @@ void attach_tbaa(KawaCompiler *c, LLVMValueRef instr, LLVMTypeRef type) {
 // The earlier implementation passed an MDString as the first operand to
 // LLVMMDNodeInContext (a deprecated API that returns LLVMValueRef), which
 // produced a malformed prof node the optimizer silently ignored.
-void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
+void set_branch_weights(StillCompiler *c, LLVMValueRef br_instr,
 						unsigned true_weight, unsigned false_weight) {
 	LLVMMetadataRef name =
 		LLVMMDStringInContext2(c->context, "branch_weights", 14);
@@ -105,7 +105,7 @@ void set_branch_weights(KawaCompiler *c, LLVMValueRef br_instr,
 // about our code shape, not guesses about the optimizer's tuning.
 
 // Permissions are independent; strict IEEE behavior is the default.
-void set_fast_math(KawaCompiler *c, LLVMValueRef instr) {
+void set_fast_math(StillCompiler *c, LLVMValueRef instr) {
 	if (!instr)
 		return;
 	LLVMFastMathFlags flags = LLVMFastMathNone;

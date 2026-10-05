@@ -1,7 +1,7 @@
 #include "codegen_internal.h"
 #include <math.h>
 
-void kawa_check_conversion(KawaCompiler *c, LLVMValueRef value, Type *source,
+void wky_check_conversion(StillCompiler *c, LLVMValueRef value, Type *source,
                            LLVMTypeRef dst, Type *dest_ast) {
     if (!source || !dest_ast || LLVMGetTypeKind(dst)!=LLVMIntegerTypeKind) return;
     LLVMTypeRef src=LLVMTypeOf(value);
@@ -33,7 +33,7 @@ void kawa_check_conversion(KawaCompiler *c, LLVMValueRef value, Type *source,
     if (ok) {
         if (!LLVMGetInsertBlock(c->builder)) {
             if (!LLVMIsAConstantInt(ok) || !LLVMConstIntGetZExtValue(ok)) {
-				kdiag_error_at(KAWA_E_TYPE,c->source_filename,NULL,c->source_line,"constant numeric conversion out of range"); exit(1);
+				still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,c->source_line,"constant numeric conversion out of range"); exit(1);
             }
         } else emit_check_or_trap(c,NULL,ok,"numeric conversion out of range");
     }
@@ -41,7 +41,7 @@ void kawa_check_conversion(KawaCompiler *c, LLVMValueRef value, Type *source,
 
 // policy: 0 checked, 1 wrapping, 2 saturating. Explicit operations preserve
 // the first operand's width; ordinary operators retain integer promotion.
-static LLVMValueRef overflow(KawaCompiler *c, LLVMValueRef a, LLVMValueRef b,
+static LLVMValueRef overflow(StillCompiler *c, LLVMValueRef a, LLVMValueRef b,
                               int op, int sign) {
     LLVMTypeRef type = LLVMTypeOf(a);
     const char *base = op == TOK_PLUS ? "add" : op == TOK_MINUS ? "sub" : "mul";
@@ -56,7 +56,7 @@ static LLVMValueRef overflow(KawaCompiler *c, LLVMValueRef a, LLVMValueRef b,
     }
     return LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, (LLVMValueRef[]){a,b}, 2, "arithmetic");
 }
-LLVMValueRef kawa_integer_op(KawaCompiler *c, ASTNode *n, int op, LLVMValueRef a,
+LLVMValueRef wky_integer_op(StillCompiler *c, ASTNode *n, int op, LLVMValueRef a,
                               LLVMValueRef b, int sign, int policy) {
     LLVMTypeRef type = LLVMTypeOf(a);
     unsigned width = LLVMGetIntTypeWidth(type);
@@ -102,14 +102,14 @@ LLVMValueRef kawa_integer_op(KawaCompiler *c, ASTNode *n, int op, LLVMValueRef a
     } else clamp = op == TOK_MINUS ? LLVMConstNull(type) : LLVMConstAllOnes(type);
     return LLVMBuildSelect(c->builder,failed,clamp,value,"saturated");
 }
-LLVMValueRef kawa_numeric_builtin(KawaCompiler *c, ASTNode *n, const char *name) {
+LLVMValueRef wky_numeric_builtin(StillCompiler *c, ASTNode *n, const char *name) {
     if (!strncmp(name,"lossy_",6)) {
         const char *types[]={"i8","u8","i16","u16","i32","u32","i64","u64",NULL};
         TypeKind kinds[]={TYPE_I8,TYPE_U8,TYPE_I16,TYPE_U16,TYPE_I32,TYPE_U32,TYPE_I64,TYPE_U64};
         unsigned index=0; while (types[index] && strcmp(types[index],name+6)) ++index;
         if (!types[index]) return NULL;
         ASTNode *arg=n->data.call.args;
-        if (!arg || arg->next) { kerr(KAWA_E_ARITY,n,"%s expects one numeric argument",name); exit(1); }
+        if (!arg || arg->next) { still_error(STILL_E_ARITY,n,"%s expects one numeric argument",name); exit(1); }
         Type *destination=arena_alloc(c->arena,sizeof(*destination)); destination->kind=kinds[index];
         n->data_type=destination;
         LLVMValueRef value=codegen_expr(c,arg);
@@ -124,8 +124,8 @@ LLVMValueRef kawa_numeric_builtin(KawaCompiler *c, ASTNode *n, const char *name)
             if (!fn) fn=LLVMAddFunction(c->module,intrinsic,LLVMFunctionType(dst,&src,1,0));
             return LLVMBuildCall2(c->builder,LLVMGlobalGetValueType(fn),fn,&value,1,"lossy_float");
         }
-        if (LLVMGetTypeKind(src)!=LLVMIntegerTypeKind) { kerr(KAWA_E_TYPE,n,"lossy conversion requires a number"); exit(1); }
-        return LLVMBuildIntCast2(c->builder,value,dst,type_is_signed(c,kawa_expr_type(c,arg)),"lossy_integer");
+        if (LLVMGetTypeKind(src)!=LLVMIntegerTypeKind) { still_error(STILL_E_TYPE,n,"lossy conversion requires a number"); exit(1); }
+        return LLVMBuildIntCast2(c->builder,value,dst,type_is_signed(c,wky_expr_type(c,arg)),"lossy_integer");
     }
     int policy;
     const char *operation;
@@ -138,16 +138,16 @@ LLVMValueRef kawa_numeric_builtin(KawaCompiler *c, ASTNode *n, const char *name)
     if (!op) return NULL;
     ASTNode *a=n->data.call.args;
     if (!a || !a->next || a->next->next) {
-        kerr(KAWA_E_ARITY,n,"%s expects two integer arguments",name); exit(1);
+        still_error(STILL_E_ARITY,n,"%s expects two integer arguments",name); exit(1);
     }
     LLVMValueRef left=codegen_expr(c,a);
     LLVMValueRef right=codegen_expr(c,a->next);
-    Type *type=kawa_expr_type(c,a);
+    Type *type=wky_expr_type(c,a);
     if (!type || LLVMGetTypeKind(LLVMTypeOf(left))!=LLVMIntegerTypeKind ||
         LLVMGetTypeKind(LLVMTypeOf(right))!=LLVMIntegerTypeKind || LLVMGetIntTypeWidth(LLVMTypeOf(left))<8) {
-        kerr(KAWA_E_TYPE,n,"explicit arithmetic requires i8/i16/i32/i64 or unsigned integers"); exit(1);
+        still_error(STILL_E_TYPE,n,"explicit arithmetic requires i8/i16/i32/i64 or unsigned integers"); exit(1);
     }
     n->data_type=type;
-    right=coerce_value(c,right,kawa_expr_type(c,a->next),LLVMTypeOf(left),type);
-    return kawa_integer_op(c,n,op,left,right,type_is_signed(c,type),policy);
+    right=coerce_value(c,right,wky_expr_type(c,a->next),LLVMTypeOf(left),type);
+    return wky_integer_op(c,n,op,left,right,type_is_signed(c,type),policy);
 }

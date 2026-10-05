@@ -1,2 +1,0 @@
-enum Collision { __kawa_mem_replace(i64) }
-fn main() { return 0; }
