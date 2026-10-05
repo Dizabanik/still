@@ -136,7 +136,7 @@ unchecked after removing its allocation.
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 881 passing cases and all eight
+The latest complete language checkpoint has 884 passing cases and all eight
 CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
@@ -148,8 +148,11 @@ cleanup or replacement traps. Value-clone failures exercise every byte budget
 before all three source allocations can be copied.
 The additional optimization-report suite checks emitted IR against reports,
 execution counters, source spans and unchanged native object bytes.
-Declaration regressions add 24 cases at O0/O2/O3, including malformed nested
+Declaration regressions add 27 cases at O0/O2/O3, including malformed nested
 types, contextual type names, explicit composite bindings and inference.
+Unsigned tuple literals and function-return destructuring preserve values above
+the signed 64-bit range. Explicit wrapping and truncation have independent
+modular-arithmetic oracles.
 Tooling checks twenty invalid declaration forms in check and format modes,
 formatter round trips with execution oracles, and byte-identical bitcode,
 IR and native objects for equivalent explicit/inferred declarations at all
@@ -164,6 +167,12 @@ their C counterparts. Timings use fresh, uninstrumented processes, balanced
 randomized execution, warmups, and median/MAD. Lifecycle results also preserve
 individual OS high-water RSS samples, binary sizes, hashes, and compiler
 versions. These are whole-process timings, not isolated cleanup latency.
+Historical benchmark verification also covers all 17 Whisky/C/Rust triples.
+Hash and tuple kernels use explicit wrapping; intentional truncation uses
+lossy_u32, with unsigned masks and shifts. The C/Rust algorithms are unchanged.
+Their fixed-input differential checks remain weaker than independent oracles
+and establish no language performance ranking. These gates pass on native
+macOS ARM64 and Linux x86-64, as do the managed and compiler-tools gates.
 
 The 100,000-node/eight-trial native lifecycle measurement was 83.963/83.073 ms
 for Whisky/C chains (MAD 2.531/1.011 ms) and 67.305/62.691 ms for fanout

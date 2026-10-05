@@ -1,0 +1,12 @@
+fn (u64, u64) values(u64 first, u64 second) {
+    return (first, second);
+}
+fn int main() {
+    let (first, second) = ((u64)18446744073709551615, (u64)9223372036854775808);
+    let (next, high) = values(wrap_add(first, (u64)1), second);
+    println("{first} {second} {next} {high}");
+    let hash = wrap_mul((u32)2166136261, 16777619);
+    let narrowed = lossy_u32((u64)4294967297);
+    println("{hash} {narrowed}");
+    return 0;
+}

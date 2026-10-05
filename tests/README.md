@@ -63,6 +63,10 @@ and malformed nested delimiters. The tooling suite rejects suffix annotations
 in check/format modes and compares bitcode, IR, and native objects for equivalent
 explicit and inferred bindings at O0/O2/O3. Formatter tests run the formatted
 managed examples against independently specified output.
+Unsigned inference cases include tuple literals and function returns above the
+signed 64-bit range, plus explicit wrapping with signed literal operands and
+deliberate truncation. Their expected values use integer arithmetic modulo the
+target width, independently of the compiler.
 
 ## Future language contracts
 

@@ -14,6 +14,10 @@ if [[ $(uname -s) == Darwin ]]; then cc=/usr/bin/clang; fi
 
 python3 scripts/bench.py --still "$still" --cc "$cc" --quick --verify-only --sanitize-c \
   --json "$build_dir/benchmark-verification.json"
+# Historical programs still need to compile and agree with their C/Rust twins.
+# These fixed-input comparisons remain separate from independent-oracle gates.
+python3 scripts/bench.py --still "$still" --cc "$cc" --suite historical --verify-only \
+  --json "$build_dir/historical-verification.json"
 for workload in reference_walk subobject_walk; do
   python3 scripts/bench_memory.py --still "$still" --workload "$workload" \
     --rounds 100000 --size 1024 --verify-only --sanitize-c \

@@ -64,6 +64,13 @@ The original 17 source triples remain available under `--suite historical`. They
 
 All other historical output comparisons are byte-exact. Prefer the matched suite for new comparisons. Do not restore the old timing table without a fresh report and a workload-specific interpretation.
 
+Historical hash and tuple kernels now use explicit `wrap_mul`/`wrap_add`, and
+the typed-error input mix uses `lossy_u32` for its deliberate truncation. Their
+unsigned masks and shifts retain unsigned types. These spellings preserve the
+C/Rust algorithms under Whisky's checked numeric policy; they do not disable
+checks elsewhere. CI verifies all 17 historical triples as well as the matched
+suite, while keeping their weaker differential evidence separate.
+
 ## Managed memory and compiler tooling
 
 ```sh

@@ -8,7 +8,7 @@ const str CORPUS = "the quick brown fox jumps over the lazy dog the quick brown 
 fn u32 fnv(str w) {
     u32 h = 2166136261;
     for (u32 i = 0; i < w.len; i += 1) {
-        h = (h ^ (u32)w.data[i]) * 16777619;
+        h = wrap_mul(h ^ (u32)w.data[i], 16777619);
     }
     return h;
 }

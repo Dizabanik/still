@@ -15,18 +15,18 @@ fn i32 main() {
     i64 ok_count = 0;
     i64 acc = 0;
     for (i64 i = 0; i < N; i += 1) {
-        u32 x = ((u32)(i * 2654435761));
+        u32 x = lossy_u32(i * 2654435761);
         filter {
-            if ((x % 7) == 3) {
+            if ((x % (u32)7) == (u32)3) {
                 ParseErr e;
                 e.code = 1;          // bad checksum
                 e.pos = ((i32)(x % 1000));
                 press err = e;
             }
-            if ((x & 0xFF) == 0xFF) {
+            if ((x & (u32)0xFF) == (u32)0xFF) {
                 ParseErr e2;
                 e2.code = 2;         // sentinel byte
-                e2.pos = ((i32)(x >> 8));
+                e2.pos = ((i32)(x >> (u32)8));
                 press err = e2;
             }
             acc = (acc + ((i64)x)) & 2147483647;
