@@ -37,7 +37,7 @@ Build policies are explicit:
 | C | `-O3 -march=native -std=c11 -ffp-contract=off`; dynamic index guards are written explicitly where needed. |
 | Rust | `--edition=2021`, O3, native CPU, one codegen unit, panic abort, overflow checks off; normal indexed accesses retain bounds semantics. |
 
-The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. No checked-pointer or temporal-safety guarantee is claimed for today's compiler. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor returns a checked, sized byte view. The setup parser explicitly decays that view to a C pointer to parse the controlled, NUL-terminated decimal arguments; this keeps the workload algorithm unchanged.
+The new workloads use bounded i64 arithmetic: for the declared domain, intermediates fit without signed overflow. The original matched workloads use legacy storage; managed-reference safety is exercised separately below. “Matched” means equivalent algorithms, storage layouts, scheduling policies and valid-input behavior, not proof of identical safety implementations or assembly. Kawa's argument accessor returns a checked, sized byte view. The setup parser explicitly decays that view to a C pointer to parse the controlled, NUL-terminated decimal arguments; this keeps the workload algorithm unchanged.
 
 ## New matched workloads
 
@@ -63,6 +63,23 @@ The original 17 source triples remain available under `--suite historical`. They
 - Signed-overflow hazards in `b6`, `b7`, `b8`, and `b16` have been replaced by bounded arithmetic across all three languages. Their outputs changed intentionally. Old recorded numbers and generated documentation do not describe the revised sources.
 
 All other historical output comparisons are byte-exact. Prefer the matched suite for new comparisons. Do not restore the old timing table without a fresh report and a workload-specific interpretation.
+
+## Managed memory and compiler tooling
+
+```sh
+python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --verify-only --sanitize-c
+python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --workload subobject_walk --rounds 10000000 --sanitize-c --json build/subobject-benchmark.json
+python3 scripts/bench_owners.py --kawac ./build-cmake/kawac --verify-only
+python3 scripts/bench_tools.py --kawac ./build-cmake/kawac --verify-only
+```
+
+The reference and field-view walks compare Kawa and C using the same descriptor runtime, reference ABI, initialization, and arithmetic policy. Each has an independent Python checksum oracle, 80 boundary runs, and eight separately instrumented cases. The field-view walk constructs two bounded references per iteration into a 32-byte row. Checked mode performs four indexed validations per iteration. Stable mode performs zero indexed validations, but acquires two guards per iteration plus one outer guard. This workload includes that guard cost; it does not assume stability always improves speed.
+
+The ownership lifecycle workload verifies deep chains and fanout trees, allocation failure, clone/drop behavior, and matching runtime counters. Its verification includes two untimed C sanitizer runs. Compiler tooling uses deterministic source corpora with independent execution checksums, formatter fixed points, and repeated bitcode/IR/object hashes. It measures check, format, and build separately.
+
+Managed timings use seven samples and two warmups by default. Reports preserve native process times, median/MAD, individual RSS and CPU samples, binary sizes, hashes, compiler versions, and all counter checks. Instrumentation and sanitizer builds run outside timed intervals. On macOS, sanitizer verification uses the system Clang and records its version separately from the LLVM compiler used for native comparisons.
+
+`--optimization-report[=path]` produces static IR facts and source-associated operations. Its counts describe emitted instructions, branches, and calls, not executed operations. A disappearing source tag or direct call can result from inlining or metadata loss, so reports do not treat it as proof that a runtime check or allocation was removed.
 
 ## Future performance acceptance
 

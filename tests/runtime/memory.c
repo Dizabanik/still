@@ -187,6 +187,19 @@ int main(int argc, char **argv) {
     if (!strcmp(test, "overflow")) { (void)at(r, UINT64_MAX / 8 + 1); return 99; }
     if (!strcmp(test, "negative")) { (void)at(r, UINT64_MAX); return 99; }
     if (!strcmp(test, "slice")) { __kawa_mem_slice(&s, &r, 2, 1, 8); return 99; }
+    if (!strcmp(test, "view_bounds")) {
+        __kawa_mem_view(&s,&r,at(r,1),8);
+        (void)at(s,1); return 99;
+    }
+    if (!strcmp(test, "view_outside")) {
+        __kawa_mem_slice(&s,&r,1,2,8);
+        __kawa_mem_view(&b,&s,at(r,0),8); return 99;
+    }
+    if (!strcmp(test, "view_stale")) {
+        void *slot=at(r,0);
+        __kawa_mem_drop(&a);
+        __kawa_mem_view(&s,&r,slot,8); return 99;
+    }
     if (!strcmp(test, "pinned")) { __kawa_mem_pin(&r); __kawa_mem_drop(&a); return 99; }
     if (!strcmp(test, "resize_pinned")) { __kawa_mem_pin(&r); __kawa_mem_resize(&a,8,8); return 99; }
     if (!strcmp(test, "resize_stale")) { assert(__kawa_mem_resize(&a,8,8)); (void)at(r,0); return 99; }
@@ -214,6 +227,19 @@ int main(int argc, char **argv) {
         return 99;
     }
     assert(!strcmp(test, "valid"));
+    __kawa_mem_view(&s,&r,at(r,0),8);
+    assert(s.descriptor==r.descriptor && s.generation==r.generation && s.extent==8);
+    *at(s,0)=23;
+    assert(*at(r,0)==23);
+    __kawa_mem_view(&s,&r,at(r,3)+1,0);
+    assert(s.offset==32 && s.extent==0);
+    assert(__kawa_mem_try_pin(&s));
+    __kawa_mem_unpin(&s);
+    __kawa_mem_view(&s,&r,at(r,1),16);
+    __kawa_mem_view(&s,&s,at(s,1),8); /* Output may alias the container header. */
+    assert(s.offset==16 && s.extent==8);
+    assert(__kawa_mem_metric(KAWA_MEM_VIEWS)==4);
+    *at(r,0)=19;
     assert(__kawa_mem_clone(&b, &r));
     *at(b, 0) = 27;
     assert(*at(r, 0) == 19 && *at(b, 0) == 27);

@@ -1,0 +1,31 @@
+struct Inner { i64 value; [3]i64 array; }
+struct Record { i64 id; Inner inner; [0]u8 empty; owner<Inner> child; }
+#[noalloc] fn i64 first(ref<i64> borrowed) { return borrowed[0]; }
+fn main() {
+    let rows:owner<Record>=own(2);
+    rows[1].id=11;
+    rows[1].inner.value=13;
+    rows[1].inner.array[0]=17;
+    rows[1].inner.array[1]=19;
+    rows[1].inner.array[2]=23;
+    rows[1].child=own(1);
+    rows[1].child[0].value=29;
+    let scalar=ref_of(rows[1].id);
+    let embedded=ref_of(rows[1].inner);
+    let array=ref_of(rows[1].inner.array);
+    let empty=ref_of(rows[1].empty);
+    let child=ref_of(rows[1].child[0].value);
+    println("{first(scalar)} {embedded[0].value} {mem_len(array)} {array[1]} {mem_len(empty)}");
+    scalar[0]=31;
+    array[2]=37;
+    child[0]=41;
+    println("{rows[1].id} {rows[1].inner.array[2]} {rows[1].child[0].value}");
+    let tail=array+2;
+    println("{mem_len(tail)} {tail[0]} {array==ref_of(embedded[0].array)}");
+    resize(rows,3);
+    try_stable(array) { println("unexpected"); } else { println("stale parent"); }
+    println("{child[0]}");
+    release(rows);
+    try_stable(child) { println("unexpected"); } else { println("stale child"); }
+    return 0;
+}

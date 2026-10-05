@@ -1,0 +1,30 @@
+import stdc;
+enum Number { Value(u64), Empty }
+struct Measure { u64 number; i32* view; }
+i32 global=1051;
+#[nocapture] fn u64 read(i32* pointer) { return (u64)*pointer; }
+#[nocapture] fn u64 size(u8* text) { return stdc.strlen(text); }
+#[nocapture] fn u64 member(i32* pointer) {
+    Measure pair={.number=(u64)*pointer,.view=pointer};
+    return pair.number;
+}
+#[nocapture] fn Number wrapped(i32* pointer) { return Number.Value((u64)*pointer); }
+#[nocapture] fn i64 count([]i32 values) { return values.len; }
+#[nocapture] fn u64 projected(Measure pair) { return pair.number; }
+#[nocapture] fn i32 recurse(i32* pointer,i32 remaining) {
+    if (remaining<=0) { return *pointer; }
+    return recurse(pointer,remaining-1);
+}
+fn i32* global_pointer(i32* ignored) { if (*ignored==0) { return &global; } return &global; }
+fn u64 enum_value(Number number) { return match number { Value(value)=>value, Empty=>(u64)0 }; }
+fn u64 value() {
+    i32 local=42;
+    return read(&local)+member(&local)+enum_value(wrapped(&local))+(u64)*global_pointer(&local);
+}
+fn main() {
+    [3]i32 array={2,3,5};
+    i32 local=17;
+    Measure pair={.number=19,.view=&local};
+    println("{value()} {size(\"abc\")} {count(array[0..3])} {projected(pair)} {recurse(&local,4)}");
+    return 0;
+}

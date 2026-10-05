@@ -1,0 +1,3 @@
+enum Pointer { Value(i32*), Empty }
+#[nocapture] fn Pointer remember(i32* pointer) { return Pointer.Value(pointer); }
+fn main() { return 0; }

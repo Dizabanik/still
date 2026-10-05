@@ -1,0 +1,3 @@
+fn u64 encode(i32* pointer) { return (u64)pointer; }
+fn u64 bad() { i32 local=42; return encode(&local); }
+fn main() { return 0; }

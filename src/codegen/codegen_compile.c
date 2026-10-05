@@ -695,8 +695,16 @@ void kawa_compile(KawaCompiler *c, ASTNode *root) {
 			runtime_target(c,rt_mod);
 			LLVMLinkModules2(c->module, rt_mod);
 		}
-		LLVMDisposeMemoryBuffer(rt_mem);
-	}
+        LLVMDisposeMemoryBuffer(rt_mem);
+    }
+    /* Reserved compiler helpers have no external callers. Internal linkage
+     * enables specialization and removes unused runtime entry points while
+     * public source functions retain their ABI. */
+    for (LLVMValueRef fn=LLVMGetFirstFunction(c->module); fn; fn=LLVMGetNextFunction(fn)) {
+        if (LLVMCountBasicBlocks(fn) && !strncmp(LLVMGetValueName(fn),"__kawa_",7) &&
+            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11))
+            LLVMSetLinkage(fn,LLVMInternalLinkage);
+    }
 }
 
 static const uint32_t K256[64] = {
@@ -812,15 +820,17 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 		c->target_machine = NULL;
 		c->target_data = NULL;
 		return;
-	}
+    }
 
-	// Coroutine transforms must run before the main pipeline so coro-split
+    KawaOptimizationSnapshot *report_before=kawa_report_snapshot(c);
+    // Coroutine transforms must run before the main pipeline so coro-split
 	// lowers the frame before inlining decisions are made. The pass
 	// pipeline follows the -O level: O0 skips optimization entirely, O1/O2
 	// use LLVM's curated defaults (O2 is kawac's default), and O3 layers
 	// aggressive vectorization + unrolling on top.
-	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
-	if (!getenv("KAWA_NO_OPT")) {
+    LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+    char pipeline[2048] = "";
+    if (!getenv("KAWA_NO_OPT")) {
 		if (c->pgo_use) {
 			char pgo_opt[1024];
 			snprintf(pgo_opt, sizeof(pgo_opt), "-pgo-test-profile-file=%s", c->pgo_use);
@@ -828,7 +838,6 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 			LLVMParseCommandLineOptions(2, pgo_argv, "");
 		}
 
-		char pipeline[2048] = "";
 		if (c->pgo_gen) {
 			strcat(pipeline, "pgo-instr-gen,instrprof,");
 		} else if (c->pgo_use) {
@@ -865,18 +874,21 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 			exit(1);
 		}
 	}
-	LLVMDisposePassBuilderOptions(opts);
+    LLVMDisposePassBuilderOptions(opts);
+    kawa_report_write(c,report_before,*pipeline ? pipeline : "disabled by KAWA_NO_OPT");
 
-
-	if (LLVMWriteBitcodeToFile(c->module, filename) != 0)
+    if (LLVMWriteBitcodeToFile(c->module, filename) != 0) {
 		kdiag_error_at(KAWA_E_SEMANTIC,
 					   c->source_filename ? c->source_filename : "<kawa>", NULL,
-					   0, "error writing bitcode");
+                       0, "error writing bitcode");
+        exit(1);
+    }
 	if (LLVMPrintModuleToFile(c->module, "output.ll", &error_msg)) {
 		kdiag_error_at(KAWA_E_SEMANTIC,
 					   c->source_filename ? c->source_filename : "<kawa>", NULL,
 					   0, "writing file failed: %s", error_msg);
-		LLVMDisposeMessage(error_msg);
+        LLVMDisposeMessage(error_msg);
+        exit(1);
 	}
 
 	// Emit the object file directly through the same TargetMachine. This
@@ -888,7 +900,8 @@ void kawa_optimize_and_write(KawaCompiler *c, const char *filename) {
 		kdiag_error_at(KAWA_E_SEMANTIC,
 					   c->source_filename ? c->source_filename : "<kawa>", NULL,
 					   0, "emitting object failed: %s", error_msg);
-		LLVMDisposeMessage(error_msg);
+        LLVMDisposeMessage(error_msg);
+        exit(1);
 	}
 
 	if (c->emit_hash) {

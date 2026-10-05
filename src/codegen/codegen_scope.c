@@ -640,9 +640,11 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 		// 1. Constant index folding:
 		if (LLVMIsAConstantInt(idx_i64)) {
 			unsigned long long cval = LLVMConstIntGetZExtValue(idx_i64);
-			if (cval < (unsigned long long)array_len) {
-				// Statically proven safe!
-				return;
+            if (cval < (unsigned long long)array_len) {
+                // Statically proven safe!
+                kawa_report_site(c,idx_node,"guard","index out of bounds",
+                    "Lowering proved the constant index is within the fixed array bound.");
+                return;
 			}
 		}
 
@@ -660,19 +662,23 @@ static void emit_bounds_check(KawaCompiler *c, ASTNode *idx_node,
 		kawa_append_block(c->current_func, "idx_in_bounds");
 	LLVMBasicBlockRef trap_bb =
 		kawa_append_block(c->current_func, "idx_oob");
-	LLVMBuildCondBr(c->builder, ok, cont_bb, trap_bb);
+    LLVMValueRef branch=LLVMBuildCondBr(c->builder,ok,cont_bb,trap_bb);
+    LLVMMetadataRef site=kawa_report_site(c,idx_node,"guard","index out of bounds",NULL);
+    kawa_report_attach(c,branch,site);
 
 	LLVMPositionBuilderAtEnd(c->builder, trap_bb);
 	LLVMValueRef msg = LLVMBuildGlobalStringPtr(
 		c->builder, "index out of bounds", "trap_msg");
-	LLVMValueRef file_v =
+    kdiag_location(line,&file,&line);
+    LLVMValueRef file_v =
 		LLVMBuildGlobalStringPtr(c->builder, file ? file : "?", "trap_file");
 	LLVMValueRef args[3] = {
 		msg, file_v,
 		LLVMConstInt(LLVMInt32TypeInContext(ctx), line, 1)};
-	LLVMBuildCall2(c->builder,
-				   LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
-				   get_or_declare_trap_fn(c), args, 3, "");
+    LLVMValueRef call=LLVMBuildCall2(c->builder,
+                   LLVMGlobalGetValueType(get_or_declare_trap_fn(c)),
+                   get_or_declare_trap_fn(c), args, 3, "");
+    kawa_report_attach(c,call,site);
 	LLVMBuildUnreachable(c->builder);
 
 	LLVMPositionBuilderAtEnd(c->builder, cont_bb);
@@ -1264,10 +1270,17 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		if (!pointee)
 			pointee = LLVMInt32TypeInContext(c->context);
 
-		LLVMTypeRef ptr_t = LLVMPointerType(pointee, 0);
-		LLVMValueRef loaded =
-			LLVMBuildLoad2(c->builder, ptr_t, inner_addr, "deref_ptr");
-		attach_tbaa(c, loaded, ptr_t);
+        LLVMTypeRef ptr_t = LLVMPointerType(pointee, 0);
+        LLVMValueRef loaded;
+        if (inner_addr) {
+            loaded=LLVMBuildLoad2(c->builder,ptr_t,inner_addr,"deref_ptr");
+            attach_tbaa(c,loaded,ptr_t);
+        } else {
+            loaded=codegen_expr(c,n->data.deref.expr);
+            if (!loaded || LLVMGetTypeKind(LLVMTypeOf(loaded))!=LLVMPointerTypeKind) {
+                kerr(KAWA_E_TYPE,n,"dereference requires a pointer value"); exit(1);
+            }
+        }
 
 		if (out_type)
 			*out_type = pointee;
@@ -1488,10 +1501,15 @@ LLVMValueRef coerce_value(KawaCompiler *c, LLVMValueRef v, Type *src_ast,
 
 // Keep unlikely error handling out of the hot path. LLVM folds proven checks.
 void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char *message) {
-	if (LLVMIsAConstantInt(ok) && LLVMConstIntGetZExtValue(ok)) return;
+    if (LLVMIsAConstantInt(ok) && LLVMConstIntGetZExtValue(ok)) {
+        kawa_report_site(c,n,"guard",message,"Lowering proved the safety predicate is constant true.");
+        return;
+    }
 	LLVMBasicBlockRef cont = kawa_append_block(c->current_func, "checked");
 	LLVMBasicBlockRef trap = kawa_append_block(c->current_func, "out_of_bounds");
-	LLVMValueRef br = LLVMBuildCondBr(c->builder, ok, cont, trap);
+    LLVMValueRef br = LLVMBuildCondBr(c->builder, ok, cont, trap);
+    LLVMMetadataRef site=kawa_report_site(c,n,"guard",message,NULL);
+    kawa_report_attach(c,br,site);
 	set_branch_weights(c, br, 2000, 1);
 	LLVMPositionBuilderAtEnd(c->builder, trap);
 	LLVMValueRef fn = get_or_declare_trap_fn(c);
@@ -1502,7 +1520,8 @@ void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char
 		LLVMBuildGlobalStringPtr(c->builder, message, "trap_msg"),
 		LLVMBuildGlobalStringPtr(c->builder, file ? file : "?", "trap_file"),
 		LLVMConstInt(LLVMInt32TypeInContext(c->context), line, 0)};
-	LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, args, 3, "");
+    LLVMValueRef call=LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, args, 3, "");
+    kawa_report_attach(c,call,site);
 	LLVMBuildUnreachable(c->builder);
 	LLVMPositionBuilderAtEnd(c->builder, cont);
 }

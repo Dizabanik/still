@@ -1,0 +1,7 @@
+struct Record { i64 value; }
+fn main() {
+    let rows:owner<Record>=own(1);
+    let field=ref_of(rows[0].value);
+    stable(field) { resize(rows,2); }
+    return 0;
+}

@@ -95,6 +95,8 @@ add_test(NAME check-mode COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/test_check_mode.py $<TARGET_FILE:kawac>)
 add_test(NAME tooling COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/test_tooling.py $<TARGET_FILE:kawac>)
+add_test(NAME optimization-report COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/scripts/test_optimization_report.py $<TARGET_FILE:kawac>)
 
 # Layer 1: smoke test -- the compiler builds and compiles its own test suite
 # entry point without crashing.
@@ -138,6 +140,13 @@ add_custom_target(bench-memory
 add_custom_target(bench-owners
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_owners.py
         --kawac $<TARGET_FILE:kawac> --json ${CMAKE_BINARY_DIR}/owners-benchmark.json
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL DEPENDS kawac)
+
+add_custom_target(bench-subobjects
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_memory.py
+        --kawac $<TARGET_FILE:kawac> --workload subobject_walk
+        --rounds 10000000 --json ${CMAKE_BINARY_DIR}/subobject-benchmark.json
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL DEPENDS kawac)
 

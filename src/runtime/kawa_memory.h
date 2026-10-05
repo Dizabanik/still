@@ -19,6 +19,7 @@ void __kawa_mem_replace(KawaRef *slot, KawaRef *incoming);
 void __kawa_mem_store_owner(KawaRef *slot, KawaRef *incoming, const KawaRef *container);
 void __kawa_mem_take(KawaRef *out, KawaRef *slot, const KawaRef *container);
 void *__kawa_mem_write_address(const KawaRef *container, void *slot, uint64_t size);
+void __kawa_mem_view(KawaRef *out,const KawaRef *container,void *slot,uint64_t size);
 int32_t __kawa_mem_clone(KawaRef *out, const KawaRef *source);
 int32_t __kawa_mem_resize(KawaRef *owner, uint64_t count, uint64_t size);
 uint64_t __kawa_mem_capacity(const KawaRef *ref);
@@ -41,6 +42,6 @@ enum {
     KAWA_MEM_ALLOCATIONS, KAWA_MEM_FREES, KAWA_MEM_LIVE_BYTES,
     KAWA_MEM_PEAK_BYTES, KAWA_MEM_DESCRIPTOR_BYTES, KAWA_MEM_CLONED_BYTES,
     KAWA_MEM_RETIRED_SLOTS, KAWA_MEM_CHECKS, KAWA_MEM_PINS,
-    KAWA_MEM_REALLOCATIONS, KAWA_MEM_INVALIDATIONS
+    KAWA_MEM_REALLOCATIONS, KAWA_MEM_INVALIDATIONS, KAWA_MEM_VIEWS
 };
 #endif

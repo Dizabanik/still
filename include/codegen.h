@@ -72,7 +72,11 @@ typedef struct {
 	LLVMTargetDataRef target_data;
 	int uses_memory;
 	int memory_metrics;
-	int check_only;
+    int check_only;
+    const char *optimization_report;
+    const char *executable_path;
+    struct KawaOptimizationSite *optimization_sites;
+    unsigned optimization_site_count;
 	StableFrame *stable_stack;
 	FunctionSignature *function_signatures;
 	unsigned fp_permissions;

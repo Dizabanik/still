@@ -33,7 +33,7 @@ static _Thread_local uint64_t budget = UINT64_MAX;
 static _Thread_local uint64_t allocations, frees, live_bytes, peak_bytes, cloned_bytes;
 static _Thread_local uint64_t reallocations, invalidations;
 #ifdef KAWA_MEMORY_METRICS
-static _Thread_local uint64_t checks, pins;
+static _Thread_local uint64_t checks, pins, views;
 #define COUNT(x) (++(x))
 #else
 #define COUNT(x) ((void)0)
@@ -214,6 +214,13 @@ static KawaDescriptor *owning_slot(KawaRef *slot, const KawaRef *container) {
     __kawa_mem_write_address(container, slot, sizeof(*slot));
     if ((uintptr_t)slot % _Alignof(KawaRef)) fail("invalid owning slot");
     return container->descriptor;
+}
+void __kawa_mem_view(KawaRef *out,const KawaRef *container,void *slot,uint64_t size) {
+    COUNT(views);
+    __kawa_mem_write_address(container,slot,size);
+    *out=*container;
+    out->offset=(uintptr_t)slot-(uintptr_t)container->descriptor->data;
+    out->extent=size;
 }
 void __kawa_mem_drop(KawaRef *r) {
     if (!r->descriptor) return; /* moved-from/failed owner */
@@ -464,6 +471,7 @@ uint64_t __kawa_mem_metric(uint32_t metric) {
 #ifdef KAWA_MEMORY_METRICS
     case KAWA_MEM_CHECKS: return checks;
     case KAWA_MEM_PINS: return pins;
+    case KAWA_MEM_VIEWS: return views;
 #endif
     default: return UINT64_MAX; /* unavailable, not a fabricated zero */
     }

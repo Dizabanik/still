@@ -53,19 +53,49 @@ static int memory_copy(LLVMValueRef in) {
 	return ((!strcmp(name,"memcpy") || !strcmp(name,"memmove")) && !LLVMCountBasicBlocks(fn)) ||
 		!strncmp(name,"llvm.memcpy.",12) || !strncmp(name,"llvm.memmove.",13);
 }
-typedef int (*ValueFlow)(LLVMValueRef,LLVMValueRef,LLVMValueRef *,unsigned);
-static int local_flow(LLVMValueRef,LLVMValueRef,LLVMValueRef *,unsigned);
-static int parameter_flow(LLVMValueRef,LLVMValueRef,LLVMValueRef *,unsigned);
+/* An aggregate's scalar fields can carry encoded pointers (enum payload words
+ * are i64 in the ABI). Track the selected field instead of discarding scalar
+ * extracts or tainting every field of a slice/struct. */
+#define FLOW_SELECT_MAX 32
+typedef struct ResultBinding {
+    LLVMValueRef parameter, argument, caller_origin;
+    struct ResultBinding *previous;
+} ResultBinding;
+static ResultBinding *result_binding;
+static int summarize_bits;
+typedef struct {
+    LLVMValueRef value, origin;
+    ResultBinding *binding;
+    unsigned count, indices[FLOW_SELECT_MAX];
+} FlowPath;
+typedef int (*ValueFlow)(LLVMValueRef,LLVMValueRef,FlowPath *,unsigned);
+static int local_flow(LLVMValueRef,LLVMValueRef,FlowPath *,unsigned);
+static int parameter_flow(LLVMValueRef,LLVMValueRef,FlowPath *,unsigned);
+static int origin_flow(LLVMValueRef,LLVMValueRef,const unsigned *,unsigned,FlowPath *,unsigned);
+
+static int enter_flow(LLVMValueRef value,LLVMValueRef origin,const unsigned *indices,
+                      unsigned count,FlowPath *path,unsigned depth) {
+    if (depth>=256 || count>FLOW_SELECT_MAX) return -1;
+    for (unsigned i=0; i<depth; ++i)
+        if (path[i].value==value && path[i].origin==origin && path[i].count==count &&
+            (!count || !memcmp(path[i].indices,indices,count*sizeof(*indices))))
+            return path[i].binding==result_binding ? 0 : 2;
+    path[depth].value=value; path[depth].origin=origin; path[depth].count=count;
+    path[depth].binding=result_binding;
+    if (count) memcpy(path[depth].indices,indices,count*sizeof(*indices));
+    return 1;
+}
 
 /* Follow contents separately from addresses: copying a numeric local buffer
  * out is safe, copying a pointer stored in that buffer may not be. Include
  * residual memcpy/memmove edges that SROA cannot turn into scalar stores. */
 static int contents_flow(LLVMValueRef address,LLVMValueRef origin,LLVMValueRef fn,
-		LLVMValueRef *path,unsigned depth,ValueFlow flow) {
+        FlowPath *path,unsigned depth,ValueFlow flow) {
 	if (depth>=256) return 1;
 	LLVMValueRef root=storage_root(address);
-	for (unsigned i=0; i<depth; ++i) if (path[i]==root) return 0;
-	path[depth++]=root;
+    int entered=enter_flow(root,origin,NULL,0,path,depth);
+    if (entered<=0) return entered<0;
+    ++depth;
 	if (LLVMIsAPHINode(root) || LLVMIsASelectInst(root)) {
 		unsigned first=LLVMIsAPHINode(root) ? 0 : 1;
 		for (unsigned i=first; i<(unsigned)LLVMGetNumOperands(root); ++i)
@@ -85,43 +115,125 @@ static int contents_flow(LLVMValueRef address,LLVMValueRef origin,LLVMValueRef f
 
 // Existential provenance: any incoming local address makes a returned view
 // unsafe. A path stack terminates SSA cycles without losing the other inputs.
-static int contains_local(LLVMValueRef v, LLVMValueRef *path, unsigned depth) {
-	if (LLVMIsAAllocaInst(v))
-		return 1;
-	if (!LLVMIsAInstruction(v))
-		return 0;
-	if (depth == 256)
-		return 1; // fail closed on unusually deep pointer graphs
-	for (unsigned i = 0; i < depth; i++)
-		if (path[i] == v)
-			return 0;
-	path[depth++] = v;
-	if (LLVMIsALoadInst(v)) {
+static int origin_flow(LLVMValueRef v,LLVMValueRef origin,const unsigned *indices,
+                        unsigned count,FlowPath *path,unsigned depth) {
+    if (origin && v==origin) {
+        for (ResultBinding *b=result_binding; b; b=b->previous) {
+            if (b->parameter!=origin) continue;
+            ResultBinding *saved=result_binding;
+            result_binding=b->previous;
+            int result=origin_flow(b->argument,b->caller_origin,indices,count,path,depth);
+            result_binding=saved;
+            return result;
+        }
+        if (summarize_bits) return 1;
+        LLVMTypeRef selected=LLVMTypeOf(v);
+        for (unsigned i=0; i<count; ++i) {
+            LLVMTypeKind kind=LLVMGetTypeKind(selected);
+            if (kind==LLVMStructTypeKind) {
+                const char *name=LLVMGetStructName(selected);
+                if (name && !strncmp(name,"enum.",5) && indices[i]!=0) return 1;
+                if (indices[i]>=LLVMCountStructElementTypes(selected)) return 1;
+                selected=LLVMStructGetTypeAtIndex(selected,indices[i]);
+            } else if (kind==LLVMArrayTypeKind) selected=LLVMGetElementType(selected);
+            else return 1;
+        }
+        return !count || carries_pointer(selected);
+    }
+    if (!origin && LLVMIsAAllocaInst(v)) return 1;
+    if (!LLVMIsAInstruction(v)) return 0;
+    int entered=enter_flow(v,origin,indices,count,path,depth);
+    if (entered<=0) return entered<0;
+    if (entered==2) {
+        /* A recursive call may permute aggregate fields. Join its parameter
+         * dependencies instead of mistaking a new argument mapping for an SSA
+         * cycle. Scalar readers still have no return address dependency. */
+        ResultBinding *saved=result_binding;
+        int saved_summary=summarize_bits;
+        result_binding=NULL;
+        summarize_bits=1;
+        FlowPath *conservative=malloc(sizeof(*conservative)*256);
+        if (!conservative) { result_binding=saved; summarize_bits=saved_summary; return 1; }
+        int result=origin_flow(v,origin,indices,count,conservative,0);
+        free(conservative); result_binding=saved; summarize_bits=saved_summary;
+        return result;
+    }
+    ++depth;
+    if (LLVMIsAExtractValueInst(v)) {
+        unsigned prefix=LLVMGetNumIndices(v), selected[FLOW_SELECT_MAX];
+        if (prefix+count>FLOW_SELECT_MAX) return 1;
+        memcpy(selected,LLVMGetIndices(v),prefix*sizeof(*selected));
+        if (count) memcpy(selected+prefix,indices,count*sizeof(*selected));
+        return origin_flow(LLVMGetOperand(v,0),origin,selected,prefix+count,path,depth);
+    }
+    if (count && LLVMIsAInsertValueInst(v)) {
+        unsigned inserted_count=LLVMGetNumIndices(v);
+        const unsigned *inserted=LLVMGetIndices(v);
+        unsigned shared=count<inserted_count ? count : inserted_count;
+        if (memcmp(indices,inserted,shared*sizeof(*indices)))
+            return origin_flow(LLVMGetOperand(v,0),origin,indices,count,path,depth);
+        if (count>=inserted_count)
+            return origin_flow(LLVMGetOperand(v,1),origin,indices+inserted_count,
+                               count-inserted_count,path,depth);
+        return origin_flow(LLVMGetOperand(v,1),origin,NULL,0,path,depth) ||
+               origin_flow(LLVMGetOperand(v,0),origin,indices,count,path,depth);
+    }
+    if (LLVMIsALoadInst(v)) {
 		// Residual address-taken aggregate storage (not promotable by SROA).
 		LLVMValueRef root = storage_root(LLVMGetOperand(v, 0));
 		LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInstructionParent(v));
-		return contents_flow(root,NULL,fn,path,depth,local_flow);
+        if (!LLVMIsAAllocaInst(root))
+            return origin && carries_pointer(LLVMTypeOf(v)) &&
+                   parameter_flow(LLVMGetOperand(v,0),origin,path,depth);
+        return contents_flow(root,origin,fn,path,depth,origin ? parameter_flow : local_flow);
 	}
 	if (LLVMIsACallInst(v)) {
-		// A pointer-returning call may return one of its pointer arguments.
-		// Scalar results (e.g. strlen) do not carry an address.
-		if (!carries_pointer(LLVMTypeOf(v)))
-			return 0;
-		for (unsigned i = 0; i < LLVMGetNumArgOperands(v); i++)
-			if (contains_local(LLVMGetArgOperand(v, i), path, depth))
-				return 1;
-		return 0;
-	}
-	if (LLVMIsAExtractValueInst(v) && !carries_pointer(LLVMTypeOf(v))) return 0;
-	if (LLVMIsAICmpInst(v) || LLVMIsAFCmpInst(v)) return 0;
-	for (int i = 0; i < LLVMGetNumOperands(v); i++)
-		if (!(LLVMIsASelectInst(v) && i==0))
-		if (contains_local(LLVMGetOperand(v, i), path, depth))
-			return 1;
-	return 0;
+        LLVMValueRef fn=LLVMGetCalledValue(v);
+        const char *name=LLVMIsAFunction(fn) ? LLVMGetValueName(fn) : "";
+        /* Runtime results never borrow a caller's slot address. Descriptor
+         * metadata and allocation addresses have independent lifetimes. */
+        if (LLVMIsAFunction(fn) &&
+            !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11) &&
+            !strncmp(name,"__kawa_mem_",11)) return 0;
+        int defined=LLVMIsAFunction(fn) && LLVMCountBasicBlocks(fn);
+        if (!defined && !carries_pointer(LLVMTypeOf(v))) return 0;
+        for (unsigned i=0; i<LLVMGetNumArgOperands(v); ++i) {
+            if (!origin_flow(LLVMGetArgOperand(v,i),origin,NULL,0,path,depth)) continue;
+            if (!defined || i>=LLVMCountParams(fn)) return 1;
+            /* Inspect returns even for scalar results: ptrtoint is not an
+             * address-lifetime boundary. The path includes the parameter so
+             * recursive/mutually recursive helpers terminate independently. */
+            LLVMValueRef param=LLVMGetParam(fn,i);
+            ResultBinding binding={param,LLVMGetArgOperand(v,i),origin,result_binding};
+            ResultBinding *saved=result_binding;
+            if (!summarize_bits && (result_binding || !origin || origin!=param)) result_binding=&binding;
+            int result=0;
+            for (LLVMBasicBlockRef bb=LLVMGetFirstBasicBlock(fn); bb; bb=LLVMGetNextBasicBlock(bb))
+                for (LLVMValueRef in=LLVMGetFirstInstruction(bb); in; in=LLVMGetNextInstruction(in))
+                    if (LLVMIsAReturnInst(in) && LLVMGetNumOperands(in) &&
+                        origin_flow(LLVMGetOperand(in,0),param,indices,count,path,depth)) result=1;
+            result_binding=saved;
+            if (result) return 1;
+        }
+        return 0;
+    }
+    if (LLVMIsAICmpInst(v) || LLVMIsAFCmpInst(v)) return 0;
+    if (LLVMIsAPHINode(v)) {
+        for (unsigned i=0; i<LLVMCountIncoming(v); ++i)
+            if (origin_flow(LLVMGetIncomingValue(v,i),origin,indices,count,path,depth)) return 1;
+        return 0;
+    }
+    for (int i = 0; i < LLVMGetNumOperands(v); i++)
+        if (!(LLVMIsASelectInst(v) && i==0))
+        if (origin_flow(LLVMGetOperand(v,i),origin,indices,count,path,depth))
+            return 1;
+    return 0;
 }
-static int local_flow(LLVMValueRef value,LLVMValueRef unused,LLVMValueRef *path,unsigned depth) {
-	return contains_local(value,path,depth);
+static int contains_local(LLVMValueRef value,FlowPath *path,unsigned depth) {
+    return origin_flow(value,NULL,NULL,0,path,depth);
+}
+static int local_flow(LLVMValueRef value,LLVMValueRef unused,FlowPath *path,unsigned depth) {
+    return origin_flow(value,NULL,NULL,0,path,depth);
 }
 
 static int permitted_pure_call(LLVMValueRef call) {
@@ -161,30 +273,39 @@ static int nonretaining_leaf(const char *name) {
 	for (unsigned i=0; known[i]; ++i) if (!strcmp(name,known[i])) return 1;
 	return !strncmp(name,"llvm.",5) || !strcmp(name,"kawa_trap");
 }
-static int parameter_flow(LLVMValueRef value, LLVMValueRef param, LLVMValueRef *path, unsigned depth) {
-	if (value==param) return 1;
-	if (!LLVMIsAInstruction(value)) return 0;
-	if (depth==256) return 1;
-	for (unsigned i=0; i<depth; ++i) if (path[i]==value) return 0;
-	path[depth++]=value;
-	if (LLVMIsALoadInst(value)) {
-		LLVMValueRef root=storage_root(LLVMGetOperand(value,0));
-		if (!LLVMIsAAllocaInst(root))
-			return carries_pointer(LLVMTypeOf(value)) && parameter_flow(LLVMGetOperand(value,0),param,path,depth);
-		LLVMValueRef fn=LLVMGetBasicBlockParent(LLVMGetInstructionParent(value));
-		return contents_flow(root,param,fn,path,depth,parameter_flow);
-	}
-	if (LLVMIsAExtractValueInst(value) && !carries_pointer(LLVMTypeOf(value))) return 0;
-	if (LLVMIsAICmpInst(value) || LLVMIsAFCmpInst(value)) return 0;
-	if (LLVMIsACallInst(value)) {
-		if (!carries_pointer(LLVMTypeOf(value))) return 0;
-		for (unsigned i=0; i<LLVMGetNumArgOperands(value); ++i)
-			if (parameter_flow(LLVMGetArgOperand(value,i),param,path,depth)) return 1;
-		return 0;
-	}
-	for (int i=0; i<LLVMGetNumOperands(value); ++i)
-		if (parameter_flow(LLVMGetOperand(value,i),param,path,depth)) return 1;
-	return 0;
+static int parameter_flow(LLVMValueRef value, LLVMValueRef param, FlowPath *path, unsigned depth) {
+    return origin_flow(value,param,NULL,0,path,depth);
+}
+static int ast_carries_address(KawaCompiler *c,Type *type,unsigned depth) {
+    if (!type) return 0;
+    if (depth>=64) return 1;
+    type=kawa_resolve_type(c,type);
+    switch (type->kind) {
+    case TYPE_PTR: case TYPE_AMP: case TYPE_SLICE: case TYPE_OWNER:
+    case TYPE_REF: case TYPE_ARENA: case TYPE_CHAN: case TYPE_HANDLE: return 1;
+    case TYPE_ARRAY: case TYPE_SET: return ast_carries_address(c,type->inner,depth+1);
+    case TYPE_STRUCT: {
+        StructDef *def=find_struct_def_pub(c,get_llvm_type(c,type));
+        for (int i=0; def && i<def->field_count; ++i)
+            if (ast_carries_address(c,def->fields[i].ast_type,depth+1)) return 1;
+        return 0;
+    }
+    case TYPE_ENUM: {
+        ASTNode *en=find_enum_decl(c,type->name);
+        for (EnumVariant *v=en ? en->data.enum_decl.variants : NULL; v; v=v->next)
+            for (int i=0; i<v->payload_count; ++i)
+                if (ast_carries_address(c,v->payload_types[i],depth+1)) return 1;
+        return 0;
+    }
+    default: return 0;
+    }
+}
+static int address_parameter(KawaCompiler *c,LLVMValueRef fn,unsigned index) {
+    LLVMValueRef original=LLVMGetNamedFunction(c->module,LLVMGetValueName(fn));
+    for (FunctionSignature *sig=c->function_signatures; sig; sig=sig->next)
+        if (sig->function==original)
+            return ast_carries_address(c,sig->parameters[index],0);
+    return carries_pointer(LLVMTypeOf(LLVMGetParam(fn,index)));
 }
 typedef struct { LLVMValueRef fn; unsigned parameter; } CapturePath;
 static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_return,
@@ -199,7 +320,7 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 			"__kawa_mem_resize","__kawa_mem_capacity","__kawa_mem_address","__kawa_mem_slice",
 			"__kawa_mem_pin","__kawa_mem_try_pin","__kawa_mem_unpin","__kawa_mem_arena",
             "__kawa_mem_arena_alloc","__kawa_mem_remove","__kawa_mem_store_owner",
-            "__kawa_mem_take","__kawa_mem_write_address","__kawa_mem_replace",NULL};
+            "__kawa_mem_take","__kawa_mem_write_address","__kawa_mem_replace","__kawa_mem_view",NULL};
 		for (unsigned i=0; runtime[i]; ++i) if (!strcmp(name,runtime[i])) return 0;
 	}
 	if (!LLVMCountBasicBlocks(fn) && nonretaining_leaf(name)) return 0;
@@ -209,7 +330,8 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 	for (unsigned i=0; i<depth; ++i)
 		if (active[i].fn==fn && active[i].parameter==parameter) return 0;
 	active[depth++]=(CapturePath){fn,parameter};
-	LLVMValueRef param=LLVMGetParam(fn,parameter), path[256];
+    LLVMValueRef param=LLVMGetParam(fn,parameter);
+    FlowPath path[256];
 	for (LLVMBasicBlockRef bb=LLVMGetFirstBasicBlock(fn); bb; bb=LLVMGetNextBasicBlock(bb)) {
 		for (LLVMValueRef in=LLVMGetFirstInstruction(bb); in; in=LLVMGetNextInstruction(in)) {
 			LLVMValueRef sink=NULL;
@@ -236,11 +358,17 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 }
 
 void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
-	kawa_verify_effects(c);
-	LLVMModuleRef copy = LLVMCloneModule(c->module);
+    kawa_verify_effects(c);
+    LLVMModuleRef copy = LLVMCloneModule(c->module);
+    /* Keep every source body available, including unused always-inline
+     * accessors, so normalization cannot erase an invalid source contract. */
+    for (LLVMValueRef fn=LLVMGetFirstFunction(copy); fn; fn=LLVMGetNextFunction(fn)) {
+        if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.source",11))
+            LLVMSetLinkage(fn,LLVMExternalLinkage);
+    }
 	LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
 	LLVMErrorRef err =
-		LLVMRunPasses(copy, "function(sroa,mem2reg)", machine, opts);
+        LLVMRunPasses(copy, "always-inline,function(sroa,mem2reg)", machine, opts);
 	LLVMDisposePassBuilderOptions(opts);
 	if (err) {
 		char *message = LLVMGetErrorMessage(err);
@@ -264,7 +392,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 												 "kawa.pure", 9) != NULL;
 		if (LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"kawa.nocapture",14)) {
 			for (unsigned i=0; i<LLVMCountParams(fn); ++i) {
-				if (!carries_pointer(LLVMTypeOf(LLVMGetParam(fn,i)))) continue;
+                if (!address_parameter(c,fn,i)) continue;
 				CapturePath active[128]; char trace[2048];
 				if (retention_trace(fn,i,1,active,0,trace,sizeof(trace))) {
 					kdiag_error_at(KAWA_E_EFFECT,c->source_filename,NULL,line,"nocapture contract failed: %s",trace); exit(1);
@@ -295,7 +423,7 @@ void kawa_verify_safety(KawaCompiler *c, LLVMTargetMachineRef machine) {
 				if (LLVMIsAStoreInst(in) &&
 					!local_address(LLVMGetOperand(in, 1), 0))
 					value = LLVMGetOperand(in, 0);
-				LLVMValueRef path[256];
+                FlowPath path[256];
 				if (memory_copy(in) && !local_address(LLVMGetArgOperand(in,0),0) &&
 					contents_flow(LLVMGetArgOperand(in,1),NULL,fn,path,0,local_flow)) {
 					kdiag_error_at(KAWA_E_SEMANTIC,c->source_filename,NULL,line,

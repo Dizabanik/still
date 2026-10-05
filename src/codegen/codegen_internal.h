@@ -271,4 +271,11 @@ void codegen_match(KawaCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeR
 // --- Kawa Fast Runtime Declarations ---
 LLVMValueRef declare_kawa_runtime_fn(KawaCompiler *c, const char *name);
 
+typedef struct KawaOptimizationSnapshot KawaOptimizationSnapshot;
+LLVMMetadataRef kawa_report_site(KawaCompiler *c,ASTNode *node,const char *kind,
+                                 const char *detail,const char *omission);
+void kawa_report_attach(KawaCompiler *c,LLVMValueRef instruction,LLVMMetadataRef site);
+KawaOptimizationSnapshot *kawa_report_snapshot(KawaCompiler *c);
+void kawa_report_write(KawaCompiler *c,KawaOptimizationSnapshot *before,const char *pipeline);
+
 #endif

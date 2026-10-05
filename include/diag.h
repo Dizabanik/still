@@ -11,6 +11,7 @@
 #define KAWA_DIAG_H
 
 #include <timbr.h>
+#include <stdio.h>
 
 // Stable diagnostic codes.
 enum {
@@ -58,6 +59,7 @@ int kdiag_warn_count(void);
 // offending source line. Call once from the driver before compiling.
 void kdiag_set_source(const char *text, int len);
 void kdiag_set_json(int enabled);
+void kdiag_json_string(FILE *out,const char *text);
 int kdiag_explain(const char *code);
 void kdiag_location(int expanded_line, const char **filename, int *source_line);
 void kdiag_offset_location(size_t offset, int *expanded_line, int *byte_column);

@@ -1,0 +1,3 @@
+enum Pointer { Value(i32*), Empty }
+fn Pointer bad() { i32 local=42; return Pointer.Value(&local); }
+fn main() { return 0; }

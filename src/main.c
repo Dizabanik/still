@@ -50,7 +50,8 @@ static void usage(const char *prog) {
 		   "  --bounds-check=<safe|always|never> bounds checking policy\n"
 		   "  --emit-hash  emit deterministic SHA-256 hash of output module\n"
 		   "  --check      validate without writing artifacts or invoking the linker\n"
-		   "  --memory-metrics  instrument managed reference checks and stable guards\n"
+           "  --memory-metrics  instrument managed reference checks and stable guards\n"
+           "  --optimization-report[=<file>]  write static IR facts (default optimization.json)\n"
 		   "  --diagnostic-format=<text|json>  diagnostic output format\n"
 		   "  --explain <E####|W####>  explain a stable diagnostic code\n"
 		   "  --format     validate syntax and write canonical source to stdout\n"
@@ -74,7 +75,8 @@ int main(int argc, char **argv) {
 	int bounds_check_mode = 2; // safe by default; 1 = always, -1 = never
 	int emit_hash = 0;
 	int check_only = 0;
-	int memory_metrics = 0;
+    int memory_metrics = 0;
+    const char *optimization_report=NULL;
 	int json_diagnostics=0;
 	const char *explain=NULL;
 	int format=0, format_check=0;
@@ -112,8 +114,13 @@ int main(int argc, char **argv) {
 			emit_hash = 1;
 		} else if (strcmp(argv[i], "--check") == 0) {
 			check_only = 1;
-		} else if (strcmp(argv[i], "--memory-metrics") == 0) {
-			memory_metrics = 1;
+        } else if (strcmp(argv[i], "--memory-metrics") == 0) {
+            memory_metrics = 1;
+        } else if (!strcmp(argv[i],"--optimization-report")) {
+            optimization_report="optimization.json";
+        } else if (!strncmp(argv[i],"--optimization-report=",22)) {
+            optimization_report=argv[i]+22;
+            if (!*optimization_report) { fprintf(stderr,"kawac: optimization report path is empty\n"); return 2; }
 		} else if (!strcmp(argv[i],"--diagnostic-format=json")) {
 			json_diagnostics=1;
 		} else if (!strcmp(argv[i],"--diagnostic-format=text")) {
@@ -151,18 +158,28 @@ int main(int argc, char **argv) {
 
 	kdiag_set_json(json_diagnostics);
 	if (explain) return kdiag_explain(explain);
-	if (!src_path) {
+    if (!src_path) {
 		usage(argv[0]);
 		return 2;
-	}
+    }
+    if (optimization_report && (check_only || format)) {
+        fprintf(stderr,"kawac: optimization reports require code generation; --check and --format do not write artifacts\n");
+        return 2;
+    }
 
 	timbr_init();
 	// One summary line per process, on every exit path (parser errors exit
 	// from main; codegen errors call exit(1) deep inside emission).
 	atexit(kdiag_summary);
 
-	Arena a;
-	arena_init(&a, 1024 * 1024 * 10);
+    Arena a;
+    arena_init(&a, 1024 * 1024 * 10);
+    if (!out_name) {
+        const char *stem_end=strrchr(src_path,'.');
+        size_t length=stem_end ? (size_t)(stem_end-src_path) : strlen(src_path);
+        char *name=arena_alloc(&a,length+1);
+        memcpy(name,src_path,length); name[length]='\0'; out_name=name;
+    }
 
 	char *expanded = expand_imports(src_path, &a);
 	kdiag_set_source(expanded,(int)strlen(expanded));
@@ -201,7 +218,9 @@ int main(int argc, char **argv) {
 	kc.bounds_check_mode = bounds_check_mode;
 	kc.emit_hash = emit_hash;
 	kc.check_only = check_only;
-	kc.memory_metrics = memory_metrics;
+    kc.memory_metrics = memory_metrics;
+    kc.optimization_report=optimization_report;
+    kc.executable_path=link_exe ? out_name : NULL;
 	// Codegen errors only know a line number; the source text lets them
 	// render caret snippets like parser errors do.
 	kc.source_text = expanded;
@@ -217,17 +236,6 @@ int main(int argc, char **argv) {
 	}
 
 	// Link a native executable via the system C compiler.
-	if (!out_name) {
-		// Default executable name: source stem.
-		const char *stem_end = strrchr(src_path, '.');
-		size_t slen = stem_end ? (size_t)(stem_end - src_path)
-							   : strlen(src_path);
-		char *def = arena_alloc(&a, slen + 1);
-		memcpy(def, src_path, slen);
-		def[slen] = '\0';
-		out_name = def;
-	}
-
 	int rc = link_object(out_name,enable_lto,pgo_gen!=NULL,LLVMGetTarget(kc.module));
 	if (rc != 0) {
 		fprintf(stderr, "kawac: linking failed\n");

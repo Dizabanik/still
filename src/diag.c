@@ -21,7 +21,7 @@ static int source_location_count;
 
 void kdiag_set_json(int enabled) { json_diagnostics=enabled; }
 
-static void json_string(FILE *out,const char *text) {
+void kdiag_json_string(FILE *out,const char *text) {
 	fputc('"',out);
 	for (const unsigned char *p=(const unsigned char *)(text ? text : ""); *p; ++p) {
 		if (*p=='"' || *p=='\\') { fputc('\\',out); fputc(*p,out); }
@@ -43,6 +43,7 @@ static void json_string(FILE *out,const char *text) {
 	}
 	fputc('"',out);
 }
+#define json_string kdiag_json_string
 
 void kdiag_set_source(const char *text, int len) {
 	source_text = text;

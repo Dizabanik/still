@@ -1,0 +1,4 @@
+u64 saved;
+fn u64 encode(i32* pointer) { return (u64)pointer; }
+fn void remember(i32* pointer) { saved=encode(pointer); }
+fn main() { i32 local=42; remember(&local); return 0; }

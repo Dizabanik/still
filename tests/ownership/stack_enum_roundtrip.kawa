@@ -1,0 +1,5 @@
+enum Pointer { Value(i32*), Empty }
+fn Pointer wrap(i32* pointer) { return Pointer.Value(pointer); }
+fn i32* unwrap(Pointer value) { return match value { Value(pointer)=>pointer, Empty=>(i32*)0 }; }
+fn i32* bad() { i32 local=42; return unwrap(wrap(&local)); }
+fn main() { return 0; }

@@ -1808,6 +1808,10 @@ static Type *deduce_node_type(Parser *p, ASTNode *n) {
 	if (n->type == NODE_LITERAL) {
 		return n->data_type;
 	}
+	if (n->type==NODE_INDEX || n->type==NODE_DEREF) {
+		Type *object=deduce_node_type(p,n->type==NODE_INDEX ? n->data.index.object : n->data.deref.expr);
+		return object ? object->inner : NULL;
+	}
 	if (n->type == NODE_STRING_LIT) {
 		Type *st = arena_alloc(p->arena, sizeof(Type));
 		st->kind = TYPE_SLICE;
@@ -3047,6 +3051,8 @@ static ASTNode *parse_postfix_inner(Parser *p) {
 						Type *mt = arena_alloc(p->arena, sizeof(Type));
 						*mt = *arg;
 						if (!strcmp(name, "ref_of") || !strcmp(name, "ref_slice")) mt->kind = TYPE_REF;
+                        if (!strcmp(name,"ref_of") && arg->kind!=TYPE_OWNER && arg->kind!=TYPE_REF)
+                            mt->inner=arg->kind==TYPE_ARRAY ? arg->inner : arg;
 						if (!strcmp(name, "clone") || !strcmp(name, "try_clone")) mt->kind = TYPE_OWNER;
 						call->data_type = mt;
 					}

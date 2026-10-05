@@ -26,6 +26,10 @@ Work order:
   arrays, replacement and extraction, cycle prevention, independent deep clone,
   partial-clone rollback, and iterative cleanup/clone for unbounded depth.
   Runtime drop preflights the complete affected tree before any mutation.
+- Subobject references: ref_of on managed scalar/struct fields and fixed arrays
+  shares the enclosing allocation's identity while narrowing its byte extent.
+  Fixed arrays produce element references; empty arrays have zero extent.
+  Stack/raw addresses cannot acquire managed identity.
 - Stable and optional access: stable(r) / try_stable(r) with transitive pins.
   Ordinary mutable aliases remain allowed. A protected descriptor cannot be
   freed, removed, relocated, or replaced indirectly through a callback.
@@ -39,6 +43,9 @@ Work order:
   Comptime evaluation respects widths, short circuiting, and typed rounding.
 - Effects: transitive pure, noalloc, and nocapture checking before optimization,
   including memory copies, reachable pointers, and indirect/unknown calls.
+  Address provenance follows scalar encoding, enum payload words, selected
+  aggregate fields and helper return values. Recursive field permutations join
+  conservatively; scalar reads and slice lengths remain ordinary values.
 - Aggregate initialization: typed SSA construction, zero omitted elements,
   declared defaults only for missing fields, source-order explicit expressions,
   nested arrays, and checked duplicate/excess fields and spread types.
@@ -52,11 +59,19 @@ Work order:
   codes, JSON diagnostics and explanations, byte spans, import-aware source
   locations, canonical cyclic/diamond imports, literal linker arguments,
   and repeatable artifacts with a hash of the emitted bitcode.
+- Optimization reports: --optimization-report[=path] records function-level
+  IR facts before/after optimization, tagged operations, retained guard
+  predicates, and constant checks omitted during lowering. Missing tags/calls
+  do not establish runtime elimination. Reports are deterministic, preserve
+  native object bytes, and reject input/import/artifact path collisions.
 
 Managed lowering, ownership analysis, numeric policies, effects, aggregate
-literals, import expansion, and formatting now have separate source files.
+literals, optimization reporting, import expansion, and formatting have
+separate source files.
 The embedded memory runtime uses the native CPU and O3, matching the current
 native-only object emitter.
+Reserved compiler runtime helpers have internal linkage for specialization
+and removal of unused entry points. Public source functions keep their ABI.
 
 ## Ownership semantics
 
@@ -81,18 +96,25 @@ A managed assignment resolves its target once and revalidates the allocation
 after evaluating the right-hand side. A callback cannot cause a later store
 through an address from freed/recycled storage. Stable scalar writes reuse the
 guard instead of repeating lifetime validation.
+Nested array reads also revalidate after evaluating an index that can invoke
+a callback. A callback cannot leave a previously validated array address
+unchecked after removing its allocation.
 
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete checkpoint has 758 passing cases and all six CTest suites
-passing. The sanitized runtime suite
+The latest complete language checkpoint has 800 passing cases and all seven
+CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
-and a 50,000-node deep clone/drop without recursion.
+and a 50,000-node deep clone/drop without recursion. Subobject coverage adds
+exact extents, empty/one-past views, stale construction and output/header aliasing.
+The additional optimization-report suite checks emitted IR against reports,
+execution counters, source spans and unchanged native object bytes.
 
-scripts/bench_memory.py verifies 80 edge runs and eight separately instrumented
-reference-walk workloads. scripts/bench_owners.py verifies 40 edge runs, two
+scripts/bench_memory.py verifies 80 edge runs, two sanitized C runs and eight
+separately instrumented workloads for each reference or subobject walk.
+scripts/bench_owners.py verifies 40 edge runs, two
 sanitized C runs, and four separately instrumented lifecycle workloads. Both
 use the same descriptor runtime, ABI, initialization, and arithmetic policy as
 their C counterparts. Timings use fresh, uninstrumented processes, balanced
@@ -107,6 +129,17 @@ index-check counters match. These local
 measurements do not establish performance on other workloads or machines.
 The Homebrew sanitizer runtime on this host stalls before main; verification
 uses the working Xcode sanitizer runtime and records its separate version.
+
+The field-view workload constructs two bounded views per iteration in both
+Kawa and C, with identical runtime, row layout, initialization and arithmetic.
+Its instrumented runs verify four indexed validations per checked iteration,
+or zero indexed validations with two pins per iteration plus one outer pin.
+Both modes create exactly two views per iteration. The stable variant measures
+guard churn deliberately; it is not a claim that per-iteration pins are faster.
+At ten million sequential iterations, private runtime helpers reduced the
+local Kawa median from 83.876 to 77.021 ms (MAD 0.307/0.159 ms), with C at
+71.240/72.049 ms. The Kawa executable shrank from 70,376 to 51,896 bytes.
+Each run uses seven samples/two warmups and verifies the full timed input.
 
 scripts/bench_tools.py uses three versioned, deterministic source corpora with
 independent execution checksums, formatter fixed points and repeatable
@@ -132,9 +165,10 @@ cleanup/transfer glue remain restricted. Typed Option/Result propagation,
 coroutine cancellation cleanup, channel ownership transfer/shared regions,
 UTF-8 str versus bytes and C-string contracts, explicit raw/unsafe/FFI
 boundaries, shaped numerical/complex library work, and optimization reporting
-are still required. Legacy raw pointers retain their prior semantics until
-the explicit boundary migration is implemented. The existing IR escape
-analysis also needs scalar-helper/enum-address provenance coverage.
+refinements are still required. Reports currently expose exact static IR facts
+and conservative source associations, not complete LLVM proof traces or
+executed-operation counts. Legacy raw pointers retain their prior semantics
+until the explicit boundary migration is implemented.
 
 Design constraints: reference identity cannot depend on an allocation's address;
 descriptor storage survives its payload; exhausted generations retire; checking

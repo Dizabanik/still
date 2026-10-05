@@ -167,6 +167,13 @@ if(x==41){println("yes");}else{println("no");}return 0;}
                 builds.append(artifacts)
             assert builds[0] == builds[1], f'artifacts depend on output cwd (debug={debug})'
         print('PASS reproducibility: bitcode, IR, native object and independent SHA-256 oracle')
+        for artifact in ('output.bc','output.ll','output.o'):
+            work=root/f'blocked-{artifact}'
+            work.mkdir()
+            (work/artifact).mkdir()
+            result=run('-O3','-c',source,cwd=work,status=1)
+            assert b'[Kawa] Wrote' not in result.stdout and b'error' in result.stderr,result
+        print('PASS artifact errors: bitcode, IR and object write failures report failure')
         if platform.system()=='Darwin':
             deployment=environment({'MACOSX_DEPLOYMENT_TARGET':'13.0'})
             result=invoke([compiler,'-O3',str(source),'-o',str(root/'deployment')],root,env=deployment)
