@@ -129,7 +129,7 @@ unchecked after removing its allocation.
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 857 passing cases and all seven
+The latest complete language checkpoint has 857 passing cases and all eight
 CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
@@ -201,6 +201,10 @@ Repository CI covers Linux and macOS with the same strict contracts and
 untimed benchmark verification. Linux links libm after the generated object;
 runtime-input sqrt/cos regression cases keep math calls live at O0/O2/O3,
 rather than letting constant folding hide a missing linker dependency.
+Native object emission uses LLVM's PIC relocation model so ELF objects can
+link with Linux toolchains that default to PIE. The tooling suite also forces
+PIE linking at O0/O2/O3, checks the ELF executable type, and verifies output
+from global data, string literals, and managed memory.
 
 ## Remaining scope
 

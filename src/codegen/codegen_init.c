@@ -89,8 +89,11 @@ void still_init(StillCompiler *c, const char *module_name, Arena *arena) {
 		LLVMDisposeMessage(target_error);
 		exit(1);
 	}
+	// Match native linkers that build PIE executables by default. The default
+	// x86 ELF relocation model can embed absolute addresses in read-only data,
+	// which cannot link into a PIE even when the Clang driver enables it.
 	c->target_machine = LLVMCreateTargetMachine(target, triple, cpu, features,
-		LLVMCodeGenLevelAggressive, LLVMRelocDefault, LLVMCodeModelDefault);
+		LLVMCodeGenLevelAggressive, LLVMRelocPIC, LLVMCodeModelDefault);
 	c->target_data = LLVMCreateTargetDataLayout(c->target_machine);
 	LLVMSetModuleDataLayout(c->module, c->target_data);
 	LLVMSetTarget(c->module, triple);

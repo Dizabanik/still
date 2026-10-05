@@ -174,6 +174,30 @@ if(x==41){println("yes");}else{println("no");}return 0;}
             result=run('-O3','-c',source,cwd=work,status=1)
             assert b'[Whisky] Wrote' not in result.stdout and b'error' in result.stderr,result
         print('PASS artifact errors: bitcode, IR and object write failures report failure')
+        if platform.system() == 'Linux':
+            # Force PIE independently of the host driver's default. This catches
+            # absolute x86 ELF relocations even on systems defaulting to non-PIE.
+            source.write_text('''import stdc;
+let answer:i64=41;
+fn main(){
+    let values:owner<i64>=own(1); values[0]=answer+1;
+    stdc.printf("%s %lld\\n", "Whisky", values[0]);
+    return 0;
+}
+''')
+            for opt in (0, 2, 3):
+                run(f'-O{opt}', '-g', '-c', source)
+                exe = root / f'pie-{opt}'
+                linked = invoke(['clang', '-pie', 'output.o', '-pthread', '-lm',
+                                 '-o', str(exe)], root)
+                assert linked.returncode == 0 and not linked.stderr, linked
+                image = exe.read_bytes()
+                assert image[:4] == b'\x7fELF' and image[5] in (1, 2), image[:18]
+                endian = 'little' if image[5] == 1 else 'big'
+                assert int.from_bytes(image[16:18], endian) == 3, 'expected ELF ET_DYN (PIE)'
+                executed = invoke([str(exe)], root)
+                assert executed.returncode == 0 and executed.stdout == b'Whisky 42\n' and not executed.stderr, executed
+            print('PASS ELF PIE: forced position-independent linking and execution at O0/O2/O3')
         if platform.system()=='Darwin':
             deployment=environment({'MACOSX_DEPLOYMENT_TARGET':'13.0'})
             result=invoke([compiler,'-O3',str(source),'-o',str(root/'deployment')],root,env=deployment)
