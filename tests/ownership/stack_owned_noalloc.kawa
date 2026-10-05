@@ -1,0 +1,3 @@
+struct Item { owner<i64> data; }
+#[noalloc] fn Item copy(Item input) { return clone(input); }
+fn main() { let value:Item={data:own(1)}; let copied=copy(move(value)); return 0; }

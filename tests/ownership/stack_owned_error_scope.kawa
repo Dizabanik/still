@@ -1,0 +1,5 @@
+fn main() {
+    filter { press error=7; } dregs(error) { println("{error}"); }
+    println("{error}");
+    return 0;
+}

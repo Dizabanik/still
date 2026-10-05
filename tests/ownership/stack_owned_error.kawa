@@ -1,0 +1,32 @@
+struct Error { i64 code; [2]owner<i64> data; }
+fn Error relay(Error input) {
+    filter { press error=move(input); }
+    dregs(error:Error) { return move(error); }
+    return {code:0};
+}
+fn i64 early() {
+    filter { press error={code:19,data:{own(1),own(1)}}; }
+    dregs(error:Error) { return error.code; }
+    return 0;
+}
+fn main() {
+    let borrowed:ref<i64>;
+    filter {
+        let temporary:owner<i64>=own(1);
+        press error={code:17,data:{own(1),own(1)}};
+    } dregs(error:Error) {
+        error.data[0][0]=31;
+        borrowed=ref_of(error.data[0]);
+        println("{error.code} {borrowed[0]}");
+    }
+    try_stable(borrowed) { println("unexpected"); } else { println("handler cleaned"); }
+    println("{early()} {mem_metric(2)}");
+    {
+        let error:Error={code:23,data:{own(1)}};
+        error.data[0][0]=37;
+        let returned=relay(move(error));
+        println("{returned.code} {returned.data[0][0]}");
+    }
+    println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}");
+    return 0;
+}

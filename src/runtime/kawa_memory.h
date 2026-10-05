@@ -10,6 +10,26 @@ typedef struct {
     KawaDescriptor *descriptor;
     uint64_t generation, offset, extent;
 } KawaRef;
+/* Static compiler layouts describe embedded owner headers, including nested
+ * fixed arrays. NULL field.layout denotes one owner header. They never
+ * describe borrowed ref fields or an owner's separately allocated payload. */
+typedef struct KawaValueLayout KawaValueLayout;
+typedef struct {
+    uint64_t offset, count, stride;
+    const KawaValueLayout *layout;
+} KawaOwnedField;
+struct KawaValueLayout {
+    uint64_t size, count;
+    const KawaOwnedField *fields;
+};
+void __kawa_mem_value_drop(void *slot, const KawaValueLayout *);
+void __kawa_mem_value_clear(void *slot, const KawaValueLayout *, const KawaRef *container);
+void __kawa_mem_value_take(void *out, void *slot, const KawaValueLayout *,
+                           const KawaRef *container);
+void __kawa_mem_value_store(void *slot, void *incoming, const KawaValueLayout *,
+                            const KawaRef *container);
+int32_t __kawa_mem_value_clone(void *out, void *source, const KawaValueLayout *,
+                              const KawaRef *container);
 
 int32_t __kawa_mem_alloc(KawaRef *out, uint64_t count, uint64_t size);
 void __kawa_mem_drop(KawaRef *owner);

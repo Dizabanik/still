@@ -1,6 +1,12 @@
 #include "codegen_internal.h"
 
 void kawa_literal_context(KawaCompiler *c,ASTNode *n,Type *type) {
+    if (n && n->type==NODE_CALL && !n->data_type && n->data.call.callee &&
+        n->data.call.callee->type==NODE_VAR_REF) {
+        const char *name=n->data.call.callee->data.var_ref.name;
+        if (!strcmp(name,"own") || !strcmp(name,"try_own") || !strcmp(name,"arena") ||
+            !strcmp(name,"arena_new") || !strcmp(name,"try_arena_new")) n->data_type=type;
+    }
 	if (!n || n->type!=NODE_STRUCT_LITERAL) return;
 	if (!n->data_type) n->data_type=type;
     Type *actual=kawa_resolve_type(c,n->data_type);
@@ -73,6 +79,12 @@ LLVMValueRef kawa_codegen_literal(KawaCompiler *c,ASTNode *n) {
 		if (item->spread_from) continue;
 		unsigned index=plan.indices[at];
 		Type *field_type=definition ? definition->fields[index].ast_type : NULL;
+        if (plan.spread && kawa_contains_managed(c,field_type,1)) {
+            LLVMValueRef previous=LLVMBuildExtractValue(c->builder,value,index,"replaced_field");
+            LLVMValueRef slot=create_entry_block_alloca(c,LLVMTypeOf(previous),"replaced_field");
+            LLVMBuildStore(c->builder,previous,slot);
+            kawa_memory_cleanup_value(c,slot,field_type);
+        }
 		kawa_literal_context(c,item->value,field_type);
 		LLVMValueRef field=codegen_expr(c,item->value);
 		field=coerce_value(c,field,kawa_expr_type(c,item->value),LLVMStructGetTypeAtIndex(type,index),field_type);

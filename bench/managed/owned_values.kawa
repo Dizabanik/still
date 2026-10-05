@@ -1,0 +1,40 @@
+// Whole-process aggregate ownership, with four independently owned buffers.
+struct Bag { u64 tag; [4]owner<u64> buffers; }
+fn u64 input(i32 arg) {
+    str text=std.process.arg_at(arg);
+    u64 value=0;
+    for (i64 i=0; i<text.len; i+=1) { value=value*10+(u64)text[i]-48; }
+    return value;
+}
+fn main() {
+    u64 size=input(1); u64 trials=input(2); u64 seed=input(3); u64 shape=input(4);
+    if (size>1000000 || trials<1 || trials>100 || seed>65535 || shape>1) { return 2; }
+    u64 originals=0; u64 copies=0;
+    for (u64 trial=0; trial<trials; trial+=1) {
+        let source:Bag={tag:seed,buffers:{own(size),own(size),own(size),own(size)}};
+        for (u64 buffer=0; buffer<4; buffer+=1) {
+            for (u64 i=0; i<size; i+=1) { source.buffers[buffer][i]=i*17+seed+buffer*23; }
+        }
+        let copied:Bag;
+        let moved:Bag;
+        if (shape==0) {
+            copied=clone(source);
+            moved=move(source);
+        } else {
+            let heap:owner<Bag>=own(1);
+            heap[0]=move(source);
+            copied=clone(heap[0]);
+            moved=move(heap[0]);
+        }
+        if (size!=0) { copied.buffers[0][0]+=1; }
+        originals+=moved.tag; copies+=copied.tag;
+        for (u64 buffer=0; buffer<4; buffer+=1) {
+            for (u64 i=0; i<size; i+=1) {
+                originals+=moved.buffers[buffer][i];
+                copies+=copied.buffers[buffer][i];
+            }
+        }
+    }
+    println("{originals} {copies} {mem_metric(0)} {mem_metric(1)} {mem_metric(2)} {mem_metric(3)} {mem_metric(5)} {mem_metric(4)} {mem_metric(7)}");
+    return 0;
+}

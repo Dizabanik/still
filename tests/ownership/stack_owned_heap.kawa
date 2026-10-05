@@ -1,0 +1,22 @@
+struct Item { i64 tag; [2]owner<i64> data; }
+fn Item make(i64 n) { return {tag:n,data:{own(1),own(1)}}; }
+fn main() {
+    let heap:owner<Item>=own(2);
+    heap[1]=make(11);
+    heap[1].data[0][0]=31;
+    let view=ref_of(heap[1].data[0]);
+    let copied=clone(heap[1]);
+    copied.data[0][0]=37;
+    println("{heap[1].tag} {view[0]} {copied.data[0][0]}");
+    let taken=move(heap[1]);
+    println("{allocated(heap[1].data[0])} {taken.data[0][0]}");
+    heap[0]=move(copied);
+    release(heap[0]);
+    println("{allocated(heap[0].data[1])}");
+    release(heap);
+    println("{view[0]}");
+    let replacement:Item={..move(taken),tag:17,data:{own(1)}};
+    try_stable(view) { println("unexpected"); } else { println("spread dropped"); }
+    println("{replacement.tag} {allocated(replacement.data[0])} {allocated(replacement.data[1])}");
+    return 0;
+}

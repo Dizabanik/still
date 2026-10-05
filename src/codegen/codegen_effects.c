@@ -8,7 +8,8 @@ static int noalloc_leaf(const char *name) {
         "__kawa_mem_try_pin", "__kawa_mem_unpin", "__kawa_mem_drop", "__kawa_mem_remove",
         "__kawa_mem_metric", "__kawa_mem_budget", "__kawa_mem_capacity",
         "__kawa_mem_store_owner", "__kawa_mem_take", "__kawa_mem_write_address",
-        "__kawa_mem_replace", "__kawa_mem_view", NULL};
+        "__kawa_mem_replace", "__kawa_mem_view", "__kawa_mem_value_drop",
+        "__kawa_mem_value_take", "__kawa_mem_value_store", "__kawa_mem_value_clear", NULL};
     for (unsigned i=0; safe[i]; ++i) if (!strcmp(name,safe[i])) return 1;
     // Memory/arithmetic/lifetime/debug intrinsics do not acquire heap storage.
     return !strncmp(name,"llvm.",5) && strncmp(name,"llvm.coro.",10);

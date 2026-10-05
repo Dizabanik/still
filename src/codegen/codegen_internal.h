@@ -172,6 +172,13 @@ void emit_check_or_trap(KawaCompiler *c, ASTNode *n, LLVMValueRef ok, const char
 // Managed memory has one lowering boundary and an opaque runtime descriptor.
 int kawa_is_managed(Type *t);
 int kawa_is_owner(Type *t);
+LLVMValueRef kawa_memory_layout(KawaCompiler *c, Type *type);
+int kawa_value_contains_arena(KawaCompiler *c, Type *type);
+int kawa_expr_may_invalidate(KawaCompiler *c, ASTNode *node);
+void kawa_memory_defer_value(KawaCompiler *c, LLVMValueRef slot, Type *type);
+void kawa_memory_cleanup_value(KawaCompiler *c, LLVMValueRef slot, Type *type);
+void kawa_memory_store_value(KawaCompiler *c, LLVMValueRef slot, LLVMValueRef value,
+                             Type *type, LLVMValueRef container);
 int kawa_contains_managed(KawaCompiler *c, Type *t, int owners_only);
 Type *kawa_expr_type(KawaCompiler *c, ASTNode *n);
 LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name);

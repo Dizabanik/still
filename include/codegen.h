@@ -40,6 +40,7 @@ typedef struct FilterFrame {
 typedef struct DeferFrame {
 	LLVMValueRef memory_slot; /* owner drop or stable unpin; never captured by value */
 	int memory_unpin;
+	Type *memory_type; /* aggregate drop layout; NULL for an owner or pin */
 	struct ASTNode *stmt;
 	struct {
 		char *name;
@@ -78,6 +79,7 @@ typedef struct {
     struct KawaOptimizationSite *optimization_sites;
     unsigned optimization_site_count;
 	StableFrame *stable_stack;
+	struct KawaValueLayoutCache *value_layouts;
 	FunctionSignature *function_signatures;
 	unsigned fp_permissions;
 

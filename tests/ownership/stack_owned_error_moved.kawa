@@ -1,0 +1,9 @@
+struct Error { owner<i64> data; }
+fn main() {
+    filter { press error={data:own(1)}; }
+    dregs(error:Error) {
+        let moved=move(error);
+        println("{error.data[0]}");
+    }
+    return 0;
+}

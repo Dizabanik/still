@@ -1,0 +1,13 @@
+fn main() {
+    let values:[3][2]owner<i64>={{own(1),own(1)},{own(1)}};
+    values[0][1][0]=29;
+    values[1][0][0]=31;
+    let borrowed=ref_of(values[0][1]);
+    let copied=clone(values);
+    copied[0][1][0]=37;
+    let moved=move(values);
+    println("{borrowed[0]} {copied[0][1][0]} {moved[1][0][0]} {allocated(moved[2][1])}");
+    release(moved);
+    try_stable(borrowed) { println("unexpected"); } else { println("array dropped"); }
+    return 0;
+}

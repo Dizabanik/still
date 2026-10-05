@@ -7,28 +7,37 @@ int kawa_is_managed(Type *t) {
 int kawa_is_owner(Type *t) {
     return t && (t->kind == TYPE_OWNER || t->kind == TYPE_ARENA);
 }
-static int contains(KawaCompiler *c, Type *t, int owners_only, unsigned depth) {
-    if (!t || depth > 64) return 0;
+static int contains(KawaCompiler *c, Type *t, int owners_only, Type **path, unsigned depth) {
+    if (!t) return 0;
     t = kawa_resolve_type(c, t);
     if (owners_only ? kawa_is_owner(t) : kawa_is_managed(t)) return 1;
     if (t->kind == TYPE_REF) return 0; /* its referent is not embedded */
+    for (unsigned i=0; i<depth; ++i)
+        if (path[i]==t || (t->kind==TYPE_STRUCT && path[i]->kind==TYPE_STRUCT &&
+            t->name && path[i]->name && !strcmp(t->name,path[i]->name))) return 0;
+    if (depth==128) {
+        kdiag_error_at(KAWA_E_TYPE,c->source_filename,NULL,0,"embedded type nesting exceeds 128 levels");
+        exit(1);
+    }
+    path[depth]=t;
     if (t->kind == TYPE_STRUCT && t->name) {
         for (ASTNode *s = c->program_root ? c->program_root->next : NULL; s; s = s->next) {
             if (s->type != NODE_STRUCT_DECL || strcmp(s->data.struct_decl.name, t->name)) continue;
             for (ASTNode *f = s->data.struct_decl.fields; f; f = f->next)
-                if (contains(c, f->data_type, owners_only, depth + 1)) return 1;
+                if (contains(c,f->data_type,owners_only,path,depth+1)) return 1;
         }
     }
     if (t->kind == TYPE_ENUM && t->name) {
         ASTNode *en = find_enum_decl(c, t->name);
         for (EnumVariant *v = en ? en->data.enum_decl.variants : NULL; v; v = v->next)
             for (int i=0; i<v->payload_count; ++i)
-                if (contains(c, v->payload_types[i], owners_only, depth+1)) return 1;
+                if (contains(c,v->payload_types[i],owners_only,path,depth+1)) return 1;
     }
-    return contains(c, t->inner, owners_only, depth + 1);
+    return contains(c,t->inner,owners_only,path,depth+1);
 }
 int kawa_contains_managed(KawaCompiler *c, Type *t, int owners_only) {
-    return contains(c, t, owners_only, 0);
+    Type *path[128];
+    return contains(c,t,owners_only,path,0);
 }
 Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
     if (!n) return NULL;
@@ -78,8 +87,9 @@ Type *kawa_expr_type(KawaCompiler *c, ASTNode *n) {
 }
 void kawa_check_value_type(KawaCompiler *c, ASTNode *n, Type *type) {
     type=kawa_resolve_type(c,type);
-    if (!kawa_is_owner(type) && kawa_contains_managed(c,type,1)) {
-        error(c,n,"aggregates with owned fields currently require managed heap storage");
+    if (!kawa_is_owner(type) && kawa_contains_managed(c,type,1) &&
+        type->kind!=TYPE_STRUCT && type->kind!=TYPE_ARRAY) {
+        error(c,n,"owned values require owner, arena, struct or fixed array types");
     }
 }
 static LLVMTypeRef i64(KawaCompiler *c) { return LLVMInt64TypeInContext(c->context); }
@@ -200,16 +210,29 @@ LLVMValueRef kawa_memory_address(KawaCompiler *c, ASTNode *n, ASTNode *base,
  * expression once. Field/array offsets keep the nearest allocation identity
  * so a later callback cannot turn a saved slot address into an unchecked
  * write to freed or recycled storage. */
-static int index_may_invalidate(ASTNode *n) {
+int kawa_expr_may_invalidate(KawaCompiler *c, ASTNode *n) {
     if (!n) return 0;
     switch (n->type) {
     case NODE_LITERAL: case NODE_STRING_LIT: case NODE_VAR_REF: return 0;
     case NODE_BINARY_OP:
-        return index_may_invalidate(n->data.bin_op.left) || index_may_invalidate(n->data.bin_op.right);
-    case NODE_MEMBER_ACCESS: return index_may_invalidate(n->data.member_access.object);
-    case NODE_INDEX: return index_may_invalidate(n->data.index.object) || index_may_invalidate(n->data.index.index);
-    case NODE_DEREF: case NODE_AMP: return index_may_invalidate(n->data.deref.expr);
-    case NODE_CAST: return index_may_invalidate(n->data.cast.val);
+        /* Struct operators may invoke user code even without a NODE_CALL.
+         * Only built-in scalar/reference operators have no invalidation. */
+        for (unsigned i=0; i<2; ++i) {
+            ASTNode *operand=i ? n->data.bin_op.right : n->data.bin_op.left;
+            Type *type=kawa_expr_type(c,operand);
+            if (!type || !((type->kind>=TYPE_BOOL && type->kind<=TYPE_F64) || kawa_is_managed(type)))
+                return 1;
+            if (kawa_expr_may_invalidate(c,operand)) return 1;
+        }
+        return 0;
+    case NODE_MEMBER_ACCESS: return kawa_expr_may_invalidate(c,n->data.member_access.object);
+    case NODE_INDEX: {
+        Type *base=kawa_expr_type(c,n->data.index.object);
+        if (!base || base->kind==TYPE_STRUCT) return 1; /* user indexing */
+        return kawa_expr_may_invalidate(c,n->data.index.object) || kawa_expr_may_invalidate(c,n->data.index.index);
+    }
+    case NODE_DEREF: case NODE_AMP: return kawa_expr_may_invalidate(c,n->data.deref.expr);
+    case NODE_CAST: return kawa_expr_may_invalidate(c,n->data.cast.val);
     default: return 1;
     }
 }
@@ -231,7 +254,7 @@ LLVMValueRef kawa_memory_lvalue(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_ty
         LLVMValueRef index=integer_arg(c,n->data.index.index);
         emit_check_or_trap(c,n,LLVMBuildICmp(c->builder,LLVMIntULT,index,constant(c,type->array_len),"array_bounds"),
                            "array index out of bounds");
-        if (index_may_invalidate(n->data.index.index))
+        if (kawa_expr_may_invalidate(c,n->data.index.index))
             address=kawa_memory_write_address(c,address,array_type,*container);
         LLVMValueRef indices[]={constant(c,0),index};
         if (out_type) *out_type=get_llvm_type(c,type->inner);
@@ -411,6 +434,35 @@ LLVMValueRef kawa_memory_builtin(KawaCompiler *c, ASTNode *n, const char *name) 
         if (strncmp(name, "try_", 4))
             emit_check_or_trap(c, n, cond_to_bool(c, ok), "managed allocation failed");
         return LLVMBuildLoad2(c->builder, rt, out, "allocated_reference");
+    }
+    if (!kawa_is_managed(at) && kawa_contains_managed(c,at,1) &&
+        (!strcmp(name,"move") || !strcmp(name,"release") || !strcmp(name,"clone") || !strcmp(name,"try_clone"))) {
+        kawa_check_value_type(c,n,at);
+        LLVMTypeRef type=NULL;
+        LLVMValueRef container=NULL, slot=kawa_memory_lvalue(c,a,&type,&container);
+        if (!slot) slot=get_address(c,a,&type);
+        if (!slot || !type) error(c,n,"owned aggregate operations require an lvalue; bind the temporary first");
+        LLVMValueRef layout=kawa_memory_layout(c,at);
+        if (!strcmp(name,"release")) {
+            if (container) {
+                LLVMValueRef args[]={slot,layout,spill(c,container)};
+                return call_runtime(c,n,"__kawa_mem_value_clear",vi,args,3);
+            }
+            LLVMValueRef args[]={slot,layout};
+            return call_runtime(c,n,"__kawa_mem_value_drop",vi,args,2);
+        }
+        LLVMValueRef out=create_entry_block_alloca(c,type,"owned_value_result");
+        LLVMValueRef guard=container ? spill(c,container) : LLVMConstNull(ptr(c));
+        LLVMValueRef args[]={out,slot,layout,guard};
+        if (!strcmp(name,"move"))
+            call_runtime(c,n,"__kawa_mem_value_take",vi,args,4);
+        else {
+            if (kawa_value_contains_arena(c,at)) error(c,n,"arenas cannot be cloned; move the owning value instead");
+            LLVMValueRef ok=call_runtime(c,n,"__kawa_mem_value_clone",i32,args,4);
+            if (!strcmp(name,"clone")) emit_check_or_trap(c,n,cond_to_bool(c,ok),"owned value clone failed");
+        }
+        n->data_type=at;
+        return LLVMBuildLoad2(c->builder,type,out,"owned_value_result");
     }
     if (!kawa_is_managed(at) && strcmp(name,"ref_of"))
         error(c, n, "memory operation expects an owner or reference");

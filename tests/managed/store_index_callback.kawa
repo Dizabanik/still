@@ -1,0 +1,11 @@
+struct Access { ref<i64> victim; }
+impl Access {
+    fn i64 self_index(self, i64 index) { remove(self.victim); return index; }
+}
+fn main() {
+    let region:arena=arena();
+    let object:ref<i64>=arena_new(region,1);
+    let access:Access={victim:object};
+    object[0]=access[0];
+    return 0;
+}

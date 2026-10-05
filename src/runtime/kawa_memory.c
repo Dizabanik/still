@@ -333,6 +333,146 @@ int32_t __kawa_mem_clone(KawaRef *out, const KawaRef *r) {
     }
     return 1;
 }
+/* Layout depth is bounded by finite source types. Allocation trees themselves
+ * still use the iterative drop/clone paths above. Aggregate operations need
+ * no descriptor, dynamic offset table, or per-field reference count. */
+typedef int (*ValueVisit)(KawaRef *, void *);
+static int value_walk(void *slot, const KawaValueLayout *layout, int reverse,
+                      ValueVisit visit, void *context) {
+    for (uint64_t at=0; at<layout->count; ++at) {
+        uint64_t i=reverse ? layout->count-1-at : at;
+        const KawaOwnedField *field=&layout->fields[i];
+        for (uint64_t element=0; element<field->count; ++element) {
+            uint64_t j=reverse ? field->count-1-element : element;
+            void *child=(unsigned char *)slot+field->offset+j*field->stride;
+            if (field->layout) {
+                if (!value_walk(child,field->layout,reverse,visit,context)) return 0;
+            } else if (!visit(child,context)) return 0;
+        }
+    }
+    return 1;
+}
+typedef struct {
+    KawaDescriptor *parent;
+    int mark_roots, dropping;
+} ValueCheck;
+static int value_check(KawaRef *slot, void *context) {
+    ValueCheck *check=context;
+    if (!slot->descriptor) return 1;
+    KawaDescriptor *d=whole_owner(slot);
+    if (d->parent!=check->parent || d->owner_slot!=(check->parent ? slot : NULL))
+        fail("unregistered or duplicated owning value");
+    /* Root owner_slot is otherwise NULL. Marking it detects duplicate roots
+     * in linear time, without allocating or enlarging descriptors. It is
+     * cleared before any fallible clone work or committed transfer. */
+    if (!check->parent && check->mark_roots) d->owner_slot=slot;
+    if (check->dropping) preflight(d);
+    return 1;
+}
+static int value_unmark(KawaRef *slot, void *context) {
+    (void)context;
+    if (slot->descriptor && !slot->descriptor->parent) slot->descriptor->owner_slot=NULL;
+    return 1;
+}
+static KawaDescriptor *value_container(void *slot, const KawaValueLayout *layout,
+                                      const KawaRef *container, int mutate) {
+    if (!container) return NULL;
+    __kawa_mem_write_address(container,slot,layout->size);
+    if (mutate) ancestors_unpinned(container->descriptor);
+    return container->descriptor;
+}
+static void value_disjoint(void *first, void *second, uint64_t size) {
+    uintptr_t a=(uintptr_t)first, b=(uintptr_t)second;
+    if (size && (a>b ? a-b<size : b-a<size)) fail("overlapping owning values");
+}
+static int value_dispose(KawaRef *slot, void *context) {
+    (void)context;
+    if (slot->descriptor) dispose_tree(slot->descriptor);
+    *slot=(KawaRef){0};
+    return 1;
+}
+void __kawa_mem_value_clear(void *slot, const KawaValueLayout *layout, const KawaRef *container) {
+    ValueCheck check={.parent=value_container(slot,layout,container,1),.mark_roots=1,.dropping=1};
+    value_walk(slot,layout,0,value_check,&check);
+    value_walk(slot,layout,1,value_dispose,NULL);
+    memset(slot,0,layout->size);
+}
+void __kawa_mem_value_drop(void *slot, const KawaValueLayout *layout) {
+    __kawa_mem_value_clear(slot,layout,NULL);
+}
+static int value_detach(KawaRef *slot, void *context) {
+    (void)context;
+    if (slot->descriptor) detach(slot->descriptor);
+    return 1;
+}
+void __kawa_mem_value_take(void *out, void *slot, const KawaValueLayout *layout,
+                           const KawaRef *container) {
+    value_disjoint(out,slot,layout->size);
+    ValueCheck check={.parent=value_container(slot,layout,container,1),.mark_roots=1};
+    value_walk(slot,layout,0,value_check,&check);
+    value_walk(slot,layout,0,value_detach,NULL);
+    memcpy(out,slot,layout->size);
+    memset(slot,0,layout->size);
+}
+typedef struct { KawaDescriptor *parent; } ValueIncoming;
+static int value_incoming(KawaRef *slot, void *context) {
+    ValueIncoming *check=context;
+    if (!slot->descriptor) return 1;
+    KawaDescriptor *d=whole_owner(slot);
+    if (d->parent || d->owner_slot) fail("owner must be moved before transfer");
+    if (check->parent) {
+        if (d->arena) fail("arenas cannot be embedded in owning slots");
+        for (KawaDescriptor *p=check->parent; p; p=p->parent)
+            if (p==d) fail("ownership cycle");
+    }
+    d->owner_slot=slot;
+    return 1;
+}
+static int value_install(KawaRef *slot, void *context) {
+    KawaDescriptor *parent=context;
+    if (slot->descriptor) {
+        slot->descriptor->owner_slot=NULL;
+        if (parent) attach(slot->descriptor,parent,slot,0);
+    }
+    return 1;
+}
+void __kawa_mem_value_store(void *slot, void *incoming, const KawaValueLayout *layout,
+                            const KawaRef *container) {
+    value_disjoint(slot,incoming,layout->size);
+    KawaDescriptor *parent=value_container(slot,layout,container,1);
+    ValueIncoming next={parent};
+    value_walk(incoming,layout,0,value_incoming,&next);
+    ValueCheck old={.parent=parent,.dropping=1};
+    value_walk(slot,layout,0,value_check,&old);
+    value_walk(slot,layout,1,value_dispose,NULL);
+    memcpy(slot,incoming,layout->size);
+    memset(incoming,0,layout->size);
+    value_walk(slot,layout,0,value_install,parent);
+}
+static int value_zero(KawaRef *slot, void *context) {
+    (void)context;
+    *slot=(KawaRef){0};
+    return 1;
+}
+typedef struct { unsigned char *source, *out; } ValueClone;
+static int value_clone(KawaRef *slot, void *context) {
+    ValueClone *copy=context;
+    KawaRef *source=(KawaRef *)(copy->source+((unsigned char *)slot-copy->out));
+    return !source->descriptor || __kawa_mem_clone(slot,source);
+}
+int32_t __kawa_mem_value_clone(void *out, void *source, const KawaValueLayout *layout,
+                              const KawaRef *container) {
+    value_disjoint(out,source,layout->size);
+    ValueCheck check={.parent=value_container(source,layout,container,0),.mark_roots=1};
+    value_walk(source,layout,0,value_check,&check);
+    value_walk(source,layout,0,value_unmark,NULL);
+    memcpy(out,source,layout->size);
+    value_walk(out,layout,0,value_zero,NULL);
+    ValueClone copy={source,out};
+    if (value_walk(out,layout,0,value_clone,&copy)) return 1;
+    __kawa_mem_value_drop(out,layout);
+    return 0;
+}
 /* A length change invalidates every previous view, including views into the
  * retained prefix. Capacity grows geometrically; shrinking retains capacity.
  * Prepare all fallible work before committing either identity or payload.

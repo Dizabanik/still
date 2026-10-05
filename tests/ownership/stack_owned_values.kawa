@@ -1,0 +1,30 @@
+struct Pair { i64 tag; owner<i64> first; [2]owner<i64> others; ref<i64> borrowed; }
+struct Outer { Pair item; [2]Pair more; }
+fn make(i64 n) -> Pair {
+    let a: owner<i64> = own(2);
+    a[0] = n; a[1] = n+1;
+    let b: owner<i64> = own(1); b[0] = n+2;
+    let borrowed = ref_of(a);
+    let p: Pair = {tag: n, first: move(a), others: {move(b)}, borrowed: borrowed};
+    return move(p);
+}
+fn consume(Pair p) -> i64 { return p.first[0] + p.others[0][0] + p.tag; }
+fn main() -> i32 {
+    let a: Pair = make(11);
+    let view: ref<i64> = ref_of(a.first);
+    let b: Pair = clone(a);
+    b.first[0] = 29;
+    println("{a.first[0]} {b.first[0]} {view[1]}");
+    let outer: Outer = {item: move(a)};
+    let moved: Pair = move(outer.item);
+    println("{moved.first[0]} {allocated(outer.item.first)} {consume(move(b))}");
+    let fresh: Pair = {tag: 5, first: own(1)};
+    fresh.first[0] = 37;
+    moved = move(fresh);
+    try_stable(view) { println("unexpected live"); } else { println("old stale"); }
+    println("{moved.tag} {moved.first[0]}");
+    let empty: [0]owner<i64> = {};
+    let empty_copy: [0]owner<i64> = clone(empty);
+    release(empty_copy);
+    return 0;
+}

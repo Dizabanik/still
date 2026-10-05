@@ -945,6 +945,10 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 		LLVMValueRef ptr =
 			get_address(c, n->data.member_access.object, &container_type);
 		if (!ptr && n->data.member_access.object->data_type) {
+            if (kawa_contains_managed(c,n->data.member_access.object->data_type,1)) {
+                kerr(KAWA_E_OWNERSHIP,n,"bind an owned temporary before accessing its fields");
+                exit(1);
+            }
 			// Rvalue base (`Vec.new(1,2).x`): evaluate the object to a
 			// value, spill to a temp alloca, and address through it. The
 			// optimizer promotes the temp away -- zero cost over direct
@@ -1038,6 +1042,30 @@ LLVMValueRef get_address(KawaCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 	case NODE_INDEX: {
 		// a[i] where `a` is an array (alloca) or pointer. GEP with the
 		// element type; no load of the base is needed for arrays.
+        Type *array_ast=kawa_expr_type(c,n->data.index.object);
+        if (array_ast && array_ast->kind==TYPE_ARRAY) {
+            LLVMTypeRef array_type=NULL;
+            LLVMValueRef array=get_address(c,n->data.index.object,&array_type);
+            if (!array) {
+                if (kawa_contains_managed(c,array_ast,1)) {
+                    kerr(KAWA_E_OWNERSHIP,n,"bind an owned temporary before indexing it");
+                    exit(1);
+                }
+                LLVMValueRef value=codegen_expr(c,n->data.index.object);
+                array_type=LLVMTypeOf(value);
+                array=create_entry_block_alloca(c,array_type,"array_temporary");
+                LLVMBuildStore(c->builder,value,array);
+            }
+            LLVMTypeRef i64=LLVMInt64TypeInContext(c->context);
+            LLVMValueRef index=codegen_expr(c,n->data.index.index);
+            index=coerce_value(c,index,kawa_expr_type(c,n->data.index.index),i64,NULL);
+            if (c->bounds_check_mode!=-1)
+                emit_bounds_check(c,n->data.index.index,index,array_ast->array_len,c->source_filename,n->line);
+            LLVMValueRef indices[]={LLVMConstInt(i64,0,0),index};
+            n->data_type=array_ast->inner;
+            if (out_type) *out_type=get_llvm_type(c,array_ast->inner);
+            return LLVMBuildGEP2(c->builder,array_type,array,indices,2,"array_element");
+        }
 		LLVMTypeRef elem_type = NULL;
 		if (n->data_type)
 			elem_type = get_llvm_type(c, n->data_type);

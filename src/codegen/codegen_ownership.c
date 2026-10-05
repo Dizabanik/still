@@ -24,6 +24,7 @@ typedef struct Edge {
 typedef struct Handler {
     Binding *bindings, *errors;
     Pending *defers;
+    int has_errors;
     struct Handler *next;
 } Handler;
 typedef struct {
@@ -79,7 +80,7 @@ static void edge(Analysis *a, Binding **destination, Binding *base, Binding *inc
 static void bind(Analysis *a, Binding **env, ASTNode *decl, int cleanup) {
     Binding *b=arena_alloc(a->compiler->arena,sizeof(*b));
     b->declaration=decl; b->name=decl->data.var_decl.name;
-    b->owner=kawa_is_owner(kawa_resolve_type(a->compiler,decl->data_type));
+    b->owner=kawa_contains_managed(a->compiler,decl->data_type,1);
     b->state=LIVE; b->next=*env; *env=b;
     if (b->owner && cleanup) {
         Pending *d=arena_alloc(a->compiler->arena,sizeof(*d));
@@ -293,12 +294,16 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
         Binding *success=copy(a,*env);
         int stopped=statement(a,n->data.filter.try_block,&success);
         a->handler=handler.next;
-        if (handler.errors) {
+        if (handler.has_errors) {
             Binding *caught=handler.errors;
             ASTNode *error=arena_alloc(c->arena,sizeof(*error));
             error->data.var_decl.name=n->data.filter.err_var;
-            bind(a,&caught,error,0);
+            error->data_type=n->data.filter.err_type;
+            Pending *catch_defers=a->defers;
+            bind(a,&caught,error,1);
             int catch_stopped=statement(a,n->data.filter.catch_block,&caught);
+            if (!catch_stopped) cleanup(a,catch_defers,&caught);
+            a->defers=catch_defers;
             if (stopped && catch_stopped) return 1;
             if (stopped) success=caught;
             else if (!catch_stopped) merge(success,caught);
@@ -313,6 +318,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
         expression(a,n->data.press.target,env);
         if (a->in_defer) { kerr(KAWA_E_OWNERSHIP,n,"deferred code cannot transfer control"); exit(1); }
         if (a->handler) {
+            a->handler->has_errors=1;
             cleanup(a,a->handler->defers,env);
             edge(a,&a->handler->errors,a->handler->bindings,*env);
         }

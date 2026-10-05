@@ -9,7 +9,13 @@ import sys
 p = argparse.ArgumentParser()
 p.add_argument('binary')
 a = p.parse_args()
-cases = {'valid': None, 'nested': None, 'nested_pinned': 'invalidation during stable',
+cases = {'valid': None, 'value': None,
+         'value_drop_pinned': 'invalidation during stable',
+         'value_store_pinned': 'invalidation during stable',
+         'value_take_pinned': 'invalidation during stable',
+         'value_duplicate': 'owner must be moved',
+         'value_stale': 'stale reference',
+         'nested': None, 'nested_pinned': 'invalidation during stable',
          'nested_replace_pinned': 'invalidation during stable',
          'nested_parent_pinned': 'invalidation during stable',
          'nested_resize_pinned': 'invalidation during stable',

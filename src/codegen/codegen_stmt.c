@@ -9,7 +9,8 @@ static void scoped_statement(KawaCompiler *c, ASTNode *n) {
 
 void run_defer_frame(KawaCompiler *c, DeferFrame *d) {
 	if (d->memory_slot) {
-		kawa_memory_cleanup(c, d->memory_slot, d->memory_unpin);
+		if (d->memory_type) kawa_memory_cleanup_value(c,d->memory_slot,d->memory_type);
+		else kawa_memory_cleanup(c, d->memory_slot, d->memory_unpin);
 		return;
 	}
 	Scope *saved_scope = c->scope_stack;
@@ -48,11 +49,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
 	case NODE_CALL:
 	case NODE_SEND:
-		if (kawa_is_owner(kawa_expr_type(c, n))) {
+		if (kawa_contains_managed(c,kawa_expr_type(c,n),1)) {
 			LLVMValueRef value = codegen_expr(c, n);
 			LLVMValueRef slot = create_entry_block_alloca(c, LLVMTypeOf(value), "discarded_owner");
 			LLVMBuildStore(c->builder, value, slot);
-			kawa_memory_cleanup(c, slot, 0);
+			kawa_memory_cleanup_value(c,slot,kawa_expr_type(c,n));
 			return;
 		}
 		// `ch <- v;` as a statement: the send's value is discarded.
@@ -86,7 +87,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 
     case NODE_VAR_DECL: {
         kawa_check_value_type(c,n,n->data_type);
-		if (kawa_is_owner(n->data_type) && c->in_coroutine) {
+		if (kawa_contains_managed(c,n->data_type,1) && c->in_coroutine) {
 			kerr(KAWA_E_TYPE, n, "managed owners in coroutines require cancellation cleanup support");
 			exit(1);
 		}
@@ -171,7 +172,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		// A declaration becomes visible after its initializer. Shadowing
 		// reads the outer binding; a self-initializer cannot load this alloca.
 		scope_push(c, n->data.var_decl.name, val_ptr, var_type, n);
-		if (kawa_is_owner(n->data_type)) kawa_memory_defer(c, val_ptr, 0);
+		if (kawa_contains_managed(c,n->data_type,1)) kawa_memory_defer_value(c,val_ptr,n->data_type);
 		return;
 	}
 
@@ -283,6 +284,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 				 "cannot resolve assignment target"); // internal
 			exit(1);
 		}
+        kawa_literal_context(c,n->data.assign.value,target_ast);
 
 		if (target_type &&
 			LLVMGetTypeKind(target_type) == LLVMPointerTypeKind &&
@@ -359,7 +361,15 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
             kawa_memory_store_owner(c,target_ptr,val,container);
             return;
         }
-        target_ptr=kawa_memory_write_address(c,target_ptr,target_type,container);
+        if (kawa_contains_managed(c,target_ast,1)) {
+            kawa_memory_store_value(c,target_ptr,val,target_ast,container);
+            return;
+        }
+        if (kawa_expr_may_invalidate(c,n->data.assign.value))
+            target_ptr=kawa_memory_write_address(c,target_ptr,target_type,container);
+        else if (container)
+            kawa_report_site(c,n,"lifetime_and_extent","__kawa_mem_write_address",
+                             "built-in right-hand side expressions cannot invalidate managed storage");
         LLVMValueRef store = LLVMBuildStore(c->builder, val, target_ptr);
 		attach_tbaa(c, store, target_type);
 		return;
@@ -970,6 +980,11 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		// a typeless dregs keeps the legacy i32 slot.
 		LLVMContextRef ctx = c->context;
 		Type *payload = n->data.filter.err_type;
+        kawa_check_value_type(c,n,payload);
+        if (c->in_coroutine && kawa_contains_managed(c,payload,1)) {
+            kerr(KAWA_E_OWNERSHIP,n,"owned error payloads in coroutines require cancellation cleanup support");
+            exit(1);
+        }
 		LLVMTypeRef slot_t =
 			payload ? get_llvm_type(c, payload)
 					: LLVMInt32TypeInContext(ctx);
@@ -1001,6 +1016,7 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
 			LLVMBuildBr(c->builder, merge_bb);
 		LLVMPositionBuilderAtEnd(c->builder, frame.catch_bb);
+        Scope *catch_scope=c->scope_stack;
 		// Bind err_var to the SLOT (scope entries hold addresses; loads
 		// happen at use sites).
 		{
@@ -1016,9 +1032,14 @@ void codegen_stmt(KawaCompiler *c, ASTNode *n) {
 			scope_push(c, n->data.filter.err_var, frame.err_slot, slot_t,
 					   bind);
 		}
+        if (kawa_contains_managed(c,payload,1)) kawa_memory_defer_value(c,frame.err_slot,payload);
 		codegen_stmt(c, n->data.filter.catch_block);
-		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+            if (kawa_contains_managed(c,payload,1)) kawa_memory_cleanup_value(c,frame.err_slot,payload);
 			LLVMBuildBr(c->builder, merge_bb);
+        }
+        c->defer_stack=saved_defers;
+        c->scope_stack=catch_scope;
 		LLVMPositionBuilderAtEnd(c->builder, merge_bb);
 		return;
 	}

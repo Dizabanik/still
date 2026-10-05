@@ -1,0 +1,18 @@
+struct First { owner<i64> data; i64 tag; }
+struct Second { i64 tag; ref<i64> borrowed; [2]owner<i64> data; }
+fn T duplicate(T value) { return clone(value); }
+fn T transferred(T value) { return move(value); }
+fn main() {
+    let first:First={data:own(1),tag:7};
+    first.data[0]=31;
+    let stale=ref_of(first.data);
+    let copy=duplicate(move(first));
+    let moved=transferred(move(copy));
+    println("{moved.tag} {moved.data[0]}");
+    try_stable(stale) { println("unexpected"); } else { println("parameter cleaned"); }
+    let second:Second={tag:11,data:{own(1),own(1)}};
+    second.data[1][0]=37;
+    let other=transferred(duplicate(move(second)));
+    println("{other.tag} {other.data[1][0]}");
+    return 0;
+}

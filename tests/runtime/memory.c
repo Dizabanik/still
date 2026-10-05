@@ -13,10 +13,14 @@ static Node *node(KawaRef r, uint64_t i) {
 static KawaRef watched[8];
 static unsigned watched_count;
 static uint64_t watched_live;
+static void *watched_value;
+static unsigned char watched_bytes[512];
+static size_t watched_size;
 static void unchanged_on_abort(int signal_number) {
     signal(SIGABRT,SIG_DFL);
     assert(signal_number==SIGABRT);
     assert(__kawa_mem_metric(KAWA_MEM_LIVE_BYTES)==watched_live);
+    if (watched_value) assert(!memcmp(watched_value,watched_bytes,watched_size));
     for (unsigned i=0; i<watched_count; ++i) {
         assert(__kawa_mem_try_pin(&watched[i]));
         __kawa_mem_unpin(&watched[i]);
@@ -26,6 +30,82 @@ static void watch(KawaRef root, KawaRef child, KawaRef leaf) {
     watched[0]=root; watched[1]=child; watched[2]=leaf; watched_count=3;
     watched_live=__kawa_mem_metric(KAWA_MEM_LIVE_BYTES);
     signal(SIGABRT,unchanged_on_abort);
+}
+typedef struct { int64_t tag; KawaRef owned[3], borrowed; } Value;
+typedef struct { Value item, more[2]; } Pack;
+static const KawaOwnedField value_fields[]={{offsetof(Value,owned),3,sizeof(KawaRef),NULL}};
+static const KawaValueLayout value_layout={sizeof(Value),1,value_fields};
+static const KawaOwnedField pack_fields[]={
+    {offsetof(Pack,item),1,sizeof(Value),&value_layout},
+    {offsetof(Pack,more),2,sizeof(Value),&value_layout}
+};
+static const KawaValueLayout pack_layout={sizeof(Pack),2,pack_fields};
+static int values(const char *test) {
+    if (strncmp(test,"value",5)) return 0;
+    Value source={.tag=17}, copy={0}, incoming={0};
+    for (unsigned i=0; i<3; ++i) {
+        assert(__kawa_mem_alloc(&source.owned[i],1,8));
+        *(int64_t *)__kawa_mem_address(source.owned[i].descriptor,source.owned[i].generation,0,8,0,8)=31+i;
+    }
+    source.borrowed=source.owned[0];
+    if (!strcmp(test,"value_drop_pinned") || !strcmp(test,"value_store_pinned")) {
+        watch(source.owned[0],source.owned[1],source.owned[2]);
+        watched_value=&source; watched_size=sizeof(source); memcpy(watched_bytes,&source,sizeof(source));
+        __kawa_mem_pin(&source.owned[2]);
+        if (!strcmp(test,"value_drop_pinned")) __kawa_mem_value_drop(&source,&value_layout);
+        else __kawa_mem_value_store(&source,&incoming,&value_layout,NULL);
+        return 99;
+    }
+    if (!strcmp(test,"value_duplicate")) {
+        incoming.owned[0]=source.owned[0]; incoming.owned[1]=source.owned[0];
+        __kawa_mem_value_store(&copy,&incoming,&value_layout,NULL); return 99;
+    }
+    Value original=source;
+    for (uint64_t budget=0; budget<24; ++budget) {
+        __kawa_mem_budget(budget);
+        assert(!__kawa_mem_value_clone(&copy,&source,&value_layout,NULL));
+        assert(!memcmp(&source,&original,sizeof(source)));
+        Value zero={0}; assert(!memcmp(&copy,&zero,sizeof(copy)));
+        assert(__kawa_mem_metric(KAWA_MEM_LIVE_BYTES)==24);
+    }
+    __kawa_mem_budget(UINT64_MAX);
+    assert(__kawa_mem_value_clone(&copy,&source,&value_layout,NULL));
+    assert(copy.tag==17 && copy.borrowed.descriptor==source.borrowed.descriptor);
+    for (unsigned i=0; i<3; ++i) {
+        assert(copy.owned[i].descriptor!=source.owned[i].descriptor);
+        assert(*(int64_t *)__kawa_mem_address(copy.owned[i].descriptor,copy.owned[i].generation,0,8,0,8)==(int64_t)(31+i));
+    }
+    __kawa_mem_value_drop(&copy,&value_layout);
+    Pack pack={0};
+    __kawa_mem_value_take(&pack.more[1],&source,&value_layout,NULL);
+    assert(!source.owned[0].descriptor && pack.more[1].tag==17);
+    assert(__kawa_mem_value_clone(&pack.item,&pack.more[1],&value_layout,NULL));
+    KawaRef heap;
+    assert(__kawa_mem_alloc(&heap,1,sizeof(Pack)));
+    Pack *destination=__kawa_mem_address(heap.descriptor,heap.generation,0,heap.extent,0,sizeof(Pack));
+    __kawa_mem_value_store(destination,&pack,&pack_layout,&heap);
+    assert(!pack.item.owned[0].descriptor && !pack.more[1].owned[0].descriptor);
+    if (!strcmp(test,"value_take_pinned")) {
+        watch(heap,destination->item.owned[0],destination->more[1].owned[0]);
+        __kawa_mem_pin(&heap);
+        __kawa_mem_value_take(&pack,destination,&pack_layout,&heap); return 99;
+    }
+    if (!strcmp(test,"value_stale")) {
+        KawaRef alias=heap;
+        __kawa_mem_drop(&heap);
+        __kawa_mem_value_take(&pack,destination,&pack_layout,&alias); return 99;
+    }
+    assert(!strcmp(test,"value"));
+    assert(__kawa_mem_value_clone(&copy,&destination->item,&value_layout,&heap));
+    __kawa_mem_value_drop(&copy,&value_layout);
+    __kawa_mem_value_take(&pack,destination,&pack_layout,&heap);
+    __kawa_mem_drop(&heap);
+    assert(__kawa_mem_try_pin(&pack.more[1].borrowed));
+    __kawa_mem_unpin(&pack.more[1].borrowed);
+    __kawa_mem_value_drop(&pack,&pack_layout);
+    assert(__kawa_mem_metric(KAWA_MEM_LIVE_BYTES)==0);
+    puts("memory runtime: verified");
+    return 1;
 }
 static int nested(const char *test) {
     if (strncmp(test,"nested",6)) return 0;
@@ -179,6 +259,7 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     const char *test = argv[1];
     if (nested(test)) return 0;
+    if (values(test)) return 0;
     KawaRef a, b, r, s;
     assert(__kawa_mem_alloc(&a, 4, sizeof(int64_t)));
     r = a;

@@ -1,0 +1,6 @@
+struct Item { owner<i64> data; }
+fn Item make() { return {data: own(1)}; }
+fn main() {
+    let borrowed = ref_of(make().data);
+    return 0;
+}

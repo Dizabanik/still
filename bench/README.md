@@ -70,12 +70,13 @@ All other historical output comparisons are byte-exact. Prefer the matched suite
 python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --verify-only --sanitize-c
 python3 scripts/bench_memory.py --kawac ./build-cmake/kawac --workload subobject_walk --rounds 10000000 --sanitize-c --json build/subobject-benchmark.json
 python3 scripts/bench_owners.py --kawac ./build-cmake/kawac --verify-only
+python3 scripts/bench_owners.py --kawac ./build-cmake/kawac --workload owned_values --trials 64 --json build/owned-values-benchmark.json
 python3 scripts/bench_tools.py --kawac ./build-cmake/kawac --verify-only
 ```
 
 The reference and field-view walks compare Kawa and C using the same descriptor runtime, reference ABI, initialization, and arithmetic policy. Each has an independent Python checksum oracle, 80 boundary runs, and eight separately instrumented cases. The field-view walk constructs two bounded references per iteration into a 32-byte row. Checked mode performs four indexed validations per iteration. Stable mode performs zero indexed validations, but acquires two guards per iteration plus one outer guard. This workload includes that guard cost; it does not assume stability always improves speed.
 
-The ownership lifecycle workload verifies deep chains and fanout trees, allocation failure, clone/drop behavior, and matching runtime counters. Its verification includes two untimed C sanitizer runs. Compiler tooling uses deterministic source corpora with independent execution checksums, formatter fixed points, and repeated bitcode/IR/object hashes. It measures check, format, and build separately.
+The ownership lifecycle workload verifies deep chains and fanout trees, allocation failure, clone/drop behavior, and matching runtime counters. The owned-values workload holds four buffers in a 136-byte aggregate, then clones, moves, traverses, and drops it. Its two modes transfer directly between stack values or through a managed heap slot. Each ownership workload verifies 40 edge runs, four instrumented cases and two untimed C sanitizer runs. Their checksum oracles are closed-form Python equations, with explicit allocation, copied-byte, peak-byte and validation-count formulas. Compiler tooling uses deterministic source corpora with independent execution checksums, formatter fixed points, and repeated bitcode/IR/object hashes. It measures check, format, and build separately.
 
 Managed timings use seven samples and two warmups by default. Reports preserve native process times, median/MAD, individual RSS and CPU samples, binary sizes, hashes, compiler versions, and all counter checks. Instrumentation and sanitizer builds run outside timed intervals. On macOS, sanitizer verification uses the system Clang and records its version separately from the LLVM compiler used for native comparisons.
 

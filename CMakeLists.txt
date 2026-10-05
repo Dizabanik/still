@@ -143,6 +143,13 @@ add_custom_target(bench-owners
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL DEPENDS kawac)
 
+add_custom_target(bench-owned-values
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_owners.py
+        --kawac $<TARGET_FILE:kawac> --workload owned_values --trials 64
+        --json ${CMAKE_BINARY_DIR}/owned-values-benchmark.json
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL DEPENDS kawac)
+
 add_custom_target(bench-subobjects
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_memory.py
         --kawac $<TARGET_FILE:kawac> --workload subobject_walk

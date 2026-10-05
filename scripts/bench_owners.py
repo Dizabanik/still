@@ -13,36 +13,48 @@ import tempfile
 from bench_memory import ROOT, UNAVAILABLE, digest, invoke
 from bench_process import run_measured
 
-def verify(output,args,instrumented):
+def verify(output,args,instrumented,workload='owner_tree'):
     size,trials,seed,shape=args
     values=[int(x) for x in output.split()]
-    checksum=(17*size*(size-1)//2+size*seed)*trials
-    allocations=2*((max(1,size) if shape==0 else size+1))*trials
-    expected=[checksum,checksum+trials*int(size>0),allocations,allocations,0,
-              80*size,40*size*trials]
+    if workload=='owned_values':
+        checksum=(34*size*(size-1)+4*size*seed+138*size+seed)*trials
+        allocations=(8+shape)*trials
+        peak,cloned=64*size+136*shape,32*size*trials
+        checks=(12*size+2*int(size>0)+3*shape)*trials
+    else:
+        checksum=(17*size*(size-1)//2+size*seed)*trials
+        allocations=2*((max(1,size) if shape==0 else size+1))*trials
+        peak,cloned=80*size,40*size*trials
+        checks=(6*size+1 if shape==0 else 7*size+4)*trials if size else 0
+    expected=[checksum,checksum+trials*int(size>0),allocations,allocations,0,peak,cloned]
     assert len(values)==9 and values[:7]==expected,(args,values,expected)
-    checks=(6*size+1 if shape==0 else 7*size+4)*trials if size else 0
     assert values[7]>0 and values[8]==(checks if instrumented else UNAVAILABLE),(args,values,checks)
     return values
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--kawac',default=str(ROOT/'build-cmake/kawac'))
+    p.add_argument('--workload',choices=['owner_tree','owned_values'],default='owner_tree')
     p.add_argument('--clang',default=str(Path(invoke(['llvm-config','--bindir'],ROOT).decode().strip())/'clang'))
     p.add_argument('--sanitizer-clang',default='/usr/bin/clang' if platform.system()=='Darwin' else 'clang')
     p.add_argument('--size',type=int,default=100000)
-    p.add_argument('--trials',type=int,default=8)
+    p.add_argument('--trials',type=int)
     p.add_argument('--seed',type=int,default=12345)
     p.add_argument('--samples',type=int,default=7)
     p.add_argument('--warmups',type=int,default=2)
     p.add_argument('--verify-only',action='store_true')
-    p.add_argument('--json',type=Path,default=ROOT/'build/owners-benchmark.json')
+    p.add_argument('--json',type=Path)
     a=p.parse_args()
+    if a.trials is None: a.trials=64 if a.workload=='owned_values' else 8
+    if a.json is None:
+        a.json=ROOT/'build'/('owned-values-benchmark.json' if a.workload=='owned_values' else 'owners-benchmark.json')
     if not (0<=a.size<=10**6 and 1<=a.trials<=100 and 0<=a.seed<=65535 and a.samples>=3 and a.warmups>=1):
         p.error('invalid workload or insufficient sampling')
     compiler=Path(shutil.which(a.kawac) or a.kawac).resolve()
-    sources={lang:ROOT/f'bench/managed/owner_tree.{ext}' for lang,ext in [('kawa','kawa'),('c','c')]}
-    result={'contract':'Same zero initialization, unsigned arithmetic, runtime, checked accesses, moves, clone and lexical cleanup.',
+    sources={lang:ROOT/f'bench/managed/{a.workload}.{ext}' for lang,ext in [('kawa','kawa'),('c','c')]}
+    check=lambda output,args,metrics:verify(output,args,metrics,a.workload)
+    result={'workload':a.workload,
+        'contract':'Same zero initialization, unsigned arithmetic, runtime, checked accesses, moves, clone and lexical cleanup.',
         'timing_scope':'Fresh whole process, including initialization, cloning, verification traversal, cleanup and output.',
         'rss_scope':'OS wait4 ru_maxrss for each fresh child; high-water resident bytes, not total allocations or cumulative child usage.',
         'timing_counters':False,'platform':platform.platform(),'machine':platform.machine(),
@@ -64,23 +76,24 @@ def main():
             for shape in (0,1):
                 args=[size,trials,seed,shape]
                 for (lang,metrics),exe in bins.items():
-                    verify(invoke([exe,*map(str,args)],work),args,metrics)
+                    check(invoke([exe,*map(str,args)],work),args,metrics)
         # The same C algorithm also runs under sanitizers; never time it.
         sanitized=work/'c-sanitized'
         invoke([a.sanitizer_clang,'-O1','-g','-std=c11','-fsanitize=address,undefined',
                 '-fno-omit-frame-pointer',sources['c'],'-o',sanitized,'-pthread'],work)
         for shape in (0,1):
             args=[1025,2,42,shape]
-            verify(invoke([sanitized,*map(str,args)],work),args,False)
+            check(invoke([sanitized,*map(str,args)],work),args,False)
         measurements={(lang,shape):[] for lang in sources for shape in (0,1)}
         instrumentation={}
         for lang,shape in measurements:
             args=[a.size,a.trials,a.seed,shape]
-            values=verify(invoke([bins[lang,True],*map(str,args)],work),args,True)
+            values=check(invoke([bins[lang,True],*map(str,args)],work),args,True)
             instrumentation[lang,shape]={'allocations':values[2],'frees':values[3],
                 'live_payload_bytes':values[4],'peak_payload_bytes':values[5],
                 'cloned_bytes':values[6],'descriptor_bytes':values[7],'checks':values[8],
-                'reference_bytes':32,'chain_node_bytes':40}
+                'reference_bytes':32,
+                **({'aggregate_bytes':136} if a.workload=='owned_values' else {'chain_node_bytes':40})}
         for shape in (0,1):
             assert instrumentation['kawa',shape]==instrumentation['c',shape],('different policies/layout/counters',shape,instrumentation)
         if not a.verify_only:
@@ -90,11 +103,12 @@ def main():
                 for lang,shape in order:
                     args=[a.size,a.trials,a.seed,shape]
                     output,measurement=run_measured([bins[lang,False],*map(str,args)],work)
-                    verify(output,args,False)
+                    check(output,args,False)
                     if round_index>=a.warmups: measurements[lang,shape].append(measurement)
         for (lang,shape),samples in measurements.items():
             exe=bins[lang,False]
-            record={'language':lang,'shape':'fanout' if shape else 'chain','args':[a.size,a.trials,a.seed,shape],
+            labels=('stack','heap') if a.workload=='owned_values' else ('chain','fanout')
+            record={'language':lang,'shape':labels[shape],'args':[a.size,a.trials,a.seed,shape],
                 'binary_sha256':digest(exe),'binary_file_bytes':exe.stat().st_size,
                 'llvm_size_berkeley':invoke(['llvm-size','--format=berkeley',exe],work).decode().strip(),
                 'instrumentation':instrumentation[lang,shape],'samples':samples}

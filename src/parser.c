@@ -1543,7 +1543,8 @@ static ASTNode *parse_primary(Parser *p) {
 							  p->prev.type == TOK_COLON_ASSIGN ||
 							  p->prev.type == TOK_COMMA ||
 							  p->prev.type == TOK_COLON ||
-							  p->prev.type == TOK_LPAREN);
+							  p->prev.type == TOK_LPAREN ||
+                              p->prev.type == TOK_LBRACE);
 		if (value_position || peek_is_struct_literal(p)) {
 			return parse_struct_literal(p);
 		} else {
@@ -3053,7 +3054,8 @@ static ASTNode *parse_postfix_inner(Parser *p) {
 						if (!strcmp(name, "ref_of") || !strcmp(name, "ref_slice")) mt->kind = TYPE_REF;
                         if (!strcmp(name,"ref_of") && arg->kind!=TYPE_OWNER && arg->kind!=TYPE_REF)
                             mt->inner=arg->kind==TYPE_ARRAY ? arg->inner : arg;
-						if (!strcmp(name, "clone") || !strcmp(name, "try_clone")) mt->kind = TYPE_OWNER;
+						if ((!strcmp(name,"clone") || !strcmp(name,"try_clone")) &&
+                            (arg->kind==TYPE_OWNER || arg->kind==TYPE_REF)) mt->kind=TYPE_OWNER;
 						call->data_type = mt;
 					}
 				} else if (!strcmp(name, "mem_len") || !strcmp(name, "mem_metric") || !strcmp(name,"mem_capacity") ||
@@ -4389,7 +4391,22 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			filt->data.filter.err_type = parse_type(p);
 		}
 		consume(p, TOK_RPAREN, ")");
+        int catch_declarations=p->decl_count;
+        ASTNode *error_binding=arena_alloc(p->arena,sizeof(*error_binding));
+        error_binding->type=NODE_VAR_DECL;
+        error_binding->data.var_decl.name=filt->data.filter.err_var;
+        error_binding->data_type=filt->data.filter.err_type;
+        if (!error_binding->data_type) {
+            error_binding->data_type=arena_alloc(p->arena,sizeof(Type));
+            error_binding->data_type->kind=TYPE_I32;
+        }
+        if (p->decl_count==1024) report_error(p,"Too many declarations in handler");
+        else {
+            p->decls[p->decl_count].name=filt->data.filter.err_var;
+            p->decls[p->decl_count++].node=error_binding;
+        }
 		filt->data.filter.catch_block = parse_block(p);
+        p->decl_count=catch_declarations;
 		return filt;
 	}
 	if (p->cur.type == TOK_PRESS) {

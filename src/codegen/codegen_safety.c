@@ -320,7 +320,9 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 			"__kawa_mem_resize","__kawa_mem_capacity","__kawa_mem_address","__kawa_mem_slice",
 			"__kawa_mem_pin","__kawa_mem_try_pin","__kawa_mem_unpin","__kawa_mem_arena",
             "__kawa_mem_arena_alloc","__kawa_mem_remove","__kawa_mem_store_owner",
-            "__kawa_mem_take","__kawa_mem_write_address","__kawa_mem_replace","__kawa_mem_view",NULL};
+            "__kawa_mem_take","__kawa_mem_write_address","__kawa_mem_replace","__kawa_mem_view",
+            "__kawa_mem_value_drop","__kawa_mem_value_take","__kawa_mem_value_store",
+            "__kawa_mem_value_clone","__kawa_mem_value_clear",NULL};
 		for (unsigned i=0; runtime[i]; ++i) if (!strcmp(name,runtime[i])) return 0;
 	}
 	if (!LLVMCountBasicBlocks(fn) && nonretaining_leaf(name)) return 0;

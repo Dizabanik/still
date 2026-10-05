@@ -194,12 +194,12 @@ void codegen_func_decl(KawaCompiler *c, ASTNode *cur,
 			create_entry_block_alloca(c, arg_type, a->data.var_decl.name);
 		LLVMBuildStore(c->builder, p_val, p_alloc);
 		scope_push(c, a->data.var_decl.name, p_alloc, arg_type, a);
-		if (kawa_is_owner(a->data_type)) {
+		if (kawa_contains_managed(c,a->data_type,1)) {
 			if (cur->data.func.is_drip) {
 				kerr(KAWA_E_TYPE, a, "managed owners in coroutines require cancellation cleanup support");
 				exit(1);
 			}
-			kawa_memory_defer(c, p_alloc, 0);
+			kawa_memory_defer_value(c,p_alloc,a->data_type);
 		}
 	}
 

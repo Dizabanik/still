@@ -22,6 +22,14 @@ Work order:
 - Affine owner bindings: explicit move/clone, implicit copy rejection, branch
   and loop state tracking, reassignment, and LIFO scope cleanup through return,
   break, continue, filter/press, and ordinary exits.
+- Stack owning values: nested structs/fixed arrays use compact static ownership
+  layouts for move, deep clone, replacement and scope cleanup. Whole-value heap
+  transfers register/detach their owned fields. Owned spreads release replaced
+  fields; implicit aggregate copies and borrowing an owned temporary are rejected.
+  Clone failure rolls back all new allocations and produces an all-zero value.
+- Typed filter/dregs payloads also own their fields: handlers clean up on
+  fallthrough or return, or transfer the payload with move. Handler bindings
+  remain local to the catch body and participate in affine state checking.
 - Heap ownership trees: owner elements and owned fields in heap structs/fixed
   arrays, replacement and extraction, cycle prevention, independent deep clone,
   partial-clone rollback, and iterative cleanup/clone for unbounded depth.
@@ -86,6 +94,17 @@ drops children in reverse acquisition order. Cloning preserves that order,
 deep-copies every owned allocation, and copies ordinary ref fields as aliases
 to their original targets. It does not retarget borrowed graph edges.
 
+Stack aggregates drop fields in reverse declaration order and fixed arrays in
+reverse index order; each owned allocation drops its children in reverse
+acquisition order. Scope bindings and explicit defers retain LIFO order.
+Aggregate cleanup/replacement checks every affected ownership tree before
+changing any payload. Duplicate roots are detected in linear time using
+temporary descriptor marks; descriptors retain their existing size.
+A fixed array contributes one repeated layout entry rather than one entry per
+element. Aggregate glue allocates no heap storage; explicit clone allocates
+only the owned allocations it copies. Embedded arenas support move/drop and
+are rejected by clone.
+
 Ownership cycles are rejected at the attaching operation. Cyclic graphs use
 ordinary refs, including arena objects; those edges do not retain resources.
 Shrinking an owning buffer drops removed trees. Growing/relocating its headers
@@ -96,6 +115,11 @@ A managed assignment resolves its target once and revalidates the allocation
 after evaluating the right-hand side. A callback cannot cause a later store
 through an address from freed/recycled storage. Stable scalar writes reuse the
 guard instead of repeating lifetime validation.
+Ordinary scalar stores also reuse their earlier validation when their
+right-hand side consists of built-in expressions that cannot invalidate
+storage. Calls, overloaded arithmetic and user indexing require revalidation.
+The optimization report records this lowering proof; indexed lifetime/bounds
+checks remain in place.
 Nested array reads also revalidate after evaluating an index that can invoke
 a callback. A callback cannot leave a previously validated array address
 unchecked after removing its allocation.
@@ -103,12 +127,16 @@ unchecked after removing its allocation.
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 800 passing cases and all seven
+The latest complete language checkpoint has 854 passing cases and all seven
 CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
 and a 50,000-node deep clone/drop without recursion. Subobject coverage adds
 exact extents, empty/one-past views, stale construction and output/header aliasing.
+The runtime now has 30 sanitized cases, including nested value layouts,
+duplicate roots and byte-for-byte preservation of pinned aggregates when
+cleanup or replacement traps. Value-clone failures exercise every byte budget
+before all three source allocations can be copied.
 The additional optimization-report suite checks emitted IR against reports,
 execution counters, source spans and unchanged native object bytes.
 
@@ -141,6 +169,19 @@ local Kawa median from 83.876 to 77.021 ms (MAD 0.307/0.159 ms), with C at
 71.240/72.049 ms. The Kawa executable shrank from 70,376 to 51,896 bytes.
 Each run uses seven samples/two warmups and verifies the full timed input.
 
+The owning-value workload clones four buffers inside a 136-byte value and
+transfers that value either between stack bindings or through a managed heap
+slot. Its static layout shape matches C's. With 100,000 elements per buffer
+and 64 trials, the local Kawa/C medians were 66.029/65.493 ms for stack
+transfers (MAD 0.566/0.640 ms) and 65.383/65.109 ms for heap transfers
+(MAD 0.183/0.918 ms). Seven samples/two warmups run without instrumentation.
+The separate instrumentation verifies 512/576 allocations and frees,
+204,800,000 copied bytes, zero final live payload bytes, and
+76,800,128/76,800,320 indexed validations in stack/heap modes respectively.
+Both implementations use the same runtime, arithmetic, zero initialization,
+cleanup and ownership layouts. These results establish no general language
+ranking.
+
 scripts/bench_tools.py uses three versioned, deterministic source corpora with
 independent execution checksums, formatter fixed points and repeatable
 bitcode/IR/object hashes. It measures check, format and build separately with
@@ -160,8 +201,8 @@ The future-contract manifests still describe the full design scope; their
 planned status is not used as a passing-test count. Several concrete contracts
 now have executable coverage, but no entire future feature is claimed complete.
 
-Stack structs/arrays containing owners, owned enum payloads, and their value
-cleanup/transfer glue remain restricted. Typed Option/Result propagation,
+Owned enum payloads and their cleanup/transfer glue remain restricted.
+Typed Option/Result propagation,
 coroutine cancellation cleanup, channel ownership transfer/shared regions,
 UTF-8 str versus bytes and C-string contracts, explicit raw/unsafe/FFI
 boundaries, shaped numerical/complex library work, and optimization reporting
