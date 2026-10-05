@@ -1,1 +1,1 @@
-fn main() { let a: owner<i64> = own(2); let p=ref_of(a); let q: ref<u8> = p; return 0; }
+fn main() { owner<i64> a = own(2); let p=ref_of(a); ref<u8> q = p; return 0; }

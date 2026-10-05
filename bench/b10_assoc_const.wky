@@ -11,22 +11,22 @@ impl Mat4 {
 
 fn i32 main() {
     const i64 ROUNDS = 20000000;
-    let m: [Mat4.SIZE]i64;
+    [Mat4.SIZE]i64 m;
     for (i64 i = 0; i < Mat4.SIZE; i += 1) {
         m[i] = (i * 7 + 3) & 15;
     }
 
-    let v: [Mat4.DIM]i64;
+    [Mat4.DIM]i64 v;
     v[0] = 1;
     v[1] = 2;
     v[2] = 3;
     v[3] = 4;
 
-    let acc: i64 = 0;
+    i64 acc = 0;
     for (i64 r = 0; r < ROUNDS; r += 1) {
-        let out: [Mat4.DIM]i64;
+        [Mat4.DIM]i64 out;
         for (i64 row = 0; row < Mat4.DIM; row += 1) {
-            let sum: i64 = 0;
+            i64 sum = 0;
             for (i64 col = 0; col < Mat4.DIM; col += 1) {
                 sum += m[row * Mat4.DIM + col] * v[col];
             }

@@ -5,7 +5,7 @@ struct Box(T) {
 }
 
 impl Box(T) {
-    fn new(v: T) Box(T) {
+    fn new(T v) Box(T) {
         return Box(T) { value: v };
     }
 
@@ -13,7 +13,7 @@ impl Box(T) {
         return self.value;
     }
 
-    fn put(self*, v: T) void {
+    fn put(self*, T v) void {
         self.value = v;
     }
 }

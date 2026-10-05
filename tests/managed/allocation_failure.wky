@@ -1,8 +1,8 @@
 fn main() {
  mem_budget(7);
- let a: owner<i64> = try_own(1);
+ owner<i64> a = try_own(1);
  println("{allocated(a)} {mem_metric(0)} {mem_metric(2)}");
- let b: owner<i64> = try_own(9223372036854775807);
+ owner<i64> b = try_own(9223372036854775807);
  println("{allocated(b)}");
  return 0;
 }

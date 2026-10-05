@@ -61,7 +61,7 @@ pub fn i64 stable_read(ref<i64> values,i64 index) {
         source = work / 'main.wky'
         source.write_text('''import "lib\\"ż.wky";
 fn main() {
-    let owned:owner<i64>=own(4); let values=ref_of(owned); values[2]=37;
+    owner<i64> owned=own(4); let values=ref_of(owned); values[2]=37;
     let before_checks=mem_metric(7); let before_pins=mem_metric(8);
     let checked=checked_read(values,2); let stable_value=stable_read(values,2);
     let checks=mem_metric(7)-before_checks; let pins=mem_metric(8)-before_pins;

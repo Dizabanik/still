@@ -1,6 +1,6 @@
 struct Item { owner<i64> data; }
 fn main() {
-    let a: Item = {data: own(1)};
-    let b: Item = a;
+    Item a = {data: own(1)};
+    Item b = a;
     return 0;
 }

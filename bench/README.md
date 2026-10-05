@@ -78,6 +78,14 @@ The reference and field-view walks compare Whisky and C using the same descripto
 
 The ownership lifecycle workload verifies deep chains and fanout trees, allocation failure, clone/drop behavior, and matching runtime counters. The owned-values workload holds four buffers in a 136-byte aggregate, then clones, moves, traverses, and drops it. Its two modes transfer directly between stack values or through a managed heap slot. Each ownership workload verifies 40 edge runs, four instrumented cases and two untimed C sanitizer runs. Their checksum oracles are closed-form Python equations, with explicit allocation, copied-byte, peak-byte and validation-count formulas. Compiler tooling uses deterministic source corpora with independent execution checksums, formatter fixed points, and repeated bitcode/IR/object hashes. It measures check, format, and build separately.
 
+Compiler tooling corpus version 2 includes four cases: 12 kernels, 256 kernels,
+64 kernels calling 17 nested generic helpers at four widths, and 64 kernels
+using type-first managed declarations. The last case covers nested owners,
+references, qualified bindings, arrays of refs, generic struct instances,
+stable access, and scope cleanup. Each program reads its input at runtime and
+has a separately calculated execution checksum. Verification reports no timings;
+run without `--verify-only` on an idle host to measure the current compiler.
+
 Managed timings use seven samples and two warmups by default. Reports preserve native process times, median/MAD, individual RSS and CPU samples, binary sizes, hashes, compiler versions, and all counter checks. Instrumentation and sanitizer builds run outside timed intervals. On macOS, sanitizer verification uses the system Clang and records its version separately from the LLVM compiler used for native comparisons.
 
 `--optimization-report[=path]` produces static IR facts and source-associated operations. Its counts describe emitted instructions, branches, and calls, not executed operations. A disappearing source tag or direct call can result from inlining or metadata loss, so reports do not treat it as proof that a runtime check or allocation was removed.

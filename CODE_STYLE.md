@@ -40,6 +40,39 @@ types; and `UPPER_SNAKE_CASE` for constants and configuration macros. A compiler
 context can be called `c` in lowering functions or `compiler` in the driver.
 Stable diagnostic numbers (`E0001`, etc.) remain independent of branding.
 
+## Whisky declaration syntax
+
+Put an explicit type before the name for variables, parameters, struct fields,
+and typed error-handler bindings. Use `let name = expression;` only for type
+inference. `let` requires an initializer; it does not make a value dynamically
+typed. Do not add suffix type annotations or combine `let` with an explicit type.
+
+```wky
+fn i64 read(ref<i64> input) { return input[0]; }
+fn int main() {
+    int count = 10;
+    let inferred = 10;
+    owner<i64> values = own(count);
+    ref<i64> view = ref_of(values);
+    let another_view = ref_of(values);
+    arena pool = arena();
+    chan<i64> queue = make_chan(16);
+    [4]i64 samples;
+    []i64 window = samples[0..4];
+    owner<owner<i64>> rows = own(2);
+    const i64 LIMIT = 64;
+    orbit int next := count + 1;
+    return 0;
+}
+```
+
+Named types and aliases follow the same rule: `Buffer values = own(4);` or
+`Box(i64) box = {value: 42};`. Prefer `fn ReturnType name(Type parameter)` in
+new examples. Typed handlers use `dregs (Error error)`; `dregs (error)` retains
+the default integer payload. Destructuring with `let` infers each binding's type.
+Colons in struct field labels, destructuring renames, named call arguments, and
+control-flow labels are unrelated to type annotations.
+
 ## Formatting and file organization
 
 Use C11, `.clang-format`, and `.editorconfig`. Follow the surrounding indentation

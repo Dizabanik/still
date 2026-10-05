@@ -3,9 +3,9 @@ fn void transfer(ref<owner<i64>> destination, owner<i64> incoming) {
     destination[0] = move(incoming);
 }
 fn main() {
-    let root: owner<owner<i64>> = own(1);
+    owner<owner<i64>> root = own(1);
     root[0] = own(2);
-    let next: owner<i64> = own(1);
+    owner<i64> next = own(1);
     next[0] = 97;
     transfer(ref_of(root), move(next));
     println("{root[0][0]}");

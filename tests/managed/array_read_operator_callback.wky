@@ -4,10 +4,10 @@ impl Index {
     fn i64 self_add(Index left, Index right) { remove(left.victim); return 0; }
 }
 fn main() {
-    let region:arena=arena();
-    let row:ref<Row>=arena_new(region,1);
+    arena region=arena();
+    ref<Row> row=arena_new(region,1);
     row[0].values[0]=31;
-    let index:Index={victim:row};
+    Index index={victim:row};
     println("{row[0].values[index+index]}");
     return 0;
 }

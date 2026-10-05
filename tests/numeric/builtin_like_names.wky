@@ -1,1 +1,1 @@
-fn i64 checked_walk(ref<i64> p){return p[0];} fn i64 wrap_walk(i32 x){return x+1;} fn main(){let a:owner<i64>=own(1);a[0]=45;println("{checked_walk(ref_of(a))} {wrap_walk(9)}");return 0;}
+fn i64 checked_walk(ref<i64> p){return p[0];} fn i64 wrap_walk(i32 x){return x+1;} fn main(){owner<i64> a=own(1);a[0]=45;println("{checked_walk(ref_of(a))} {wrap_walk(9)}");return 0;}

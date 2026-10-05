@@ -1,5 +1,5 @@
 #!/usr/bin/env wky run
-// Typed errors (IDEAS 3): `dregs (e: ErrType)` carries a payload struct.
+// Typed errors (IDEAS 3): `dregs (ErrType e)` carries a payload struct.
 // Still a plain store + branch -- no unwinding, nounwind survives, zero
 // runtime overhead over the legacy i32 slot.
 
@@ -20,7 +20,7 @@ fn i32 main() {
         ParseErr payload = { .code = 3, .line = 17 };
         press err = payload;
         stdc.printf("t1: unreachable\n");
-    } dregs (err: ParseErr) {
+    } dregs (ParseErr err) {
         stdc.printf("t1: code=%d line=%d\n", err.code, err.line);
     }
     stdc.printf("t1: done\n");
@@ -28,7 +28,7 @@ fn i32 main() {
     // 2. No press: catch skipped entirely.
     filter {
         stdc.printf("t2: ok path\n");
-    } dregs (e2: ParseErr) {
+    } dregs (ParseErr e2) {
         stdc.printf("t2: caught %d\n", e2.code);
     }
 
@@ -37,11 +37,11 @@ fn i32 main() {
         filter {
             ParseErr p7 = { .code = 7, .line = 1 };
             press inner = p7;
-        } dregs (inner: ParseErr) {
+        } dregs (ParseErr inner) {
             stdc.printf("t3: inner code=%d\n", inner.code);
         }
         stdc.printf("t3: outer try continues\n");
-    } dregs (outer: ParseErr) {
+    } dregs (ParseErr outer) {
         stdc.printf("t3: outer code=%d\n", outer.code);
     }
 
@@ -57,17 +57,17 @@ fn i32 main() {
         filter {
             IoErr ioerr = { .fd = 9, .fatal = true };
             press io = ioerr;
-        } dregs (io: IoErr) {
+        } dregs (IoErr io) {
             stdc.printf("t5: io fd=%u fatal=%d\n", io.fd, io.fatal);
         }
         stdc.printf("t5: outer try continues\n");
-    } dregs (never: ParseErr) {
+    } dregs (ParseErr never) {
         stdc.printf("t5: unreachable %d\n", never.code);
     }
     filter {
         ParseErr uperr = { .code = 5, .line = 99 };
         press up = uperr;
-    } dregs (up: ParseErr) {
+    } dregs (ParseErr up) {
         stdc.printf("t5: rethrown as ParseErr %d\n", up.line);
     }
 
@@ -76,7 +76,7 @@ fn i32 main() {
         defer stdc.printf("t6: cleanup\n");
         ParseErr boomerr = { .code = 11, .line = 4 };
         press boom = boomerr;
-    } dregs (boom: ParseErr) {
+    } dregs (ParseErr boom) {
         stdc.printf("t6: caught code=%d\n", boom.code);
     }
 
@@ -86,19 +86,19 @@ fn i32 main() {
     filter {
         ParseErr derived = { .code = base + 23, .line = base / 10 };
         press e = derived;
-    } dregs (e: ParseErr) {
+    } dregs (ParseErr e) {
         stdc.printf("t7: runtime payload %d %d\n", e.code, e.line);
     }
 
     // 8. Scalar payloads: u8 and f64 slots.
     filter {
         press small = 200;
-    } dregs (small: u8) {
+    } dregs (u8 small) {
         stdc.printf("t8: u8 payload %d\n", ((i32)small));
     }
     filter {
         press ratio = 0.5;
-    } dregs (ratio: f64) {
+    } dregs (f64 ratio) {
         stdc.printf("t8: f64 payload %.1f\n", ratio);
     }
 }

@@ -47,7 +47,7 @@ import stdc;
 
 fn i32 main() {
     // Allocate a channel with capacity 64
-    let ch: chan<i32> = make_chan(64);
+    chan<i32> ch = make_chan(64);
 
     // Send values
     ch <- 100;
@@ -75,8 +75,8 @@ The `select` statement waits on multiple channel operations simultaneously:
 import stdc;
 
 fn i32 main() {
-    let c1: chan<i32> = make_chan(16);
-    let c2: chan<str> = make_chan(16);
+    chan<i32> c1 = make_chan(16);
+    chan<str> c2 = make_chan(16);
 
     c1 <- 42;
 

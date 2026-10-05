@@ -1,5 +1,5 @@
 fn main() {
-    let a: owner<i64> = own(4);
+    owner<i64> a = own(4);
     a[0] = 42;
     let r = ref_of(a);
     let s = ref_slice(r, 0, 2);

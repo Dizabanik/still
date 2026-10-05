@@ -7,7 +7,7 @@ enum Size { SMALL = 4, BIG = 64 };
 fn int main() {
     let x = Roast_MEDIUM;
     const i32 n = Roast_DARK;
-    let arr: [Size_BIG]i32;
+    [Size_BIG]i32 arr;
     arr[0] = Brew_FILTER;
 
     stdc.printf("%d %d %d %d\n", x, n, arr[0], Roast_LIGHT);

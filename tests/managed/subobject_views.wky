@@ -2,7 +2,7 @@ struct Inner { i64 value; [3]i64 array; }
 struct Record { i64 id; Inner inner; [0]u8 empty; owner<Inner> child; }
 #[noalloc] fn i64 first(ref<i64> borrowed) { return borrowed[0]; }
 fn main() {
-    let rows:owner<Record>=own(2);
+    owner<Record> rows=own(2);
     rows[1].id=11;
     rows[1].inner.value=13;
     rows[1].inner.array[0]=17;

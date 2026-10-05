@@ -3,10 +3,10 @@ alias Buffer=owner<Integer>;
 alias Borrowed=ref<Integer>;
 fn i64 read(ref<i64> value) { return value[0]; }
 fn main() {
-    let original:Buffer=own(1);
+    Buffer original=own(1);
     original[0]=42;
-    let borrowed:Borrowed=ref_of(original);
-    let concrete:owner<i64>=move(original);
+    Borrowed borrowed=ref_of(original);
+    owner<i64> concrete=move(original);
     println("{read(borrowed)} {concrete[0]}");
     return 0;
 }

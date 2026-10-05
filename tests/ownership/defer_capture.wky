@@ -1,1 +1,1 @@
-fn main() { let a: owner<i64>=own(1); defer(a) { println("{a[0]}"); } return 0; }
+fn main() { owner<i64> a=own(1); defer(a) { println("{a[0]}"); } return 0; }

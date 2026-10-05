@@ -1,1 +1,1 @@
-enum Value { Some(ref<i32>), Empty } fn main() { let a: owner<i64>=own(1); let b=Value.Some(ref_of(a)); return 0; }
+enum Value { Some(ref<i32>), Empty } fn main() { owner<i64> a=own(1); let b=Value.Some(ref_of(a)); return 0; }

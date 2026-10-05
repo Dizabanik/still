@@ -6,10 +6,10 @@ fn T inspected(ref<T> borrowed,Status status) {
 }
 fn owner<T> transferred(owner<T> value) { return move(value); }
 fn T cleanup(T value) {
-    let temporary:owner<T>=own(1);
+    owner<T> temporary=own(1);
     temporary[0]=value;
     defer { println("deferred {temporary[0]}"); }
-    filter { press error=value; } dregs (error:T) {
+    filter { press error=value; } dregs (T error) {
         return error+1;
     }
     return value;
@@ -20,9 +20,9 @@ impl(T) Signed(T) {
 }
 fn main() {
     {
-        let signed_owner:owner<i64>=own(1);
+        owner<i64> signed_owner=own(1);
         signed_owner[0]=-10;
-        let byte_owner:owner<u8>=own(1);
+        owner<u8> byte_owner=own(1);
         byte_owner[0]=20;
         println("{inspected(ref_of(signed_owner),Status.Some(3))} {inspected(ref_of(byte_owner),Status.None)}");
         let moved_signed=transferred(move(signed_owner));

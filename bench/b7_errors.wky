@@ -31,7 +31,7 @@ fn i32 main() {
             }
             acc = (acc + ((i64)x)) & 2147483647;
             ok_count += 1;
-        } dregs (err: ParseErr) {
+        } dregs (ParseErr err) {
             acc = (acc - ((i64)err.code) * ((i64)err.pos)) & 2147483647;
         }
     }

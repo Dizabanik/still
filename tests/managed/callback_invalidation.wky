@@ -1,3 +1,3 @@
 fn void invalidate(ref<i64> x) { remove(x); }
-fn main() { let a=arena(); let p: ref<i64> = arena_new(a,1);
+fn main() { let a=arena(); ref<i64> p = arena_new(a,1);
  stable(p) { invalidate(p); } return 0; }

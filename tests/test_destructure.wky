@@ -29,7 +29,7 @@ fn int main() {
     stdc.printf("pair: %d %d\n", p1, p2);
 
     // Positional array destructuring
-    let arr: [2]i32;
+    [2]i32 arr;
     arr[0] = 42;
     arr[1] = 99;
     let (v0, v1) = arr;

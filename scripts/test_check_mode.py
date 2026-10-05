@@ -18,8 +18,8 @@ with tempfile.TemporaryDirectory(prefix='wky-check-') as directory:
         fake.chmod(0o755)
     source = root / 'input.wky'
     for body, status in [
-        ('fn main() { let a: owner<i64> = own(2); a[1]=42; return 0; }', 0),
-        ('fn main() { let a: owner<i64> = own(2); let b=a; return 0; }', 1),
+        ('fn main() { owner<i64> a = own(2); a[1]=42; return 0; }', 0),
+        ('fn main() { owner<i64> a = own(2); let b=a; return 0; }', 1),
         ('fn main() { return missing; }', 1),
         ('fn main( {', 1),
     ]:

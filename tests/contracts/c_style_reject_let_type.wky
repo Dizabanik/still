@@ -1,0 +1,4 @@
+fn int main() {
+    let owner<i64> values = own(1);
+    return 0;
+}

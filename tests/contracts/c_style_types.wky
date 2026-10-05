@@ -1,0 +1,53 @@
+struct Box(T) { T value; }
+[2]i64 global_values = {11, 13};
+[]i64 global_view = global_values[0..2];
+Box(i64) global_box = {value: 17};
+ref<i64> global_reference;
+
+fn owner<i64> make(i64 value) {
+    owner<i64> result = own(1);
+    result[0] = value;
+    return move(result);
+}
+fn i64 read(ref<i64> input) { return input[0]; }
+
+fn i32 main() {
+    owner<i64> values = own(2);
+    values[0] = 20;
+    values[1] = 22;
+    ref<i64> view = ref_of(values);
+    const ref<i64> fixed = ref_of(values);
+    global_reference = view;
+    stable(view) {
+        println("{view[0] + view[1]} {read(fixed)} {global_reference[1]}");
+    }
+
+    owner<owner<i64>> chain = own(1);
+    chain[0] = make(7);
+    ref<owner<i64>> slots = ref_of(chain);
+    [2]ref<i64> views = {};
+    views[0] = ref_of(chain[0]);
+    views[1] = view;
+    println("{slots[0][0]} {views[0][0]} {views[1][0]}");
+
+    arena pool = arena();
+    ref<i64> item = arena_new(pool, 1);
+    item[0] = 9;
+    chan<i64> pipe = make_chan(1);
+    pipe <- item[0];
+    i64 received = <-pipe;
+    println("{received} {global_view[0] + global_view[1]} {global_box.value}");
+
+    owner<i64> empty;
+    ref<i64> absent;
+    println("{allocated(empty)} {allocated(absent)}");
+
+    i64 sum = 0;
+    for (owner<i64> counter = make(3); counter[0] > 0; counter[0] -= 1) {
+        sum += counter[0];
+    }
+    Box(owner<i64>) boxed = {value: make(9)};
+    (i64, ref<i64>) pair = ((i64)17, view);
+    println("{sum} {boxed.value[0]} {pair.0} {pair.1[1]}");
+    return 0;
+}

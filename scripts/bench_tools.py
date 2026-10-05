@@ -13,13 +13,15 @@ import tempfile
 from bench_memory import ROOT, digest, invoke
 from bench_process import run_measured
 
-CORPUS_VERSION=1
+CORPUS_VERSION=2
 SEED=42
 
-def corpus(functions,depth=0):
-    parts=['// compiler_tools corpus version 1\n',
+def corpus(functions,depth=0,managed=False):
+    parts=[f'// compiler_tools corpus version {CORPUS_VERSION}\n',
         'fn i64 input() { str text=std.process.arg_at(1); i64 value=0; '
         'for (i64 i=0;i<text.len;i+=1) { value=value*10+(i64)text[i]-48; } return value; }\n']
+    if managed:
+        parts.append('struct Box(T) { T value; }\n')
     if depth:
         parts.append('fn T level_0(T x) { return x; }\n')
         for i in range(1,depth+1):
@@ -28,6 +30,23 @@ def corpus(functions,depth=0):
     checksum=0
     for i in range(functions):
         kind=kinds[i%len(kinds)]
+        if managed:
+            parts.append(f'''pub fn i64 kernel_{i}(i64 x) {{
+    owner<owner<i64>> rows=own(1); rows[0]=own(2);
+    ref<i64> view=ref_of(rows[0]);
+    const ref<i64> fixed=view;
+    [2]ref<i64> views={{}}; views[0]=view; views[1]=fixed;
+    Box(ref<i64>) boxed={{value:view}};
+    stable(view) {{
+        view[0]=x+{i}; view[1]=x*{i+1};
+        return boxed.value[0]+views[1][1];
+    }}
+}}
+''')
+            # Independent sum of the two stored values, including the input
+            # offset passed from main. No compiler output supplies the oracle.
+            checksum+=(SEED+i)*(i+2)+i
+            continue
         expr=f'level_{depth}(x)*{i+1}+{i}' if depth else f'(x*17+{i})%100003'
         parts.append(f'pub fn {kind} kernel_{i}({kind} x) {{ return {expr}; }}\n')
         checksum+=((SEED+i+depth)*(i+1)+i) if depth else ((SEED+i)*17+i)%100003
@@ -65,8 +84,9 @@ def main():
         'samples':a.samples,'warmups':a.warmups,'corpus':[],'cases':[]}
     with tempfile.TemporaryDirectory(prefix='still-tool-bench-') as directory:
         root=Path(directory); configurations={}; fixed={}
-        for name,count,depth in [('small',12,0),('large',256,0),('generic_depth_16',64,16)]:
-            text,expected=corpus(count,depth)
+        for name,count,depth,managed in [('small',12,0,False),('large',256,0,False),
+                ('generic_depth_16',64,16,False),('managed_declarations',64,0,True)]:
+            text,expected=corpus(count,depth,managed)
             source=root/f'{name}.wky'; source.write_text(text)
             work=root/name; work.mkdir()
             before=set(work.iterdir())
@@ -85,6 +105,7 @@ def main():
             verify_build_output(invoke([compiler,'-O3','--emit-hash',source,'-o',exe],work),fixed[name]['output.bc'],exe)
             assert artifacts(work)==fixed[name],'declared artifacts changed between repeated builds'
             report['corpus'].append({'name':name,'functions':count,'generic_depth':depth,
+                'managed_declarations':managed,
                 'source_bytes':len(text.encode()),'source_sha256':hashlib.sha256(text.encode()).hexdigest(),
                 'formatter_sha256':hashlib.sha256(formatted).hexdigest(),
                 'expected_stdout':expected.decode(),'artifact_sha256':fixed[name],
@@ -125,6 +146,6 @@ def main():
             report['cases'].append(record)
     a.json.parent.mkdir(parents=True,exist_ok=True)
     a.json.write_text(json.dumps(report,indent=2)+'\n')
-    print(f'Verified check, formatter fixed points, independent execution checksums, and repeated declared artifacts for three corpora. Results: {a.json}')
+    print(f'Verified check, formatter fixed points, independent execution checksums, and repeated declared artifacts for {len(configurations)} corpora. Results: {a.json}')
 
 if __name__=='__main__': main()

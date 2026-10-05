@@ -2,7 +2,7 @@ struct Record { i64 value; }
 fn i64 remove_then_return(ref<Record> r) { remove(r); return 79; }
 fn main() {
     let region = arena();
-    let r: ref<Record> = arena_new(region, 1);
+    ref<Record> r = arena_new(region, 1);
     r[0].value = remove_then_return(r);
     return 0;
 }

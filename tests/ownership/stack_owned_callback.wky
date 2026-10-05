@@ -4,8 +4,8 @@ fn Item replace(ref<Item> parent) {
     return {child:own(1)};
 }
 fn main() {
-    let region:arena=arena();
-    let object:ref<Item>=arena_new(region,1);
+    arena region=arena();
+    ref<Item> object=arena_new(region,1);
     object[0]={child:own(1)};
     object[0]=replace(object);
     return 0;

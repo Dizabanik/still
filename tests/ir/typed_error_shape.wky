@@ -9,7 +9,7 @@ fn i32 main() {
     filter {
         ParseErr p = { .code = 7, .line = 3 };
         press e = p;
-    } dregs (e: ParseErr) {
+    } dregs (ParseErr e) {
         stdc.printf("%d\n", e.code);
     }
     return 0;

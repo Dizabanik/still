@@ -2,7 +2,7 @@ struct Inner { i64 value; owner<i64> child; }
 struct Record { i64 id; owner<Inner> child; [2]owner<i64> branches; }
 fn main() {
     {
-        let rows: owner<Record> = own(3);
+        owner<Record> rows = own(3);
         rows[0].id = 11;
         rows[0].child = own(2);
         rows[0].child[1].value = 17;

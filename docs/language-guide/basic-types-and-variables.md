@@ -39,7 +39,11 @@ fn i32 main() {
 
 ## 2. Variables & Constants
 
-Variables are declared with `let` or with an explicit type annotation:
+Explicit declarations put the type before the name: `Type name = expression;`.
+`int` is an alias for `i32`, so `int x = 10;` is valid. Use
+`let name = expression;` to infer the type from the initializer. The inferred
+type stays fixed; `let` does not introduce dynamic typing. An inferred binding
+needs an initializer. For an uninitialized binding, write `Type name;`.
 
 ```wky
 import stdc;
@@ -62,8 +66,39 @@ fn i32 main() {
 }
 ```
 
-### Compile-Time Constants (`const`)
-Constants are evaluated at compile time. They must have a constant initializer and do not occupy runtime stack or memory slots:
+The same type-first rule applies to managed memory, channels, and composite
+types:
+
+```wky
+fn i32 main() {
+    owner<i64> values = own(2);
+    values[0] = 20;
+    values[1] = 22;
+    ref<i64> view = ref_of(values);
+    let alias_view = ref_of(values);
+    arena pool = arena();
+    ref<i64> item = arena_new(pool, 1);
+    chan<i64> queue = make_chan(16);
+    [4]i64 samples;
+    []i64 window = samples[0..4];
+    owner<owner<i64>> rows = own(2);
+    println("{view[0] + alias_view[1]}");
+    return 0;
+}
+```
+
+Constructors such as `own(count)` and `arena_new(pool, count)` need a declared
+element type. Expressions that already have a type, such as `ref_of(values)`,
+`clone(values)`, and `move(values)`, work with inference. Function parameters use
+`fn i64 read(ref<i64> input)`, and typed error handlers use
+`dregs (Error error)`. Type annotations after a name are not accepted.
+
+### Constants (`const`)
+Use `const Type name = expression;` for an explicit type, or
+`const name = expression;` for inference. Literal and foldable initializers
+can be evaluated at compile time. Local bindings can also hold runtime values,
+such as `const ref<i64> view = ref_of(values);`. A constant reference does not
+freeze the storage it refers to or transfer ownership.
 
 ```wky
 import stdc;
@@ -81,15 +116,17 @@ fn i32 main() {
 
 ## 3. Type Conversions & Casting
 
-Whisky requires explicit casting (`as`) between different numeric types to prevent accidental precision loss or unexpected sign extensions:
+Numeric conversions use C-style casts: `(TargetType)expression`. Checked
+conversions diagnose constant failures or trap when a runtime value is outside
+the target type's range:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    let int_val: i32 = 42;
-    let float_val: f64 = int_val as f64;
-    let byte_val: u8 = int_val as u8;
+    i32 int_val = 42;
+    f64 float_val = (f64)int_val;
+    u8 byte_val = (u8)int_val;
 
     println("float={float_val:.2f} byte={byte_val}");
     return 0;
@@ -97,4 +134,7 @@ fn i32 main() {
 ```
 
 ### Unsigned Arithmetic Wrapping
-In Whisky, unsigned integer arithmetic (`u8`, `u16`, `u32`, `u64`) modularly wraps on overflow, conforming to standard two's-complement modular arithmetic without undefined behavior. Signed integer arithmetic (`i8`, `i16`, `i32`, `i64`) adheres to standard optimizing sign semantics.
+Unsigned integer arithmetic (`u8`, `u16`, `u32`, `u64`) wraps modulo the type's
+width. Signed arithmetic (`i8`, `i16`, `i32`, `i64`) checks overflow by default.
+Use explicit `wrap_*` or `sat_*` operations when wrapping or saturation is
+intended.

@@ -1,1 +1,1 @@
-fn first() { let a: owner<i64>=own(1); return 0; } fn main() { return a[0]; }
+fn first() { owner<i64> a=own(1); return 0; } fn main() { return a[0]; }

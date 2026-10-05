@@ -1,10 +1,10 @@
 fn main() {
     {
-        let a: owner<owner<i64>> = own(2);
+        owner<owner<i64>> a = own(2);
         a[0] = own(2);
         a[0][0] = 47;
         let borrowed = ref_of(a[0]);
-        let other: owner<i64> = own(1);
+        owner<i64> other = own(1);
         other[0] = 53;
         a[0] = move(other);
         try_stable(borrowed) { println("unexpected"); } else { println("replaced"); }
@@ -12,7 +12,7 @@ fn main() {
         let taken = move(a[0]);
         a[1] = move(taken);
         println("{allocated(a[0])} {a[1][0]}");
-        let empty: owner<i64> = try_own(0);
+        owner<i64> empty = try_own(0);
         a[1] = move(empty);
         println("{mem_len(a[1])}");
         release(a[1]);

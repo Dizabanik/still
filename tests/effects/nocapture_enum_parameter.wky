@@ -1,4 +1,4 @@
 enum Pointer { Value(i32*), Empty }
-let saved:Pointer;
+Pointer saved;
 #[nocapture] fn void remember(Pointer value) { saved=value; }
 fn main() { return 0; }

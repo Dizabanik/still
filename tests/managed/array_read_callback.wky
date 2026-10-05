@@ -2,7 +2,7 @@ struct Record { [2]i64 values; }
 fn i64 invalidate(ref<Record> borrowed) { remove(borrowed); return 1; }
 fn main() {
     let region=arena();
-    let rows:ref<Record>=arena_new(region,1);
+    ref<Record> rows=arena_new(region,1);
     rows[0].values[1]=99;
     println("{rows[0].values[invalidate(rows)]}");
     return 0;

@@ -1,6 +1,6 @@
 struct Item { [2]owner<i64> data; }
 fn main() {
-    let value:Item={data:{own(1),own(1)}};
+    Item value={data:{own(1),own(1)}};
     let borrowed=ref_of(value.data[1]);
     stable(borrowed) { release(value); }
     return 0;

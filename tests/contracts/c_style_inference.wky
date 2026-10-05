@@ -1,0 +1,36 @@
+struct Point { int x; int y; }
+let global_inferred = 3;
+
+fn i32 main() {
+    int explicit = 5;
+    let number = 10;
+    number += explicit;
+    let flag = true;
+    let text = "Whisky";
+    let fraction = 1.5;
+    println("{number} {global_inferred} {flag} {text} {fraction:.1f}");
+    const int extra = 2;
+    orbit int projected := number + extra;
+    println("{projected}");
+
+    owner<i64> original = own(1);
+    original[0] = 11;
+    let borrowed = ref_of(original);
+    let copied = clone(original);
+    let moved = move(original);
+    copied[0] = 13;
+    println("{moved[0]} {borrowed[0]} {copied[0]}");
+
+    let pool = arena();
+    ref<i64> item = arena_new(pool, 1);
+    item[0] = 7;
+    let item_view = item;
+    [2]i64 values = {17, 19};
+    let slice = values[0..2];
+    let pair = (number, borrowed);
+    let (first, second) = pair;
+    let point = Point {x: 23, y: 29};
+    let Point {x, y: renamed} = point;
+    println("{item_view[0]} {slice[0] + slice[1]} {first} {second[0]} {x} {renamed}");
+    return 0;
+}

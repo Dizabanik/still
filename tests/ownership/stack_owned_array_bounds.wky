@@ -1,6 +1,6 @@
 fn main() {
-    let values:[2][2]owner<i64>={{own(1)}};
-    let index:i64=2;
+    [2][2]owner<i64> values={{own(1)}};
+    i64 index=2;
     let borrowed=ref_of(values[0][index]);
     return 0;
 }

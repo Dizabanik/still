@@ -57,6 +57,10 @@ static void report_error(Parser *p, const char *fmt, ...) {
 	va_end(args);
 }
 
+static void report_declaration_style_error(Parser *p) {
+	report_error(p, "Explicit types precede names: use 'Type name' or 'let name = value' for inference");
+}
+
 static void synchronize(Parser *p) {
 	p->panic_mode = 0;
 	while (p->cur.type != TOK_EOF) {
@@ -121,14 +125,6 @@ static ASTNode *find_decl(Parser *p, const char *name) {
 			return p->decls[i].node;
 	}
 	return NULL;
-}
-
-// True when `name` is a previously declared const -- used by the [N]
-// lookahead so `const N = 8;` can be used as `[N]i32 buf;`.
-static int find_decl_is_const(Parser *p, const char *name) {
-	ASTNode *decl = find_decl(p, name);
-	return decl && decl->type == NODE_VAR_DECL &&
-		   decl->data.var_decl.is_const;
 }
 
 static int is_type_token(TokenType t) {
@@ -1488,11 +1484,13 @@ static ASTNode *parse_primary(Parser *p) {
 		advance(p);
 	} else if (p->cur.type == TOK_TRUE) {
 		n->type = NODE_LITERAL;
+		n->data_type = bool_result_type(p);
 		n->data.literal.i_val = 1;
 		n->data.literal.i64_val = 1;
 		advance(p);
 	} else if (p->cur.type == TOK_FALSE) {
 		n->type = NODE_LITERAL;
+		n->data_type = bool_result_type(p);
 		n->data.literal.i_val = 0;
 		n->data.literal.i64_val = 0;
 		advance(p);
@@ -3318,7 +3316,6 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 	struct {
 		char *field_name;
 		char *var_name;
-		Type *var_type;
 	} items[32];
 	int item_count = 0;
 
@@ -3326,15 +3323,13 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 		while (!p->had_error && p->cur.type != TOK_RPAREN && p->cur.type != TOK_EOF) {
 			char *vname = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected variable name in tuple destructuring");
-			Type *vtype = NULL;
 			if (p->cur.type == TOK_COLON) {
-				advance(p);
-				vtype = parse_type(p);
+				report_declaration_style_error(p);
+				return NULL;
 			}
 			if (item_count < 32) {
 				items[item_count].field_name = NULL;
 				items[item_count].var_name = vname;
-				items[item_count].var_type = vtype;
 				item_count++;
 			}
 			if (p->cur.type == TOK_COMMA)
@@ -3348,41 +3343,20 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 			char *fname = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Expected field name in struct destructuring");
 			char *vname = fname;
-			Type *vtype = NULL;
 			if (p->cur.type == TOK_COLON) {
 				advance(p);
-				if (is_type_token(p->cur.type) && p->cur.type != TOK_IDENTIFIER) {
-					vtype = parse_type(p);
-				} else if (p->cur.type == TOK_IDENTIFIER) {
-					char *ident = p->cur.text;
-					advance(p);
-					if (p->cur.type == TOK_COLON) {
-						vname = ident;
-						advance(p);
-						vtype = parse_type(p);
-					} else {
-						int is_type = 0;
-						for (int si = 0; si < p->struct_name_count; si++) {
-							if (strcmp(p->struct_names[si], ident) == 0) {
-								is_type = 1;
-								break;
-							}
-						}
-						if (is_type) {
-							Type *t = arena_alloc(p->arena, sizeof(Type));
-							t->kind = TYPE_STRUCT;
-							t->name = ident;
-							vtype = t;
-						} else {
-							vname = ident;
-						}
-					}
+				// A colon in a struct pattern renames a field, like a
+				// struct literal label; the binding's type is inferred.
+				vname = p->cur.text;
+				consume(p, TOK_IDENTIFIER, "Expected binding name after field label");
+				if (p->cur.type == TOK_COLON) {
+					report_declaration_style_error(p);
+					return NULL;
 				}
 			}
 			if (item_count < 32) {
 				items[item_count].field_name = fname;
 				items[item_count].var_name = vname;
-				items[item_count].var_type = vtype;
 				item_count++;
 			}
 			if (p->cur.type == TOK_COMMA)
@@ -3498,8 +3472,7 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 		var_node->data.var_decl.init = val_expr;
 		var_node->data.var_decl.is_const = 0;
 		var_node->data.var_decl.is_orbit = 0;
-		var_node->data_type = items[i].var_type ? items[i].var_type :
-			(val_expr->data_type ? val_expr->data_type : NULL);
+		var_node->data_type = val_expr->data_type;
 
 		if (p->decl_count < 1024) {
 			p->decls[p->decl_count].name = items[i].var_name;
@@ -3514,20 +3487,114 @@ static ASTNode *parse_destructuring_let(Parser *p) {
 	return head;
 }
 
+// Inspect only tokens: speculative type parsing can instantiate structs and
+// mutate the declaration table. Stop at statement boundaries on malformed input.
+static int generic_type_decl_follows(Parser *p, TokenType opening) {
+	Lexer look = *p->lexer;
+	lexer_next(&look); // '<' or '(' after the type name
+	int depth = 1;
+	for (;;) {
+		Token token = lexer_next(&look);
+		if (token.type == TOK_EOF || token.type == TOK_ERROR ||
+			token.type == TOK_SEMICOLON || token.type == TOK_LBRACE ||
+			token.type == TOK_RBRACE)
+			return 0;
+		if (token.type == opening) depth++;
+		else if (token.type == (opening == TOK_LANGLE ? TOK_RANGLE : TOK_RPAREN)) depth--;
+		else if (opening == TOK_LANGLE && token.type == TOK_SHR) depth -= 2;
+		else if (opening == TOK_LANGLE && token.type == TOK_REQ) return 0;
+		if (depth < 0) return 0;
+		if (depth == 0) {
+			Token after = lexer_next(&look);
+			// Named struct instances share parse_type's postfix handling.
+			return after.type == TOK_IDENTIFIER ||
+				(opening == TOK_LPAREN &&
+				 (after.type == TOK_STAR || after.type == TOK_AMP || after.type == TOK_LBRACKET));
+		}
+	}
+}
+
+// One declaration lookahead for locals, globals and optional const/orbit
+// type prefixes. A managed type is contextual: `owner < count;` stays an
+// expression, while `owner<ref<T>> items` is a declaration.
+static int is_c_style_declaration(Parser *p) {
+	if (p->cur.type == TOK_LBRACKET) {
+		Lexer look = *p->lexer;
+		Token length = lexer_next(&look);
+		if (length.type != TOK_RBRACKET) {
+			if (length.type != TOK_INT_LIT && length.type != TOK_IDENTIFIER) return 0;
+			Token end = lexer_next(&look);
+			if (length.type == TOK_IDENTIFIER && end.type == TOK_DOT) {
+				if (lexer_next(&look).type != TOK_IDENTIFIER) return 0;
+				end = lexer_next(&look);
+			}
+			if (end.type != TOK_RBRACKET) return 0;
+		}
+		Token element = lexer_next(&look);
+		return is_type_token(element.type) || element.type == TOK_LPAREN;
+	}
+	if (p->cur.type == TOK_LPAREN) {
+		Lexer look = *p->lexer;
+		int depth = 1, tuple = 0;
+		for (;;) {
+			Token token = lexer_next(&look);
+			if (token.type == TOK_EOF || token.type == TOK_ERROR ||
+				token.type == TOK_SEMICOLON || token.type == TOK_LBRACE ||
+				token.type == TOK_RBRACE)
+				return 0;
+			if (token.type == TOK_LPAREN) depth++;
+			else if (token.type == TOK_RPAREN && --depth == 0) {
+				Token after = lexer_next(&look);
+				return tuple && (after.type == TOK_IDENTIFIER || after.type == TOK_STAR || after.type == TOK_AMP);
+			} else if (token.type == TOK_COMMA) tuple = 1;
+		}
+	}
+	if (!is_type_token(p->cur.type)) return 0;
+	Token next = lexer_peek(p->lexer);
+	if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR) return 1;
+	if (next.type == TOK_AMP) {
+		// A bound value followed by '&' is a bitwise expression, not
+		// a named reference type. Builtins cannot be value names.
+		ASTNode *bound = p->cur.type == TOK_IDENTIFIER ? find_decl(p, p->cur.text) : NULL;
+		return !bound || bound->type != NODE_VAR_DECL;
+	}
+	if (p->cur.type != TOK_IDENTIFIER) return next.type == TOK_LBRACKET;
+	if (next.type == TOK_LANGLE &&
+		(!strcmp(p->cur.text, "owner") || !strcmp(p->cur.text, "ref") ||
+		 !strcmp(p->cur.text, "chan")))
+		return generic_type_decl_follows(p, TOK_LANGLE);
+	if (next.type == TOK_LPAREN) {
+		for (int i = 0; i < p->generic_struct_count; i++)
+			if (!strcmp(p->generic_structs[i].name, p->cur.text))
+				return generic_type_decl_follows(p, TOK_LPAREN);
+	}
+	if (next.type == TOK_LBRACKET) {
+		Lexer look = *p->lexer;
+		lexer_next(&look);
+		Token length = lexer_next(&look); // parse_type validates the value
+		if (length.type != TOK_INT_LIT && length.type != TOK_IDENTIFIER) return 0;
+		Token end = lexer_next(&look);
+		if (length.type == TOK_IDENTIFIER && end.type == TOK_DOT) {
+			if (lexer_next(&look).type != TOK_IDENTIFIER) return 0;
+			end = lexer_next(&look);
+		}
+		if (end.type != TOK_RBRACKET) return 0;
+		Token after = lexer_next(&look);
+		return after.type == TOK_IDENTIFIER || after.type == TOK_STAR || after.type == TOK_AMP;
+	}
+	return 0;
+}
+
 static void parse_const_decl(Parser *p, ASTNode ***tail, const char *prefix,
 							 int is_pub) {
 	consume(p, TOK_CONST, "Expected 'const'");
 	Type *type = NULL;
-	if (is_type_token(p->cur.type)) {
-		Token after = lexer_peek(p->lexer);
-		if (p->cur.type != TOK_IDENTIFIER || after.type == TOK_IDENTIFIER || after.type == TOK_STAR)
-			type = parse_type(p);
-	}
+	if (is_c_style_declaration(p)) type = parse_type(p);
 	char *cname = p->cur.text;
 	consume(p, TOK_IDENTIFIER, "Expected const identifier");
 	if (p->cur.type == TOK_COLON) {
-		advance(p);
-		type = parse_type(p);
+		report_declaration_style_error(p);
+		return;
 	}
 	consume(p, TOK_ASSIGN, "Expected '='");
 	ASTNode *init = parse_expr(p);
@@ -3704,54 +3771,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 	if (p->cur.type == TOK_CASE || p->cur.type == TOK_DEFAULT)
 		return NULL;
 
-	int is_c_style_decl = 0;
-	if (p->cur.type == TOK_LBRACKET) {
-		// Array type declaration: [N]T name = ... where N is a literal
-		// or a const identifier. `[]T name` is the slice form.
-		Lexer temp = *p->lexer;		   // Clone lexer state
-		Token t1 = lexer_next(&temp);  // length literal or const name
-		if (t1.type == TOK_RBRACKET) {
-			// `[]T name` slice form: ']' followed by an element type.
-			if (is_type_token(lexer_peek(&temp).type))
-				is_c_style_decl = 1;
-		}
-		Token t2 = lexer_next(&temp); // ']'
-		Token t3 = lexer_next(&temp); // element type
-		int len_ok = (t1.type == TOK_INT_LIT) ||
-					 (t1.type == TOK_IDENTIFIER &&
-					  find_decl_is_const(p, t1.text));
-		if (len_ok && t2.type == TOK_RBRACKET && is_type_token(t3.type))
-			is_c_style_decl = 1;
-	} else if (p->cur.type == TOK_LPAREN) {
-		Lexer temp = *p->lexer;
-		Token t = lexer_next(&temp);
-		int depth = 1;
-		int looks_like_tuple = 0;
-		while (t.type != TOK_EOF) {
-			if (t.type == TOK_LPAREN) depth++;
-			else if (t.type == TOK_RPAREN) {
-				depth--;
-				if (depth == 0) {
-					Token after = lexer_next(&temp);
-					if ((after.type == TOK_IDENTIFIER || after.type == TOK_STAR) && looks_like_tuple) {
-						is_c_style_decl = 1;
-					}
-					break;
-				}
-			} else if (t.type == TOK_COMMA) {
-				looks_like_tuple = 1;
-			}
-			t = lexer_next(&temp);
-		}
-	} else if (is_type_token(p->cur.type)) {
-		Token next = lexer_peek(p->lexer);
-		if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR)
-			is_c_style_decl = 1;
-		if (p->cur.type == TOK_IDENTIFIER &&
-			strcmp(p->cur.text, "chan") == 0 &&
-			next.type == TOK_LANGLE)
-			is_c_style_decl = 1;
-	}
+	int is_c_style_decl = is_c_style_declaration(p);
 
 	if (p->cur.type == TOK_IDENTIFIER &&
 		(!strcmp(p->cur.text, "stable") || !strcmp(p->cur.text, "try_stable")) &&
@@ -3865,28 +3885,28 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		p->cur.type == TOK_ORBIT || is_c_style_decl) {
 		int is_orbit = (p->cur.type == TOK_ORBIT);
 		int is_const = (p->cur.type == TOK_CONST);
+		int is_let = (p->cur.type == TOK_LET);
 
 		Type *type = NULL;
 		if (is_c_style_decl) {
 			type = parse_type(p);
 		} else {
 			advance(p); // step over let/const/orbit itself
-			// Optional explicit type: `const u32 X = ...` or `let (i32, str) t = ...`.
-			if (is_type_token(p->cur.type) || p->cur.type == TOK_LPAREN) {
-				Token after = lexer_peek(p->lexer);
-				if (p->cur.type == TOK_LPAREN ||
-					p->cur.type != TOK_IDENTIFIER ||
-					after.type == TOK_IDENTIFIER || after.type == TOK_STAR)
-					type = parse_type(p);
+			if (is_c_style_declaration(p)) {
+				if (is_let) {
+					report_declaration_style_error(p);
+					return NULL;
+				}
+				type = parse_type(p);
 			}
 		}
 
 		char *name = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Expected variable name");
 
-		if (!is_c_style_decl && p->cur.type == TOK_COLON) {
-			advance(p);
-			type = parse_type(p);
+		if (p->cur.type == TOK_COLON) {
+			report_declaration_style_error(p);
+			return NULL;
 		}
 
 		ASTNode *init = NULL;
@@ -3906,6 +3926,10 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 					advance(p);
 				init = parse_expr(p);
 			}
+		}
+		if (is_let && !init) {
+			report_error(p, "'let' requires an initializer to infer its type; use 'Type name' for an uninitialized binding");
+			return NULL;
 		}
 
 		// A builtin constructor inherits the DECLARED type when its own
@@ -4382,13 +4406,14 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		filt->data.filter.try_block = parse_block(p);
 		consume(p, TOK_DREGS, "Expected 'dregs'");
 		consume(p, TOK_LPAREN, "(");
+		if (is_c_style_declaration(p))
+			filt->data.filter.err_type = parse_type(p);
 		filt->data.filter.err_var = p->cur.text;
 		consume(p, TOK_IDENTIFIER, "Err var");
-		// Typed payload: `dregs (e: ParseErr)`. Optional -- a bare `(e)`
-		// keeps the legacy i32 slot so existing code is untouched.
+		// Typed payload: `dregs (ParseErr e)`; a bare `(e)` uses i32.
 		if (p->cur.type == TOK_COLON) {
-			advance(p);
-			filt->data.filter.err_type = parse_type(p);
+			report_declaration_style_error(p);
+			return NULL;
 		}
 		consume(p, TOK_RPAREN, ")");
         int catch_declarations=p->decl_count;
@@ -4707,23 +4732,15 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 			}
 		} else if (p->cur.type == TOK_IDENTIFIER &&
 				   lexer_peek(p->lexer).type == TOK_COLON) {
-			arg_name = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Arg name");
-			consume(p, TOK_COLON, ":");
-			arg_type = parse_type(p);
-		} else if (p->cur.type == TOK_LPAREN) {
-			arg_type = parse_type(p);
-			arg_name = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Arg name");
-		} else if (is_type_token(p->cur.type)) {
+			report_declaration_style_error(p);
+			return;
+		} else if (is_type_token(p->cur.type) || p->cur.type == TOK_LPAREN) {
 			arg_type = parse_type(p);
 			arg_name = p->cur.text;
 			consume(p, TOK_IDENTIFIER, "Arg name");
 		} else {
-			arg_name = p->cur.text;
-			consume(p, TOK_IDENTIFIER, "Arg name");
-			consume(p, TOK_COLON, ":");
-			arg_type = parse_type(p);
+			report_error(p, "Expected 'Type name' parameter");
+			return;
 		}
 
 		ASTNode *arg = arena_alloc(p->arena, sizeof(ASTNode));
@@ -5041,22 +5058,16 @@ ASTNode *parse_program(Parser *p) {
 				char *arg_name = NULL;
 				if (p->cur.type == TOK_IDENTIFIER &&
 					lexer_peek(p->lexer).type == TOK_COLON) {
-					// Whisky-style: `x: f64`.
-					arg_name = p->cur.text;
-					consume(p, TOK_IDENTIFIER, "Arg name");
-					consume(p, TOK_COLON, ":");
-					arg_type = parse_type(p);
-				} else if (is_type_token(p->cur.type)) {
+					report_declaration_style_error(p);
+					break;
+				} else if (is_type_token(p->cur.type) || p->cur.type == TOK_LPAREN) {
 					// C-style: `f64 x` -- type first.
 					arg_type = parse_type(p);
 					arg_name = p->cur.text;
 					consume(p, TOK_IDENTIFIER, "Arg name");
 				} else {
-					// Whisky-style: `x: f64`.
-					arg_name = p->cur.text;
-					consume(p, TOK_IDENTIFIER, "Arg name");
-					consume(p, TOK_COLON, ":");
-					arg_type = parse_type(p);
+					report_error(p, "Expected 'Type name' parameter");
+					break;
 				}
 
 				ASTNode *arg = arena_alloc(p->arena, sizeof(ASTNode));
@@ -5418,54 +5429,9 @@ parse_soa_struct:;
 			*tail = st;
 			tail = &st->next;
 		} else {
-			int is_global_decl = 0;
-			if (p->cur.type == TOK_CONST || p->cur.type == TOK_ORBIT ||
-				p->cur.type == TOK_LET) {
-				// let/const/orbit are always declarations at file scope.
-				is_global_decl = 1;
-			} else if (p->cur.type == TOK_LPAREN) {
-				Lexer temp = *p->lexer;
-				Token t = lexer_next(&temp);
-				int depth = 1;
-				int looks_like_tuple = 0;
-				while (t.type != TOK_EOF) {
-					if (t.type == TOK_LPAREN) depth++;
-					else if (t.type == TOK_RPAREN) {
-						depth--;
-						if (depth == 0) {
-							Token after = lexer_next(&temp);
-							if ((after.type == TOK_IDENTIFIER || after.type == TOK_STAR) && looks_like_tuple) {
-								is_global_decl = 1;
-							}
-							break;
-						}
-					} else if (t.type == TOK_COMMA) {
-						looks_like_tuple = 1;
-					}
-					t = lexer_next(&temp);
-				}
-			} else if (p->cur.type == TOK_LBRACKET) {
-				// Mirror parse_statement's lookahead: [ N ] T name
-				Lexer temp = *p->lexer;
-				Token t1 = lexer_next(&temp);
-				Token t2 = lexer_next(&temp);
-				Token t3 = lexer_next(&temp);
-				int len_ok = (t1.type == TOK_INT_LIT) ||
-							 (t1.type == TOK_IDENTIFIER &&
-							  find_decl_is_const(p, t1.text));
-				if (len_ok && t2.type == TOK_RBRACKET &&
-					is_type_token(t3.type))
-					is_global_decl = 1;
-			} else if (is_type_token(p->cur.type)) {
-				Token next = lexer_peek(p->lexer);
-				if (next.type == TOK_IDENTIFIER || next.type == TOK_STAR ||
-					next.type == TOK_LBRACKET)
-					is_global_decl = 1;
-				if (p->cur.type == TOK_IDENTIFIER &&
-					strcmp(p->cur.text, "chan") == 0 &&
-					next.type == TOK_LANGLE)
-					is_global_decl = 1;
-			}
+			int is_global_decl = p->cur.type == TOK_CONST ||
+				p->cur.type == TOK_ORBIT || p->cur.type == TOK_LET ||
+				is_c_style_declaration(p);
 
 			if (is_global_decl) {
 				ASTNode *s = parse_statement(p);

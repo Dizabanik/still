@@ -1,1 +1,1 @@
-alias Buffer=owner<i64>; alias View=ref<i64>; fn i64 read(View p) { return p[0]; } fn main() { let a: Buffer=own(1); a[0]=19; let r=ref_of(a); let b=move(a); println("{read(r)} {b[0]}"); return 0; }
+alias Buffer=owner<i64>; alias View=ref<i64>; fn i64 read(View p) { return p[0]; } fn main() { Buffer a=own(1); a[0]=19; let r=ref_of(a); let b=move(a); println("{read(r)} {b[0]}"); return 0; }

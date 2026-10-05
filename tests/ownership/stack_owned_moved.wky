@@ -1,7 +1,7 @@
 struct Item { owner<i64> data; }
 fn main() {
-    let a: Item = {data: own(1)};
-    let b: Item = move(a);
+    Item a = {data: own(1)};
+    Item b = move(a);
     println("{a.data[0]}");
     return 0;
 }

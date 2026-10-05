@@ -26,7 +26,7 @@ fn main() {
     i64 rounds=input(1); i64 seed=input(2); i64 size=input(3);
     i64 mode=input(4); i64 scatter=input(5);
     if (rounds>1000000000 || seed>65535 || size<1 || size>1048576 || (size&(size-1))!=0 || mode>1 || scatter>1) { return 2; }
-    let a: owner<i64> = own(size); let p=ref_of(a);
+    owner<i64> a = own(size); let p=ref_of(a);
     stable(p) { for (i64 i=0; i<size; i+=1) { p[i]=i*17+seed; } }
     let before_checks=mem_metric(7); let before_pins=mem_metric(8);
     i64 total=0;

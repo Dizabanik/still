@@ -1,0 +1,4 @@
+fn int main() {
+    let number: int = 10;
+    return number;
+}

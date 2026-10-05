@@ -15,6 +15,13 @@ Work order:
 
 ## Implemented foundation
 
+- Type-first explicit declarations for locals, globals, parameters, fields,
+  and typed error handlers: `int x`, `owner<T> x`, `ref<T> p`, `arena pool`,
+  `chan<T> queue`, arrays/slices, tuples, aliases and generic struct instances.
+  `let name = expression` is inference-only and needs an initializer.
+  Suffix type annotations and `let Type name` are rejected with E0001.
+  Destructuring infers binding types; field labels and renames retain colons.
+  Boolean literals carry bool types rather than falling back to integers.
 - Managed allocation identity: zero-initialized owner/ref/arena allocations,
   byte extents, checked indexing/slicing/forward offsets, process-lived pooled
   descriptors, thread confinement, and generation retirement. The reference
@@ -129,7 +136,7 @@ unchecked after removing its allocation.
 ## Evidence and measurement
 
 The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 857 passing cases and all eight
+The latest complete language checkpoint has 881 passing cases and all eight
 CTest suites passing. The sanitized runtime suite
 uses a two-bit generation counter and exercises clone allocation failures,
 resize retirement/reparenting, pinned descendants, cycles, callback writes,
@@ -141,6 +148,12 @@ cleanup or replacement traps. Value-clone failures exercise every byte budget
 before all three source allocations can be copied.
 The additional optimization-report suite checks emitted IR against reports,
 execution counters, source spans and unchanged native object bytes.
+Declaration regressions add 24 cases at O0/O2/O3, including malformed nested
+types, contextual type names, explicit composite bindings and inference.
+Tooling checks twenty invalid declaration forms in check and format modes,
+formatter round trips with execution oracles, and byte-identical bitcode,
+IR and native objects for equivalent explicit/inferred declarations at all
+three optimization levels. Existing output fixtures remain unchanged.
 
 scripts/bench_memory.py verifies 80 edge runs, two sanitized C runs and eight
 separately instrumented workloads for each reference or subobject walk.
@@ -184,11 +197,15 @@ Both implementations use the same runtime, arithmetic, zero initialization,
 cleanup and ownership layouts. These results establish no general language
 ranking.
 
-scripts/bench_tools.py uses three versioned, deterministic source corpora with
+scripts/bench_tools.py uses four versioned, deterministic source corpora with
 independent execution checksums, formatter fixed points and repeatable
 bitcode/IR/object hashes. It measures check, format and build separately with
-fresh processes and a warm filesystem. Median build times were 66.985 ms for
-12 kernels, 385.419 ms for 256 kernels, and 106.760 ms for 64 kernels calling
+fresh processes and a warm filesystem. Version 2 adds 64 kernels using nested
+owners, references, qualified bindings, ref arrays and generic struct instances.
+Those kernels include checked/stable access and owning scope cleanup; their
+execution checksum comes from a separate arithmetic formula. No new timings
+are claimed for this corpus version. Version 1 median build times were
+66.985 ms for 12 kernels, 385.419 ms for 256 kernels, and 106.760 ms for 64 kernels calling
 17 nested generic helpers at four widths. Short/noisy check and format samples
 are flagged; no compiler-cache hit rate or cold-cache claim is invented.
 
@@ -221,6 +238,9 @@ refinements are still required. Reports currently expose exact static IR facts
 and conservative source associations, not complete LLVM proof traces or
 executed-operation counts. Legacy raw pointers retain their prior semantics
 until the explicit boundary migration is implemented.
+Legacy orbit bindings currently evaluate their initializer once; dependency
+updates do not recompute them. The existing `tests/test.wky` output contract
+records this limitation, which is separate from declaration spelling.
 
 Design constraints: reference identity cannot depend on an allocation's address;
 descriptor storage survives its payload; exhausted generations retire; checking

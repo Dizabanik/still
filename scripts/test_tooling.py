@@ -69,19 +69,103 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         print('PASS formatter: idempotence, literals/comments, independent executable oracle and syntax errors')
 
         # Representative language constructs, including generics, enums, managed
-        # access, macros and coroutine syntax. This is syntax validation only.
+        # access, macros and coroutine syntax. Managed declaration fixtures
+        # also execute against their independent output oracles.
         for relative in ('tests/test_struct_defaults.wky', 'tests/contracts/named_evaluation.wky',
                          'tests/managed/alias_move_clone.wky', 'tests/test_generics.wky',
-                         'tests/ir/fp_permissions.wky', 'tests/numeric/comptime_width.wky'):
+                         'tests/ir/fp_permissions.wky', 'tests/numeric/comptime_width.wky',
+                         'tests/contracts/c_style_types.wky', 'tests/contracts/c_style_inference.wky'):
             path = repository / relative
             if not path.exists():
                 continue
             canonical = run('--format', path).stdout
             target.write_bytes(canonical)
             assert run('--format', target).stdout == canonical, relative
+            if 'c_style_' in relative:
+                run('--check', target)
+                compiled = run('-O3', target, '-o', root / 'formatted-program')
+                assert not compiled.stderr, compiled
+                executed = invoke([str(root / 'formatted-program')], root)
+                expected = json.loads(path.with_suffix('.wky.json').read_text())['stdout'].encode()
+                assert executed.returncode == 0 and executed.stdout == expected and not executed.stderr, executed
         print('PASS formatter: representative syntax round trips')
 
-        source.write_text('fn main(){ println("ż"); let a:owner<i64>=own(1); release(a); println("{a[0]}"); return 0; }')
+        # Explicit types must precede names in every declaration context.
+        # Colons used for struct labels and renames remain covered above.
+        invalid_declarations = (
+            'let value:int=10; fn int main(){return value;}',
+            'const value:int=10; fn int main(){return value;}',
+            'fn int main(){let value:int=10;return value;}',
+            'fn int main(){let value:owner<i64>=own(1);return 0;}',
+            'fn int main(){let value:ref<i64>;return 0;}',
+            'fn int main(){let value:arena=arena();return 0;}',
+            'fn int main(){let value:chan<i64>=make_chan(1);return 0;}',
+            'fn int main(){const value:int=10;return value;}',
+            'fn int main(){orbit value:int:=10;return value;}',
+            'fn int main(){let int value=10;return value;}',
+            'fn int main(){let owner<i64> value=own(1);return 0;}',
+            'fn int main(){let ref<i64> value;return 0;}',
+            'fn int main(){let [2]int value;return 0;}',
+            'fn int main(){let (int,int) value=(1,2);return 0;}',
+            'fn int main(){let value;return 0;}',
+            'fn int read(value:int){return value;} fn int main(){return read(10);}',
+            'extern fn int read(value:int); fn int main(){return 0;}',
+            'fn int main(){filter{press error=10;}dregs(error:int){return error;}return 0;}',
+            'fn int main(){let (first:int,second)=(1,2);return first;}',
+            'struct Point{int x;} fn int main(){let {x:renamed:int}=Point{x:10};return renamed;}',
+        )
+        for body in invalid_declarations:
+            source.write_text(body)
+            before = {p.name: hashlib.sha256(p.read_bytes()).digest()
+                      for p in root.iterdir() if p.is_file()}
+            for mode in ('--check', '--format'):
+                result = run(mode, '--diagnostic-format=json', source, status=1)
+                assert not result.stdout, result
+                errors = [json.loads(line) for line in result.stderr.splitlines()]
+                assert errors and all(error['code'] == 'E0001' for error in errors), errors
+                after = {p.name: hashlib.sha256(p.read_bytes()).digest()
+                         for p in root.iterdir() if p.is_file()}
+                assert after == before, 'invalid declaration changed an artifact'
+        print('PASS declaration syntax: type-first bindings/parameters/handlers; inference-only let')
+
+        # Pin paths, flags, line numbers, and values. Only declaration spelling
+        # changes; the native code and its safety checks must be identical.
+        prefix = '''fn owner<i64> make(i64 seed){
+    owner<i64> result=own(2);
+    result[0]=seed; result[1]=seed+1;
+    return move(result);
+}
+fn int main(){
+'''
+        suffix = '''    copied[0]+=1;
+    stable(view){println("{copied[0]} {view[1]} {ready}");}
+    return 0;
+}
+'''
+        bindings = (('i64', 'seed', '(i64)std.process.arg_count()+40'),
+                    ('owner<i64>', 'values', 'make(seed)'),
+                    ('ref<i64>', 'view', 'ref_of(values)'),
+                    ('owner<i64>', 'copied', 'clone(values)'),
+                    ('bool', 'ready', 'true'))
+        for opt in (0, 2, 3):
+            builds = []
+            for inferred in (False, True):
+                declarations = ''.join(f'    {"let" if inferred else kind} {name}={value};\n'
+                                       for kind, name, value in bindings)
+                source.write_text(prefix + declarations + suffix)
+                compiled = run(f'-O{opt}', source, '-o', root / 'declarations')
+                assert not compiled.stderr, compiled
+                builds.append({name: (root / name).read_bytes()
+                               for name in ('output.bc', 'output.ll', 'output.o')})
+                for arguments in ([], ['first', 'second']):
+                    executed = invoke([str(root / 'declarations'), *arguments], root)
+                    value = 42 + len(arguments)
+                    expected = f'{value} {value} true\n'.encode()
+                    assert executed.returncode == 0 and executed.stdout == expected and not executed.stderr, executed
+            assert builds[0] == builds[1], f'declaration spelling changed emitted code at O{opt}'
+        print('PASS declaration lowering: identical bitcode, IR and native objects at O0/O2/O3')
+
+        source.write_text('fn main(){ println("ż"); owner<i64> a=own(1); release(a); println("{a[0]}"); return 0; }')
         result = run('--check', '--diagnostic-format=json', source, status=1)
         diagnostic = json.loads(result.stderr.splitlines()[0])
         location = diagnostic['location']
@@ -154,7 +238,7 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         print('PASS source locations: imported runtime traps and debug builds')
 
         # Pin the source path, target, flags and compiler; vary only output cwd.
-        source.write_text('fn main(){let a:owner<i64>=own(4);a[2]=7;println("{a[2]}");return 0;}\n')
+        source.write_text('fn main(){owner<i64> a=own(4);a[2]=7;println("{a[2]}");return 0;}\n')
         for debug in (False, True):
             builds = []
             for number in (1, 2):
@@ -178,9 +262,9 @@ if(x==41){println("yes");}else{println("no");}return 0;}
             # Force PIE independently of the host driver's default. This catches
             # absolute x86 ELF relocations even on systems defaulting to non-PIE.
             source.write_text('''import stdc;
-let answer:i64=41;
+i64 answer=41;
 fn main(){
-    let values:owner<i64>=own(1); values[0]=answer+1;
+    owner<i64> values=own(1); values[0]=answer+1;
     stdc.printf("%s %lld\\n", "Whisky", values[0]);
     return 0;
 }

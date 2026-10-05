@@ -1,6 +1,6 @@
 struct Region { arena storage; }
 fn main() {
-    let region:Region={storage:arena()};
+    Region region={storage:arena()};
     let copy=clone(region);
     return 0;
 }

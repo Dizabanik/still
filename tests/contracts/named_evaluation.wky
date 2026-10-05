@@ -1,4 +1,4 @@
-let counter:i32=0;
+i32 counter=0;
 fn i32 next(){counter=counter+1;return counter;}
 fn i32 digits(i32 a,i32 b,i32 c){return a*100+b*10+c;}
 struct Digits(T){T unused;}

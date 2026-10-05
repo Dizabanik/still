@@ -2,7 +2,7 @@ import stdc;
 
 fn i32 main() {
     const i64 ROUNDS = 50000;
-    let buf: [1024]i64;
+    [1024]i64 buf;
     for (i in 0..1024) {
         buf[i] = (i * 19 + 7) & 65535;
     }

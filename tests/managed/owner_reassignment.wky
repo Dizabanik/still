@@ -1,12 +1,12 @@
 struct Node { i64 value; owner<Node> child; }
 fn main() {
-    let root: owner<Node> = own(1);
+    owner<Node> root = own(1);
     let removed = ref_of(root);
     root = own(1);
     try_stable(removed) { println("unexpected"); } else { println("replaced"); }
     root = move(root);
     for (i64 i=1; i<10000; i+=1) {
-        let head: owner<Node> = own(1);
+        owner<Node> head = own(1);
         head[0].value = i;
         head[0].child = move(root);
         root = move(head);

@@ -1,1 +1,1 @@
-alias Buffer=owner<i64>; fn main() { let a: Buffer=own(1); let b=a; return 0; }
+alias Buffer=owner<i64>; fn main() { Buffer a=own(1); let b=a; return 0; }

@@ -1,5 +1,5 @@
 fn main() {
-    let root: owner<i64> = own(1);
+    owner<i64> root = own(1);
     if (std.process.arg_count()>0) { release(root); } else { let other=move(root); }
     root = own(1);
     root[0] = 127;

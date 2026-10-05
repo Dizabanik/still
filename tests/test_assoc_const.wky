@@ -4,7 +4,7 @@ struct Mat4 {
 
 impl Mat4 {
     const DIM = 4;
-    const EPSILON: f64 = 0.001;
+    const f64 EPSILON = 0.001;
     const SCALE = 10;
 }
 
@@ -17,7 +17,7 @@ fn int main() {
     stdc.printf("eps: %.3f\n", eps);
 
     // Array dimension using associated constant
-    let buf: [Mat4.DIM]i32;
+    [Mat4.DIM]i32 buf;
     for (let i = 0; i < Mat4.DIM; i += 1) {
         buf[i] = (i + 1) * Mat4.SCALE;
     }

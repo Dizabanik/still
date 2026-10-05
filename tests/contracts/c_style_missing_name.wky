@@ -1,0 +1,4 @@
+fn i32 main() {
+    owner<ref<i64>> = own(1);
+    return 0;
+}

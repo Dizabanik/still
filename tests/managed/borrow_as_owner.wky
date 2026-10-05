@@ -1,1 +1,1 @@
-fn void bad(owner<i64> p) {} fn main() { let a: owner<i64> = own(1); bad(ref_of(a)); return 0; }
+fn void bad(owner<i64> p) {} fn main() { owner<i64> a = own(1); bad(ref_of(a)); return 0; }

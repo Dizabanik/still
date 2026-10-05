@@ -6,7 +6,8 @@ Functions in Whisky are ahead-of-time compiled, obey platform C ABI standards, a
 
 ## 1. Function Declarations
 
-Functions declare their return type before the function name:
+Functions declare their return type before the function name, and each
+parameter's type before its name:
 
 ```wky
 import stdc;

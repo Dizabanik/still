@@ -37,7 +37,7 @@ def main():
         source.write_text('''import "library.wky";
 fn i64 still_answer(){return 1;}
 fn main(){
-    let values:owner<i64>=own(2);
+    owner<i64> values=own(2);
     values[0]=wky_answer(); values[1]=still_answer();
     let view=ref_of(values);
     stable(view){println("{view[0]+view[1]}");}

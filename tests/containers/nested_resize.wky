@@ -1,5 +1,5 @@
 fn main() {
-    let root: owner<owner<i64>> = own(3);
+    owner<owner<i64>> root = own(3);
     root[0] = own(2);
     root[0][0] = 103;
     root[2] = own(1);

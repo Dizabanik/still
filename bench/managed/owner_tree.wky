@@ -25,10 +25,10 @@ fn main() {
     u64 originals=0; u64 copies=0;
     for (u64 trial=0; trial<trials; trial+=1) {
         if (shape==0) {
-            let root: owner<Node> = own(size==0 ? 0 : 1);
+            owner<Node> root = own(size==0 ? 0 : 1);
             if (size!=0) { root[0].value=seed; }
             for (u64 i=1; i<size; i+=1) {
-                let head: owner<Node> = own(1);
+                owner<Node> head = own(1);
                 head[0].value=i*17+seed;
                 head[0].child=move(root);
                 root=move(head);
@@ -38,7 +38,7 @@ fn main() {
             originals+=chain_sum(ref_of(root));
             copies+=chain_sum(ref_of(copy));
         } else {
-            let root: owner<owner<u64>> = own(size);
+            owner<owner<u64>> root = own(size);
             for (u64 i=0; i<size; i+=1) {
                 root[i]=own(1);
                 root[i][0]=i*17+seed;

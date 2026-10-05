@@ -1,6 +1,6 @@
 struct Node { owner<Node> child; }
 fn main() {
-    let root: owner<Node> = own(1);
+    owner<Node> root = own(1);
     let borrowed = ref_of(root);
     root[0].child = move(root);
     println("{allocated(borrowed[0].child)}");

@@ -1,5 +1,5 @@
 fn i64 strlen(i64 value) {
-    let temporary:owner<i64>=own(1);
+    owner<i64> temporary=own(1);
     temporary[0]=value;
     return temporary[0];
 }

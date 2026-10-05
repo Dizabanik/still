@@ -1,0 +1,16 @@
+fn i64 owner(i64 value) { return value + 1; }
+fn i64 ref(i64 value) { return value + 2; }
+fn i64 chan(i64 value) { return value + 3; }
+fn i32 main() {
+    owner(1);
+    ref(1);
+    chan(1);
+    println("{owner(40)} {ref(40)} {chan(40)}");
+    {
+        i64 owner = 1;
+        i64 ref = 2;
+        i64 chan = 3;
+        println("{owner < ref} {chan > ref} {ref > owner}");
+    }
+    return 0;
+}

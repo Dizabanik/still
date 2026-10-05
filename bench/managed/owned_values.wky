@@ -11,17 +11,17 @@ fn main() {
     if (size>1000000 || trials<1 || trials>100 || seed>65535 || shape>1) { return 2; }
     u64 originals=0; u64 copies=0;
     for (u64 trial=0; trial<trials; trial+=1) {
-        let source:Bag={tag:seed,buffers:{own(size),own(size),own(size),own(size)}};
+        Bag source={tag:seed,buffers:{own(size),own(size),own(size),own(size)}};
         for (u64 buffer=0; buffer<4; buffer+=1) {
             for (u64 i=0; i<size; i+=1) { source.buffers[buffer][i]=i*17+seed+buffer*23; }
         }
-        let copied:Bag;
-        let moved:Bag;
+        Bag copied;
+        Bag moved;
         if (shape==0) {
             copied=clone(source);
             moved=move(source);
         } else {
-            let heap:owner<Bag>=own(1);
+            owner<Bag> heap=own(1);
             heap[0]=move(source);
             copied=clone(heap[0]);
             moved=move(heap[0]);

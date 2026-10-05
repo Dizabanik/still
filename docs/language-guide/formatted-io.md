@@ -46,9 +46,9 @@ Format specifiers can follow an expression separated by a colon (`:`):
 import stdc;
 
 fn i32 main() {
-    let id: i64 = 42;
-    let hex_val: u64 = 0xABCD;
-    let ratio: f64 = 3.14159265;
+    i64 id = 42;
+    u64 hex_val = 0xABCD;
+    f64 ratio = 3.14159265;
 
     println("ID: {id:05d} | HEX: 0x{hex_val:X} | RATIO: {ratio:.3f}");
     return 0;

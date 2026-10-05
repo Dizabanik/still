@@ -1,0 +1,2 @@
+fn int read(value: int) { return value; }
+fn int main() { return read(10); }

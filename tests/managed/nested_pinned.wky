@@ -1,5 +1,5 @@
 fn main() {
-    let root: owner<owner<i64>> = own(1);
+    owner<owner<i64>> root = own(1);
     root[0] = own(1);
     let leaf = ref_of(root[0]);
     stable(leaf) { release(root); }

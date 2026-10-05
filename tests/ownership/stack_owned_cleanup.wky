@@ -2,21 +2,21 @@ struct Item { i64 tag; [2]owner<i64> data; }
 fn Item make(i64 n) { return {tag:n, data:{own(1),own(1)}}; }
 #[noalloc] fn i64 consume(Item value) { return value.tag; }
 fn i64 early() {
-    let a: Item = make(3);
+    Item a = make(3);
     defer println("defer {a.tag} {allocated(a.data[0])}");
     return 7;
 }
 fn main() {
-    let stale: ref<i64>;
-    for (let i:i64=0; i<3; i=i+1) {
-        let item: Item = make(i);
+    ref<i64> stale;
+    for (i64 i=0; i<3; i=i+1) {
+        Item item = make(i);
         stale=ref_of(item.data[0]);
         if (i==0) { continue; }
         break;
     }
     try_stable(stale) { println("unexpected"); } else { println("loop cleaned"); }
     filter {
-        let item: Item = make(5);
+        Item item = make(5);
         stale=ref_of(item.data[0]);
         press error=13;
     } dregs (error) { println("{error}"); }
@@ -24,7 +24,7 @@ fn main() {
     println("{early()}");
     println("{consume(make(17))}");
     make(19);
-    let item:Item=make(23);
+    Item item=make(23);
     let copied=try_clone(item);
     println("{copied.tag} {allocated(copied.data[1])}");
     mem_budget(0);

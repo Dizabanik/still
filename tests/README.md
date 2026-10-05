@@ -56,6 +56,14 @@ Legacy tests without output oracles now have explicit expected outputs (generic 
 
 The suite also exercises empty and overlapping slices, negative/upper bounds, short-circuit side effects, wrapping unsigned arithmetic, independently calculated signed division/remainder, argument bytes, and both success/failure of `--test` with `#[ignore]`.
 
+Declaration contracts require `Type name` for explicit types and
+`let name = expression` for inference. They cover managed and composite types,
+globals, qualified bindings, `for` initializers, aliases, type-like value names,
+and malformed nested delimiters. The tooling suite rejects suffix annotations
+in check/format modes and compares bitcode, IR, and native objects for equivalent
+explicit and inferred bindings at O0/O2/O3. Formatter tests run the formatted
+managed examples against independently specified output.
+
 ## Future language contracts
 
 [future-contracts.json](future-contracts.json) defines setup/action/expected behavior for the proposed pointer, ownership, arena, stability, effect, container, concurrency, error, arithmetic, string, FFI, numerical and tooling features. Each group links to a workload in [the future benchmark plan](../bench/future-contracts.json).

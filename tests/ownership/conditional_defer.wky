@@ -1,5 +1,5 @@
 fn main(){
- let a:owner<i64>=own(1); a[0]=31;
+ owner<i64> a=own(1); a[0]=31;
  if (false) defer println("unexpected {a[0]}");
  if (true) defer println("selected {a[0]}");
  let b=move(a); println("{b[0]}");

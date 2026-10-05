@@ -1,12 +1,12 @@
 struct Record { owner<i64> child; }
 fn owner<i64> remove_then_return(ref<Record> r) {
     remove(r);
-    let result: owner<i64> = own(1);
+    owner<i64> result = own(1);
     return move(result);
 }
 fn main() {
     let region = arena();
-    let r: ref<Record> = arena_new(region, 1);
+    ref<Record> r = arena_new(region, 1);
     r[0].child = remove_then_return(r);
     return 0;
 }

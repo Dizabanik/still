@@ -1,6 +1,6 @@
 struct Record { [2]owner<i64> children; }
 fn main() {
-    let root: owner<Record> = own(2);
+    owner<Record> root = own(2);
     root[0].children[2] = own(1);
     return 0;
 }

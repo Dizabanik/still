@@ -51,17 +51,21 @@ no generated bitcode header needs to be committed.
 [examples/hello.wky](examples/hello.wky):
 
 ```wky
-fn main() -> i32 {
-    let numbers: owner<i64> = own(2);
+fn i32 main() {
+    owner<i64> numbers = own(2);
     numbers[0] = 20;
     numbers[1] = 22;
-    let view: ref<i64> = ref_of(numbers);
+    ref<i64> view = ref_of(numbers);
     stable(view) {
         println("{view[0] + view[1]}");
     }
     return 0;
 }
 ```
+
+Explicit declarations put the type first: `int x = 10;`,
+`owner<i64> numbers = own(2);`, or `ref<i64> view = ref_of(numbers);`.
+Use `let k = 10;` to infer a binding's type from its initializer.
 
 ```sh
 ./build-cmake/still examples/hello.wky -o build-cmake/hello
