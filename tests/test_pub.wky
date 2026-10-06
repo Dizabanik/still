@@ -1,6 +1,6 @@
 import "lib/test_pub_lib.wky";
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     let c = create_counter(10);

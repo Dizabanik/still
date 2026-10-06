@@ -1,2 +1,2 @@
 fn i64 helper() { owner<i64> a=own(1); return 1; }
-#[noalloc] fn i64 kernel() { return helper(); } fn main() { return 0; }
+@noalloc fn i64 kernel() { return helper(); } fn main() { return 0; }

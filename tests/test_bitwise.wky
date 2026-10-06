@@ -2,7 +2,7 @@ import stdc;
 
 // Bitwise ops, shifts, compound bitwise assignment.
 // Signed >> must be arithmetic (ashr); unsigned >> logical (lshr).
-#[unsafe]
+@unsafe
 fn i32 main() {
     u32 a = 12;
     u32 b = 10;

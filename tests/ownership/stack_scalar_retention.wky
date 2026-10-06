@@ -1,7 +1,7 @@
 u64 saved;
-#[unsafe]
+@unsafe
 fn u64 encode(i32* pointer) { return (u64)pointer; }
-#[unsafe]
+@unsafe
 fn void remember(i32* pointer) { saved=encode(pointer); }
-#[unsafe]
+@unsafe
 fn main() { i32 local=42; remember(&local); return 0; }

@@ -1,1 +1,1 @@
-#[noalloc] fn void work(owner<i64> a) { resize(a,1); } fn main() { return 0; }
+@noalloc fn void work(owner<i64> a) { resize(a,1); } fn main() { return 0; }

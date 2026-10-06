@@ -2,7 +2,7 @@
 // exponents. Suffix wins over default typing; unsuffixed floats are f64.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // Digit separators (ints and floats)

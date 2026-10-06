@@ -1,4 +1,4 @@
 u64 saved;
 unsafe fn u64 encode(i32* pointer) { return (u64)pointer; }
-#[nocapture] unsafe fn void remember(i32* pointer) { saved=encode(pointer); }
+@nocapture unsafe fn void remember(i32* pointer) { saved=encode(pointer); }
 unsafe fn main() { return 0; }

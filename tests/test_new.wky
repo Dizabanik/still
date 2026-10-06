@@ -7,11 +7,11 @@ struct Car {
     u32 accel;
 }
 impl Car {
-    #[unsafe]
+    @unsafe
     fn u32 create(Car* c, double d){
         (*c).speed = 90 + d;
     }
-    #[unsafe]
+    @unsafe
     fn float create2(Car* c, float d){
         (*c).speed = 90 - d;
     }
@@ -19,13 +19,13 @@ impl Car {
 
 alias Millisecond = u32;
 
-#[unsafe]
+@unsafe
 
 fn Millisecond test(Millisecond input){
     return (input + 1);
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     Car c = {0,0};

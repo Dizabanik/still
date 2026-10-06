@@ -13,7 +13,7 @@ chan<i32> fb = make_chan(2);
 chan<i32> mid = make_chan(4);
 chan<i32> out = make_chan(4);
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // 1. basic send/receive through a capacity-1 ring

@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "'#' is reserved"
+}

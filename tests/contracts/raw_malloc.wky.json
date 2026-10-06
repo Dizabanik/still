@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "7 11 13 true\ntrue false true true\npointer condition\n2\n"
+}

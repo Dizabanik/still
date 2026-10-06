@@ -2,30 +2,30 @@
 // is by exact argument-type match at the call site.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 twice(i32 x) { return x * 2; }
-#[unsafe]
+@unsafe
 fn f64 twice(f64 x) { return x * 2.0; }
-#[unsafe]
+@unsafe
 fn i64 twice(i64 x) { return x * 2; }
 
 struct Meters { f64 v; }
 struct Feet { f64 v; }
 
-#[unsafe]
+@unsafe
 
 fn f64 to_km(Meters m) { return m.v / 1000.0; }
-#[unsafe]
+@unsafe
 fn f64 to_km(Feet f) { return f.v * 0.0003048; }
 
-#[unsafe]
+@unsafe
 
 fn i32 pick(i32 a, i32 b) { return a; }
-#[unsafe]
+@unsafe
 fn i32 pick(i32 a, f64 b) { return b == 0.0 ? a : (i32)b; }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     stdc.printf("ti=%d tf=%.1f\n", twice(21), twice(1.25));

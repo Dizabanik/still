@@ -1,11 +1,11 @@
 // 1. Multi-return function with prefix tuple return type
-#[unsafe]
+@unsafe
 fn (i32, i32) divmod(i32 a, i32 b) {
     return (a / b, a % b);
 }
 
 // 2. Multi-return function with arrow return type
-#[unsafe]
+@unsafe
 fn minmax(i32 a, i32 b) -> (i32, i32) {
     if (a < b) {
         return (a, b);
@@ -14,18 +14,18 @@ fn minmax(i32 a, i32 b) -> (i32, i32) {
 }
 
 // 3. Tuple as parameter
-#[unsafe]
+@unsafe
 fn i32 sum_pair((i32, i32) pair) {
     return pair.0 + pair.1;
 }
 
 // 4. Multi-element tuple return
-#[unsafe]
+@unsafe
 fn (i32, i32, i32) split3(i32 n) {
     return (n, n * 2, n * 3);
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     // Tuple literal and indexing with .0, .1

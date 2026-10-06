@@ -28,7 +28,7 @@ still [options] <source.wky>
 | `--format` | None | Off | Format source and print canonical output to stdout |
 | `--format-check` | None | Off | Check formatting and exit with error if unformatted |
 | `--debug`, `-g` | None | Off | Trap on runtime bounds violations and emit debug metadata |
-| `--test` | None | Off | Run functions marked with `#[test]` instead of `main` |
+| `--test` | None | Off | Run functions marked with `@test` instead of `main` |
 | `--color` | `<auto\|always\|never>` | `auto` | Configure ANSI color output in diagnostics |
 | `--version` | None | None | Print compiler version and exit |
 | `-h`, `--help` | None | None | Display help screen and exit |
@@ -96,4 +96,4 @@ Displays detailed documentation and resolution guidance for a specific compiler 
 * `--format-check`: Validates formatting against the canonical style, exiting with status code 1 if reformatting is required.
 
 ### `--test`
-Replaces the standard program entry point with a test harness that finds and runs all functions annotated with `#[test]`, printing individual test results.
+Replaces the standard program entry point with a test harness that finds and runs all functions annotated with `@test`, printing individual test results.

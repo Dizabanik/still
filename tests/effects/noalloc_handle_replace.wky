@@ -1,4 +1,4 @@
-#[noalloc]
+@noalloc
 fn void replace(ref<owner<handle>> destination, owner<handle> incoming) {
     destination[0] = move(incoming);
 }

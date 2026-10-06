@@ -1,4 +1,4 @@
 struct Job { handle task; i64 id; }
-#[noalloc]
+@noalloc
 fn i64 consume(Job job) { return job.id; }
 fn main() { return 0; }

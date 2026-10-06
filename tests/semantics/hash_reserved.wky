@@ -1,0 +1,2 @@
+# ordinary comments now use //
+fn main() { return 0; }

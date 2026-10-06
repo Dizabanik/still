@@ -85,10 +85,17 @@ and fallible values. Propagate with `try(expression)`, or handle errors with
 `filter { ... } dregs (Error error) { ... }`. Explicitly move owning payloads.
 
 Raw operations belong inside `unsafe { ... }`. A function whose callers must
-establish raw preconditions is `unsafe fn` (or `#[unsafe]`); a function can
+establish raw preconditions is `unsafe fn` (or `@unsafe`); a function can
 keep a safe interface when it establishes those preconditions internally.
 Prefer the smallest boundary whose assumptions can be reviewed. `unchecked`
 requires an unsafe context and does not disable managed identity checks.
+
+Attributes use `@name`, placed before the declaration. Stack them on separate
+lines or separate them with whitespace: `@noalloc @nocapture pub fn ...`.
+Function attributes are `@test`, `@ignore`, `@unsafe`, `@noalloc`, `@nocapture`,
+`@fp_contract`, `@fp_reassoc`, and `@fp_finite`; `@soa` applies to structs.
+Unknown attributes are errors. Do not use hash-prefixed attributes or hash
+comments: `#` is reserved for future language syntax. Use `//` for comments.
 
 Use the language's printing and memory operations instead of calling private
 `__wky_` helpers. The compiler distinguishes generated helper calls from source

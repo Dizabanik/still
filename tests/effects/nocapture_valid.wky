@@ -1,4 +1,4 @@
-#[nocapture] unsafe fn i32 read(i32* p){return *p;}
-#[nocapture] unsafe fn i32 forward(i32* p){return read(p);}
-#[nocapture] unsafe fn void update(i32* p){*p=*p+1;}
+@nocapture unsafe fn i32 read(i32* p){return *p;}
+@nocapture unsafe fn i32 forward(i32* p){return read(p);}
+@nocapture unsafe fn void update(i32* p){*p=*p+1;}
 unsafe fn main(){i32 x=41;update(&x);println("{forward(&x)}");return 0;}

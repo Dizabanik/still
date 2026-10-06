@@ -4,24 +4,24 @@ struct Pair(A, B) {
 }
 
 impl(A, B) Pair(A, B) {
-    #[unsafe]
+    @unsafe
     fn Pair(A, B) new(A f, B s) {
         return Pair(A, B) { first: f, second: s };
     }
 
-    #[unsafe]
+    @unsafe
 
     fn A get_first(self) {
         return self.first;
     }
 
-    #[unsafe]
+    @unsafe
 
     fn B get_second(self) {
         return self.second;
     }
 
-    #[unsafe]
+    @unsafe
 
     fn Pair(B, A) swap(self) {
         return Pair(B, A) { first: self.second, second: self.first };
@@ -35,25 +35,25 @@ struct Triple(X, Y, Z) {
 }
 
 impl Triple(X, Y, Z) {
-    #[unsafe]
+    @unsafe
     fn Triple(X, Y, Z) make(X x, Y y, Z z) {
         return Triple(X, Y, Z) { x: x, y: y, z: z };
     }
-    #[unsafe]
+    @unsafe
     fn X get_x(self) {
         return self.x;
     }
-    #[unsafe]
+    @unsafe
     fn Y get_y(self) {
         return self.y;
     }
-    #[unsafe]
+    @unsafe
     fn Z get_z(self) {
         return self.z;
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     // 1. Multi-parameter struct with associated function constructor

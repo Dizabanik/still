@@ -3,83 +3,83 @@ struct Num {
 }
 
 impl Num {
-    #[unsafe]
+    @unsafe
     fn Num self_add(Num a, Num b) {
         return Num { val: a.val + b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_sub(Num a, Num b) {
         return Num { val: a.val - b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_mul(Num a, Num b) {
         return Num { val: a.val * b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_div(Num a, Num b) {
         return Num { val: a.val / b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_rem(Num a, Num b) {
         return Num { val: a.val % b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_bitand(Num a, Num b) {
         return Num { val: a.val & b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_bitor(Num a, Num b) {
         return Num { val: a.val | b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_bitxor(Num a, Num b) {
         return Num { val: a.val ^ b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_shl(Num a, Num b) {
         return Num { val: a.val << b.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_shr(Num a, Num b) {
         return Num { val: a.val >> b.val };
     }
 
     // Unary operators
-    #[unsafe]
+    @unsafe
     fn Num self_neg(Num a) {
         return Num { val: -a.val };
     }
-    #[unsafe]
+    @unsafe
     fn Num self_bitnot(Num a) {
         return Num { val: ~a.val };
     }
-    #[unsafe]
+    @unsafe
     fn bool self_not(Num a) {
         return a.val == 0;
     }
 
     // Comparisons
-    #[unsafe]
+    @unsafe
     fn bool self_eq(Num a, Num b) {
         return a.val == b.val;
     }
-    #[unsafe]
+    @unsafe
     fn bool self_ne(Num a, Num b) {
         return a.val != b.val;
     }
-    #[unsafe]
+    @unsafe
     fn bool self_lt(Num a, Num b) {
         return a.val < b.val;
     }
-    #[unsafe]
+    @unsafe
     fn bool self_le(Num a, Num b) {
         return a.val <= b.val;
     }
-    #[unsafe]
+    @unsafe
     fn bool self_gt(Num a, Num b) {
         return a.val > b.val;
     }
-    #[unsafe]
+    @unsafe
     fn bool self_ge(Num a, Num b) {
         return a.val >= b.val;
     }
@@ -91,17 +91,17 @@ struct Box(T) {
 }
 
 impl(T) Box(T) {
-    #[unsafe]
+    @unsafe
     fn Box(T) self_add(Box(T) a, Box(T) b) {
         return Box(T) { item: a.item + b.item };
     }
-    #[unsafe]
+    @unsafe
     fn Box(T) self_sub(Box(T) a, Box(T) b) {
         return Box(T) { item: a.item - b.item };
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     let a = Num { val: 20 };

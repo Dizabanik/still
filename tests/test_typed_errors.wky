@@ -13,7 +13,7 @@ struct IoErr {
     bool fatal;
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // 1. Typed payload: press a struct, catch it with fields intact.

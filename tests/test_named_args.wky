@@ -2,19 +2,19 @@
 // compile time, args reordered into positional slots. Zero runtime cost.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn int sub(int a, int b) {
     return a - b;
 }
 
-#[unsafe]
+@unsafe
 
 fn int wrap(int x, int y, int z) {
     return x * 100 + y * 10 + z;
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     stdc.printf("%d\n", sub(a: 10, b: 3));

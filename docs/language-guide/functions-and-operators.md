@@ -80,13 +80,34 @@ unsafe fn i32 read_raw(i32* ptr) {
     return ptr[0];
 }
 
-#[unsafe]
+@unsafe
 fn void write_raw(i32* ptr, i32 val) {
     ptr[0] = val;
 }
 ```
 
 Callers must invoke these functions within an `unsafe { ... }` block or from inside an enclosing unsafe function.
+
+## Attributes
+
+Attributes use `@name` before a declaration. Multiple attributes can occupy one
+line or consecutive lines. Visibility can precede or follow the attributes:
+`pub @noalloc fn ...` and `@noalloc pub fn ...` have the same meaning.
+
+| Function attribute | Meaning |
+| --- | --- |
+| `@test` | Include the function in the `--test` runner. |
+| `@ignore` | Skip an attributed test. |
+| `@unsafe` | Require an unsafe context at calls, like `unsafe fn`. |
+| `@noalloc` | Verify that the function does not allocate. |
+| `@nocapture` | Verify that pointer arguments do not escape. |
+| `@fp_contract` | Permit floating-point contraction. |
+| `@fp_reassoc` | Permit floating-point reassociation. |
+| `@fp_finite` | Permit finite-only floating-point assumptions. |
+
+`@soa` applies to a struct declaration. Unknown attributes and attributes on
+the wrong declaration kind are rejected. Hash-prefixed attributes are no
+longer supported; `#` is reserved for future syntax. Comments use `//`.
 
 ## Operator overloading
 

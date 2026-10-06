@@ -106,34 +106,31 @@ Token lexer_next(Lexer *l) {
 			continue;
 		}
 
-		// `#` comments: shell-script shebangs (`#!/usr/bin/env wky run`)
-		// become possible. Only a line comment -- `#` has no other meaning
-		// in the grammar today.
+		if (c == '@') {
+			if (!isalpha((unsigned char)peek(l)) && peek(l) != '_')
+				return error_token(l, "Expected an attribute name after '@'");
+			size_t start = l->pos;
+			while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
+			size_t length = l->pos - start;
+			Token token = make_token(l, TOK_ATTRIBUTE, NULL);
+			token.text = arena_alloc(l->arena, length + 1);
+			memcpy(token.text, l->src + start, length);
+			token.text[length] = '\0';
+			return token;
+		}
+
+		// Reserve '#' for future syntax. Keep OS shebangs and the driver's
+		// internal source-location markers, which are not language attributes.
 		if (c == '#') {
-			if (peek(l) == '[') {
-				// Attribute: scan to the closing bracket and hand the
-				// inner text to the parser as one token.
-				advance(l); // consume '['
-				size_t start = l->pos;
-				while (!is_at_end(l) && peek(l) != ']') {
-					if (advance(l)=='\n') { ++l->line; l->posL=l->pos; }
-				}
-				size_t len = l->pos - start;
-				if (peek(l) == ']')
-					advance(l); // consume ']'
-				else return error_token(l,"Unterminated attribute");
-				Token t = make_token(l, TOK_ATTRIBUTE, NULL);
-				t.text = arena_alloc(l->arena, len + 1);
-				memcpy(t.text, l->src + start, len);
-				t.text[len] = '\0';
-				return t;
-			}
+			if (peek(l) == '[')
+				return error_token(l, "Use @name for attributes; '#[...]' is no longer supported");
 			size_t end=l->pos;
 			while (end<l->len && l->src[end]!='\n') ++end;
 			char *path; int original;
 			if (driver_module_location(l->src+l->pos-1,end-l->pos+1,&path,&original)) {
 				l->filename=arena_strdup(l->arena,path); free(path);
-			}
+			} else if (!(l->token_column == 1 && peek(l) == '!'))
+				return error_token(l, "'#' is reserved; use '//' for comments");
 			while (peek(l) != '\n' && !is_at_end(l))
 				advance(l);
 			continue;

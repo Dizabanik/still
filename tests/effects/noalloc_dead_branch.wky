@@ -1,2 +1,2 @@
-#[noalloc] fn void kernel() { if (false) { owner<i64> a=own(1); } }
+@noalloc fn void kernel() { if (false) { owner<i64> a=own(1); } }
 fn main() { return 0; }

@@ -1,27 +1,27 @@
-// Attributes: #[test]/#[ignore] attach to functions; normal builds run
+// Attributes: @test/@ignore attach to functions; normal builds run
 // main only. Doc comments (///) are line comments.
 import stdc;
 
 /// Doubles the input.
-#[unsafe]
+@unsafe
 fn i32 twice(i32 x) {
     return x * 2;
 }
 
-#[test]
-#[unsafe]
+@test
+@unsafe
 fn check_twice() {
     if (twice(21) != 42) { std.process.exit(1); }
 }
 
-#[ignore]
-#[test]
-#[unsafe]
+@ignore
+@test
+@unsafe
 fn check_ignored() {
     std.process.exit(7);
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     stdc.printf("%d\n", twice(10));

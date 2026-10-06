@@ -1,2 +1,2 @@
-#[noalloc] fn i64 sum(ref<i64> p) { i64 total=0; stable(p) { for(i64 i=0;i<(i64)mem_len(p);i+=1) { total+=p[i]; } } return total; }
+@noalloc fn i64 sum(ref<i64> p) { i64 total=0; stable(p) { for(i64 i=0;i<(i64)mem_len(p);i+=1) { total+=p[i]; } } return total; }
 fn main() { owner<i64> a=own(2); a[0]=4; a[1]=5; println("{sum(ref_of(a))}"); return 0; }

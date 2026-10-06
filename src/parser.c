@@ -91,7 +91,7 @@ void parser_init(Parser *p, Lexer *l, Arena *a) {
 	p->lexer = l;
 	p->arena = a;
 	p->cur = lexer_next(l);
-	p->had_error = 0;
+	p->had_error = l->had_error;
 	p->panic_mode = 0;
 	p->decl_count = 0;
 	p->fn_sig_count = 0;
@@ -867,7 +867,7 @@ static void parse_enum(Parser *p, ASTNode ***tail);
 // Returns 1 if the upcoming '{ ... }' looks like a struct literal.
 // Returns 0 if it looks like a block code.
 // True when `name` resolves to a variable whose declared type is a
-// #[soa]-marked struct.
+// @soa-marked struct.
 static int is_soa_struct_var(Parser *p, const char *name) {
 	ASTNode *decl = find_decl(p, name);
 	if (!decl || !decl->data_type ||
@@ -2504,7 +2504,7 @@ static ASTNode *parse_postfix_inner(Parser *p) {
 		}
 		if (p->cur.type == TOK_DOT) {
 			advance(p);
-			// SoA rewrite (IDEAS 2.7): `ps[i].x` on a #[soa] struct value
+			// SoA rewrite (IDEAS 2.7): `ps[i].x` on a @soa struct value
 			// becomes `ps.x[i]` -- member access binds before indexing, so
 			// each field is its own contiguous array. Applied at parse time
 			// by rebuilding the node chain.
@@ -4620,7 +4620,7 @@ static ASTNode *parse_expr_stmt_tail(Parser *p, ASTNode *expr,
 	return expr;
 }
 void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
-	// Attributes directly above `fn` attach to it: #[test], #[ignore].
+	// Attributes directly above `fn` attach to it: @test, @ignore.
 	int attr_is_test = 0;
 	int attr_is_ignored = 0;
 	int attr_noalloc = 0;
@@ -4643,8 +4643,13 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 			fp_permissions |= 2;
 		else if (strcmp(p->cur.text, "fp_finite") == 0)
 			fp_permissions |= 4;
+		else {
+			report_error(p, "Unknown function attribute");
+			return;
+		}
 		advance(p);
 	}
+	if (p->cur.type == TOK_PUB) { is_pub = 1; advance(p); }
 	int is_pure = (p->cur.type == TOK_PURE);
 	if (is_pure)
 		advance(p);
@@ -5055,16 +5060,16 @@ ASTNode *parse_program(Parser *p) {
 		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE ||
             (p->cur.type==TOK_IDENTIFIER && !strcmp(p->cur.text,"unsafe") && lexer_peek(p->lexer).type==TOK_FN) ||
 			p->cur.type == TOK_ATTRIBUTE) {
-			// #[soa] belongs to a struct declaration, not a function.
-			int leading_soa = 0;
-			if (p->cur.type == TOK_ATTRIBUTE &&
-				strcmp(p->cur.text, "soa") == 0) {
+			// Attribute placement does not depend on declaration visibility.
+			int attributed_struct = 0;
+			if (p->cur.type == TOK_ATTRIBUTE) {
 				Lexer la = *p->lexer;
 				Token nt = lexer_next(&la);
-				if (nt.type == TOK_STRUCT)
-					leading_soa = 1;
+				while (nt.type == TOK_ATTRIBUTE) nt = lexer_next(&la);
+				if (nt.type == TOK_PUB) nt = lexer_next(&la);
+				attributed_struct = nt.type == TOK_STRUCT;
 			}
-			if (!leading_soa)
+			if (!attributed_struct)
 				parse_function(p, &tail, NULL, is_pub);
 			else
 				goto parse_soa_struct;
@@ -5170,8 +5175,13 @@ parse_soa_struct:;
 			while (p->cur.type == TOK_ATTRIBUTE) {
 				if (strcmp(p->cur.text, "soa") == 0)
 					soa_attr = 1;
+				else {
+					report_error(p, "Only @soa is supported on struct declarations");
+					return prog;
+				}
 				advance(p);
 			}
+			if (p->cur.type == TOK_PUB) { is_pub = 1; advance(p); }
 			consume(p, TOK_STRUCT, "Expected 'struct'");
 			ASTNode *st = arena_alloc(p->arena, sizeof(ASTNode));
 			st->type = NODE_STRUCT_DECL;

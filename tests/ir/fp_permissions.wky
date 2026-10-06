@@ -1,8 +1,8 @@
 // OPT: 0
 pub fn f64 strict(f64 a,f64 b,f64 c) { return a*b+c; }
-#[fp_contract] fn f64 contract(f64 a,f64 b,f64 c) { return a*b+c; }
-#[fp_reassoc] fn f64 reassociate(f64 a,f64 b,f64 c) { return a*b+c; }
-#[fp_finite] fn f64 finite(f64 a,f64 b,f64 c) { return a*b+c; }
+@fp_contract fn f64 contract(f64 a,f64 b,f64 c) { return a*b+c; }
+@fp_reassoc fn f64 reassociate(f64 a,f64 b,f64 c) { return a*b+c; }
+@fp_finite fn f64 finite(f64 a,f64 b,f64 c) { return a*b+c; }
 fn main(){return 0;}
 // CHECK-LABEL: define double @strict
 // CHECK: fmul double

@@ -1,0 +1,7 @@
+fn main() {
+    unsafe {
+        i32* value = 0;
+        bool invalid = value == 1;
+    }
+    return 0;
+}

@@ -1,0 +1,2 @@
+@noalloc struct Item { i32 value; }
+fn main() { return 0; }

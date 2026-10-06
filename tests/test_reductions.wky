@@ -2,13 +2,13 @@
 // (vectorizer-perfect), over arrays and slices of every numeric width.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn f32 mean([]f32 xs) {
     return sum(xs) / ((f32)xs.len);
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // Every integer width; sum widens to i64 (no mid-loop overflow).

@@ -463,7 +463,7 @@ void still_compile(StillCompiler *c, ASTNode *root) {
 							  &globals_init_type);
 
 
-	// Test mode: synthesize wky__run_all_tests() -- calls each #[test] fn
+	// Test mode: synthesize wky__run_all_tests() -- calls each @test fn
 	// in order, prints PASS/FAIL, returns the failure count. @main then
 	// calls the runner instead of user main; exit code is the failures.
 	if (c->test_mode && c->test_fn_count > 0) {

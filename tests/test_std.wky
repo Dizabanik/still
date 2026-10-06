@@ -1,7 +1,7 @@
 // std.* seeds: process exit + io puts/eputs.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn str classify(int n) {
     if (n < 10) { return "small"; }
@@ -9,7 +9,7 @@ fn str classify(int n) {
     return "large";
 }
 
-#[unsafe]
+@unsafe
 
 fn u8 main() {
     stdc.printf("%s\n", classify(7));

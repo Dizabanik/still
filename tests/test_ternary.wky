@@ -3,19 +3,19 @@
 // optimizer folds it.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn int max(int a, int b) {
     return a > b ? a : b;
 }
 
-#[unsafe]
+@unsafe
 
 fn int clamp(int v, int lo, int hi) {
     return v < lo ? lo : v > hi ? hi : v;
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     stdc.printf("%d\n", max(3, 7));

@@ -30,7 +30,7 @@ fn u32 compute() {
     return acc;
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     stdc.printf("answer=%d depth=%lld\n", ANSWER, DEPTH);

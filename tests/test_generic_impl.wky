@@ -3,25 +3,25 @@ struct Box(T) {
 }
 
 impl Box(T) {
-    #[unsafe]
+    @unsafe
     fn new(T v) Box(T) {
         return Box(T) { value: v };
     }
 
-    #[unsafe]
+    @unsafe
 
     fn get(self) T {
         return self.value;
     }
 
-    #[unsafe]
+    @unsafe
 
     fn set(self*, T v) void {
         self.value = v;
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     let b1 = Box(i32).new(42);

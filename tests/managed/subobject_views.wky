@@ -1,6 +1,6 @@
 struct Inner { i64 value; [3]i64 array; }
 struct Record { i64 id; Inner inner; [0]u8 empty; owner<Inner> child; }
-#[noalloc] fn i64 first(ref<i64> borrowed) { return borrowed[0]; }
+@noalloc fn i64 first(ref<i64> borrowed) { return borrowed[0]; }
 fn main() {
     owner<Record> rows=own(2);
     rows[1].id=11;

@@ -1,4 +1,4 @@
-#[noalloc]
+@noalloc
 fn void transfer(ref<owner<i64>> destination, owner<i64> incoming) {
     destination[0] = move(incoming);
 }

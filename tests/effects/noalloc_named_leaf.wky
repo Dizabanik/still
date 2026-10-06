@@ -3,5 +3,5 @@ fn i64 strlen(i64 value) {
     temporary[0]=value;
     return temporary[0];
 }
-#[noalloc] fn i64 inspect(i64 value) { return strlen(value); }
+@noalloc fn i64 inspect(i64 value) { return strlen(value); }
 fn main() { return 0; }

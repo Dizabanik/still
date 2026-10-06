@@ -1,0 +1,18 @@
+import stdc;
+fn main() {
+    unsafe {
+        i32* values = stdc.malloc(sizeof(i32) * 3);
+        if (!values) { return 1; }
+        defer stdc.free(values);
+        i32* other = values;
+        values[0] = 7;
+        *(other + 1) = 11;
+        other[2] = 13;
+        println("{*values} {values[1]} {*(values + 2)} {other == values}");
+        i32* missing = 0;
+        println("{!missing} {!values} {values != 0} {0 == missing}");
+        if (values && !missing) { println("pointer condition"); }
+        println("{(values + 2) - values}");
+    }
+    return 0;
+}

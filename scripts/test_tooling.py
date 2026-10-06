@@ -28,7 +28,7 @@ def main():
         source = root / 'input.wky'
         raw = r'''import stdc;
 // import "missing-comment.wky"; untouched comment ż
-#[nocapture] unsafe fn i32 read(i32* p){return *p;}
+@nocapture unsafe fn i32 read(i32* p){return *p;}
 unsafe fn main(){let text="import \"missing-string.wky\"; ż\x00Z";
 i32 x=41; stdc.printf("%d %d %d\n",read(&x),text.len,(i32)'\x41');
 if(x==41){println("yes");}else{println("no");}return 0;}
@@ -58,7 +58,9 @@ if(x==41){println("yes");}else{println("no");}return 0;}
             assert outputs == [b'41 33 65\nyes\n'] * 2, outputs
         for case in ('fn main( {', 'fn main(){ let s="unterminated; }',
                      'fn main(){ let s="escape' + '\\', "fn main(){ let c='",
-                     "fn main(){ let c='" + '\\', '#[unfinished'):
+                     "fn main(){ let c='" + '\\', '@', '@9', '@unfinished',
+                     '#[unfinished', '#[unsafe]\nfn main(){return 0;}',
+                     '# reserved\nfn main(){return 0;}'):
             bad = root / 'syntax.wky'
             bad.write_text(case)
             before = set(root.iterdir())
@@ -74,14 +76,16 @@ if(x==41){println("yes");}else{println("no");}return 0;}
         for relative in ('tests/test_struct_defaults.wky', 'tests/contracts/named_evaluation.wky',
                          'tests/managed/alias_move_clone.wky', 'tests/test_generics.wky',
                          'tests/ir/fp_permissions.wky', 'tests/numeric/comptime_width.wky',
-                         'tests/contracts/c_style_types.wky', 'tests/contracts/c_style_inference.wky'):
+                         'tests/contracts/c_style_types.wky', 'tests/contracts/c_style_inference.wky',
+                         'tests/semantics/attributes_function.wky',
+                         'tests/semantics/attributes_soa.wky'):
             path = repository / relative
             if not path.exists():
                 continue
             canonical = run('--format', path).stdout
             target.write_bytes(canonical)
             assert run('--format', target).stdout == canonical, relative
-            if 'c_style_' in relative:
+            if 'c_style_' in relative or 'attributes_' in relative:
                 run('--check', target)
                 compiled = run('-O3', target, '-o', root / 'formatted-program')
                 assert not compiled.stderr, compiled

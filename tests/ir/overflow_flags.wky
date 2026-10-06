@@ -5,7 +5,7 @@
 // OPT: 0
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     u32 x = 4000000000;

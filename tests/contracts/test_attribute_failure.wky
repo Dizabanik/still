@@ -1,5 +1,5 @@
-#[test]
-#[unsafe]
+@test
+@unsafe
 fn failure() { std.process.exit(9); }
-#[unsafe]
+@unsafe
 fn i32 main() { return 0; }

@@ -1,0 +1,12 @@
+@noalloc @nocapture
+@unsafe pub fn i32 read(i32* value) { return *value; }
+
+@fp_contract @fp_reassoc @fp_finite
+pure fn f64 calculate(f64 a, f64 b) { return a * b + 1.0; }
+
+fn main() {
+    i32 value = 42;
+    unsafe { println("{read(&value)}"); }
+    println("{calculate(2.0, 3.0):.1f}");
+    return 0;
+}

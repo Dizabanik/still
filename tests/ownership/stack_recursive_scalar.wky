@@ -1,15 +1,15 @@
 struct Encoded { u64 payload; u64 spare; }
-#[unsafe]
+@unsafe
 fn u64 swapped(Encoded pair,i32 remaining) {
     if (remaining<=0) { return pair.payload; }
     Encoded next={.payload=pair.spare,.spare=pair.payload};
     return swapped(next,remaining-1);
 }
-#[unsafe]
+@unsafe
 fn u64 bad() {
     i32 local=42;
     Encoded pair={.payload=0,.spare=(u64)&local};
     return swapped(pair,1);
 }
-#[unsafe]
+@unsafe
 fn main() { return 0; }

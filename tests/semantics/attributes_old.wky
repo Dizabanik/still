@@ -1,0 +1,2 @@
+#[unsafe]
+fn main() { return 0; }

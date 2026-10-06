@@ -1,7 +1,7 @@
 import stdc;
 struct View { i32* pointer; }
 View saved;
-#[nocapture] unsafe fn void remember(View* value){
+@nocapture unsafe fn void remember(View* value){
     stdc.memcpy(&saved,value,sizeof(View));
 }
 unsafe fn main(){return 0;}

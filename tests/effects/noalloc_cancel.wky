@@ -2,6 +2,6 @@ fn drip work() {
     defer { owner<i64> scratch = own(2); scratch[0] = 7; }
     drop(1);
 }
-#[noalloc]
+@noalloc
 fn void cancel_job(handle job) { cancel(job); }
 fn main() { return 0; }

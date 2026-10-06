@@ -1,7 +1,7 @@
 // Type-system tightening: bool results are i1, casts, array decay.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 sum(int* arr, i32 n) {
     let s = 0;
@@ -11,7 +11,7 @@ fn i32 sum(int* arr, i32 n) {
     return s;
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     let a = 5;

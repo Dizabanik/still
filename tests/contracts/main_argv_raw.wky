@@ -1,2 +1,2 @@
-#[unsafe]
+@unsafe
 fn i32 main(i32 argc, char** argv) { println("{argc} {argv[1][0]}"); return 5; }

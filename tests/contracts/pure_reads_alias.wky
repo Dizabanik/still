@@ -1,4 +1,4 @@
-#[unsafe]
+@unsafe
 pure fn i32 read(i32* p) { return *p; }
-#[unsafe]
+@unsafe
 fn i32 main() { i32 x=1; i32 a=read(&x); x=9; println("{a} {read(&x)}"); return 0; }

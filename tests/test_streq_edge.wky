@@ -1,6 +1,6 @@
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // len 1 (byte-only path)

@@ -8,7 +8,7 @@ impl Mat4 {
     const SCALE = 10;
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     let dim = Mat4.DIM;

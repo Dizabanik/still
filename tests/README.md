@@ -54,7 +54,18 @@ The lifetime check analyzes local address flow through SSA values and aggregates
 
 Legacy tests without output oracles now have explicit expected outputs (generic parameters, operator coverage, tuples). `test_new.wky` no longer reads freed memory: pointer-to-pointer access occurs before free. A future invalid-access test must demand a checked failure, never a particular value from freed memory.
 
-The suite also exercises empty and overlapping slices, negative/upper bounds, short-circuit side effects, wrapping unsigned arithmetic, independently calculated signed division/remainder, argument bytes, and both success/failure of `--test` with `#[ignore]`.
+The suite also exercises empty and overlapping slices, negative/upper bounds, short-circuit side effects, wrapping unsigned arithmetic, independently calculated signed division/remainder, argument bytes, and both success/failure of `--test` with `@ignore`.
+
+Attributes use `@name`; contracts cover stacked attributes, public functions and
+SoA structs, misspellings, wrong declaration kinds, and rejection of the former
+hash syntax. Raw malloc contracts exercise aliasing, dereferences, indexing,
+element offsets/differences, null tests, and cleanup at all optimization levels.
+
+The separate `scripts/audit_structs.py` readiness audit reads
+`struct-readiness.json` and returns failure for every unimplemented requirement.
+It is not included in the passing CTest count and never marks a known defect as
+a pass. See [the audit report](../docs/compiler-and-toolchain/struct-readiness.md)
+for verified bugs and missing capabilities.
 
 Declaration contracts require `Type name` for explicit types and
 `let name = expression` for inference. They cover managed and composite types,

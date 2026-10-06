@@ -49,7 +49,7 @@ static void usage(const char *prog) {
 		   "  -o <name>    output executable name (default: source stem)\n"
 		   "  -c           compile to output.bc only, don't link\n"
 		   "  --debug/-g   runtime bounds checks (trap on violation)\n"
-		   "  --test       run #[test] functions instead of main\n"
+		   "  --test       run @test functions instead of main\n"
 		   "  -O0/-O1/-O2/-O3  optimization level passed through (default -O2)\n"
 		   "  --lto        enable link-time optimization (LTO)\n"
 		   "  --pgo-gen[=file]  instrument binary for profile generation\n"
@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
 
 	ASTNode *root = parse_program(&p);
 
-	if (p.had_error)
+	if (p.had_error || lex.had_error)
 		exit(1); // atexit hook prints the summary
 	if (format) {
 		char *original=read_file(src_path);

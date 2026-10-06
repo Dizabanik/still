@@ -11,7 +11,7 @@ enum Status {
     Err(i32)
 }
 
-#[unsafe]
+@unsafe
 
 fn f64 area(Shape s) {
     return match s {
@@ -22,7 +22,7 @@ fn f64 area(Shape s) {
     };
 }
 
-#[unsafe]
+@unsafe
 
 fn void print_status(Status st) {
     match st {
@@ -35,7 +35,7 @@ fn void print_status(Status st) {
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn void describe_shape(Shape s) {
     match s {
@@ -51,7 +51,7 @@ fn void describe_shape(Shape s) {
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     let c = Shape.Circle(5.0);

@@ -1,9 +1,9 @@
 enum Pointer { Value(i32*), Empty }
-#[unsafe]
+@unsafe
 fn Pointer wrap(i32* pointer) { return Pointer.Value(pointer); }
-#[unsafe]
+@unsafe
 fn i32* unwrap(Pointer value) { return match value { Value(pointer)=>pointer, Empty=>(i32*)0 }; }
-#[unsafe]
+@unsafe
 fn i32* bad() { i32 local=42; return unwrap(wrap(&local)); }
-#[unsafe]
+@unsafe
 fn main() { return 0; }

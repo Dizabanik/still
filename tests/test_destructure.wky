@@ -8,7 +8,7 @@ struct Pair {
     i32 second;
 }
 
-#[unsafe]
+@unsafe
 
 fn int main() {
     let pt = Point { x: 10, y: 20 };

@@ -7,7 +7,7 @@
 // OPT: 0
 import stdc;
 chan<i32> pipe = make_chan(1);
-#[unsafe]
+@unsafe
 fn i32 main() {
     let t = brew {
         pipe <- 1;

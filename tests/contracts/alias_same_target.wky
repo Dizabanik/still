@@ -1,4 +1,4 @@
-#[unsafe]
+@unsafe
 fn i32 write_read(i32* a, i32* b) { *a = 1; *b = 2; return *a; }
-#[unsafe]
+@unsafe
 fn i32 main() { i32 x = 0; println("{write_read(&x, &x)}"); return 0; }

@@ -1,7 +1,7 @@
 
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     let a = set {1,2};

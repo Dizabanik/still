@@ -163,8 +163,8 @@ struct ASTNode {
 			int is_pure;
 			int is_unsafe;
 			int is_drip;
-			int is_test;   // #[test] attribute
-			int is_ignored; // #[ignore]
+			int is_test;   // @test attribute
+			int is_ignored; // @ignore
 			int is_noalloc;
 			int is_nocapture;
 			unsigned fp_permissions; // 1 contraction, 2 reassociation, 4 finite-only
@@ -172,7 +172,7 @@ struct ASTNode {
 		struct {
 			char *name;
 			ASTNode *fields;
-			int is_soa; // #[soa]: fields stored as parallel arrays
+			int is_soa; // @soa: fields stored as parallel arrays
 			char *type_param; // e.g. "T" for generic struct Box(T) (points to type_params[0])
 			char *type_params[8];
 			int type_param_count;

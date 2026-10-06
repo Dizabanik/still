@@ -2,7 +2,7 @@
 import stdc;
 extern "c" fn f64 sqrt(f64 value);
 extern "c" fn f64 cos(f64 value);
-#[unsafe]
+@unsafe
 fn i32 main() {
     let text = std.process.arg_at(1);
     let n = ((f64)text.len);

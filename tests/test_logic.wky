@@ -1,12 +1,12 @@
 import stdc;
 
-#[unsafe]
+@unsafe
 
 pure fn bool is_even(u32 x) {
     return x % 2 == 0;
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // Modulo, unary minus, logical not

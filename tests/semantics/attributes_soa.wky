@@ -1,0 +1,11 @@
+@soa pub struct Samples {
+    pub [3]i32 x;
+    pub [3]i32 y;
+}
+fn main() {
+    Samples values;
+    values[1].x = 7;
+    values[1].y = 11;
+    println("{values.x[1]} {values[1].y}");
+    return 0;
+}

@@ -1,6 +1,6 @@
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 test_return_order() {
     i32 x = 10;
@@ -11,7 +11,7 @@ fn i32 test_return_order() {
     return x;
 }
 
-#[unsafe]
+@unsafe
 
 fn void test_block_scope() {
     stdc.printf("entering outer block\n");
@@ -23,7 +23,7 @@ fn void test_block_scope() {
     stdc.printf("exited inner block\n");
 }
 
-#[unsafe]
+@unsafe
 
 fn void test_loop_defer() {
     for (i in 0..3) {
@@ -32,7 +32,7 @@ fn void test_loop_defer() {
     }
 }
 
-#[unsafe]
+@unsafe
 
 fn void test_capture_defer() {
     i32 a = 100;
@@ -50,7 +50,7 @@ fn void test_capture_defer() {
     stdc.printf("mutated a=%d b=%d\n", a, b);
 }
 
-#[unsafe]
+@unsafe
 
 fn void test_break_continue_defer() {
     for (i in 0..4) {
@@ -68,7 +68,7 @@ fn void test_break_continue_defer() {
     stdc.printf("loop ended\n");
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     let ret = test_return_order();

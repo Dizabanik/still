@@ -1,6 +1,6 @@
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     // 1. Half-open range loop

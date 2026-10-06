@@ -1,12 +1,12 @@
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn void greet(str name) {
     stdc.printf("hi %s\n", name);
 }
 
-#[unsafe]
+@unsafe
 
 fn void maybe_twice(i32 n) {
     if (n <= 0) { return; }
@@ -14,17 +14,17 @@ fn void maybe_twice(i32 n) {
     return;
 }
 
-#[unsafe]
+@unsafe
 
 fn void noop() { return; }
 
 struct Counter { u32 hits; }
 impl Counter {
-    #[unsafe]
+    @unsafe
     fn void add(Counter* self, u32 by) { (*self).hits = (*self).hits + by; return; }
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     greet("wky");

@@ -1,7 +1,7 @@
 // Every-width arithmetic: wraparound, sign extension, radix literals.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     i64 a = 10000000000;      // literal above u32 range

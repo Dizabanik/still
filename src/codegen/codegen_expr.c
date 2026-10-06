@@ -64,6 +64,40 @@ static LLVMValueRef declare_libc_fn(StillCompiler *c, const char *name);
 
 static LLVMValueRef declare_std_fn(StillCompiler *c, const char *qualified);
 
+/* Byte views retain their length and evaluate their source once. Only calls
+ * produced by the parser may use this synthetic operation. */
+static LLVMValueRef codegen_print_view(StillCompiler *c, ASTNode *n) {
+	ASTNode *arg = n->data.call.args;
+	Type *type = wky_resolve_type(c, wky_expr_type(c, arg));
+	LLVMTypeRef i64 = LLVMInt64TypeInContext(c->context);
+	LLVMValueRef data, length;
+	if (type && type->kind == TYPE_ARRAY) {
+		LLVMValueRef storage = NULL;
+		LLVMTypeRef array_type = get_llvm_type(c, type);
+		if (arg->type == NODE_VAR_REF) {
+			Scope *scope = scope_find(c, arg->data.var_ref.name);
+			if (scope && scope->node && !(scope->node->type == NODE_VAR_DECL &&
+			    scope->node->data.var_decl.is_orbit))
+				storage = get_address(c, arg, NULL);
+		}
+		if (!storage) {
+			LLVMValueRef value = codegen_expr(c, arg);
+			storage = create_entry_block_alloca(c, array_type, "print_array");
+			LLVMBuildStore(c->builder, value, storage);
+		}
+		LLVMValueRef indices[] = {LLVMConstInt(i64, 0, 0), LLVMConstInt(i64, 0, 0)};
+		data = LLVMBuildGEP2(c->builder, array_type, storage, indices, 2, "print_data");
+		length = LLVMConstInt(i64, type->array_len, 0);
+	} else {
+		LLVMValueRef view = codegen_expr(c, arg);
+		data = LLVMBuildExtractValue(c->builder, view, 0, "print_data");
+		length = LLVMBuildExtractValue(c->builder, view, 1, "print_length");
+	}
+	LLVMValueRef fn = declare_wky_runtime_fn(c, "__wky_print_str");
+	LLVMValueRef args[] = {data, length};
+	return LLVMBuildCall2(c->builder, LLVMGlobalGetValueType(fn), fn, args, 2, "");
+}
+
 // Exact prototypes for the std.* process/io surface. Like declare_libc_fn,
 // a wrong prototype is UB, so each symbol is spelled out; anything not
 // listed returns NULL.
@@ -403,6 +437,11 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		char func_name[256];
 		LLVMValueRef fn = resolve_callee(c, n->data.call.callee, func_name,
 									 sizeof(func_name));
+		if (n->data.call.compiler_generated && !strcmp(func_name, "__wky_print_view"))
+			return codegen_print_view(c, n);
+		if (n->data.call.compiler_generated && !strcmp(func_name, "__wky_print_cstr") &&
+		    n->data.call.args->type != NODE_STRING_LIT)
+			wky_require_unsafe(c, n, "printing a raw C string");
 		LLVMValueRef fallible=wky_result_builtin(c,n,func_name);
 		if (fallible) return fallible;
 		LLVMValueRef numeric = wky_numeric_builtin(c, n, func_name);
@@ -770,11 +809,13 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		if (source_signature && source_signature->declaration->data.func.is_unsafe)
 			wky_require_unsafe(c,n,"calling an unsafe function");
 		wky_check_call_safety(c,n,fn);
-		if (!LLVMCountBasicBlocks(fn) && !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,
-		    "wky.source",sizeof("wky.source")-1) && strncmp(func_name,"__wky_",sizeof("__wky_")-1)) {
+		int private_runtime = !strncmp(func_name,"__wky_",sizeof("__wky_")-1);
+		if (!n->data.call.compiler_generated && (private_runtime ||
+		    (!LLVMCountBasicBlocks(fn) && !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,
+		    "wky.source",sizeof("wky.source")-1)))) {
 			const char *safe[]={"sqrt","sqrtf","sin","sinf","cos","cosf","tan","tanf","exp","expf","log","logf", "log2","log2f","log10","log10f","pow","powf","fabs","fabsf","floor","floorf","ceil","ceilf","round","roundf","fmod","fmodf","abs","labs","llabs",NULL};
 			int allowed=0; for (unsigned i=0; safe[i]; ++i) if (!strcmp(func_name,safe[i])) allowed=1;
-			if (!allowed) wky_require_unsafe(c,n,"calling foreign code");
+			if (!allowed) wky_require_unsafe(c,n,private_runtime ? "calling a private runtime helper" : "calling foreign code");
 		}
 		ASTNode *source_parameter=source_signature ? source_signature->declaration->data.func.args : NULL;
 		Type **parameter_ast=arena_alloc(c->arena,sizeof(*parameter_ast)*(param_count ? param_count : 1));
@@ -1839,6 +1880,15 @@ LLVMValueRef build_binop(StillCompiler *c, ASTNode *n, LLVMValueRef l,
     if (!string_relation && (LLVMGetTypeKind(l_ty)==LLVMPointerTypeKind || LLVMGetTypeKind(r_ty)==LLVMPointerTypeKind)) {
         Type *left=wky_expr_type(c,n->data.bin_op.left), *right=wky_expr_type(c,n->data.bin_op.right);
         int lp=LLVMGetTypeKind(l_ty)==LLVMPointerTypeKind, rp=LLVMGetTypeKind(r_ty)==LLVMPointerTypeKind;
+        // C-style null constants also cover !pointer, which the parser lowers
+        // to 0 == pointer. Never reinterpret an arbitrary integer as a pointer.
+        if (op==TOK_ISEQ || op==TOK_NOTEQ) {
+            if (lp && !rp && LLVMIsAConstantInt(r) && LLVMIsNull(r)) {
+                r=LLVMConstNull(l_ty); rp=1;
+            } else if (!lp && rp && LLVMIsAConstantInt(l) && LLVMIsNull(l)) {
+                l=LLVMConstNull(r_ty); lp=1;
+            }
+        }
         if (lp && rp && (op==TOK_ISEQ || op==TOK_NOTEQ))
             return LLVMBuildICmp(c->builder,op==TOK_ISEQ ? LLVMIntEQ : LLVMIntNE,l,r,"pointer_equal");
         wky_require_unsafe(c,n,"raw pointer arithmetic");

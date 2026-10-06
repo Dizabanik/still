@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "Only @soa is supported on struct declarations"
+}

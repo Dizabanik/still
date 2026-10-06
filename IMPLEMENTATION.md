@@ -33,7 +33,7 @@ Work order:
   it proves unchanged.
 - Raw pointer access/arithmetic/casts, foreign calls, raw slice construction,
   inline assembly and unchecked blocks require an unsafe context. `unsafe fn`
-  and `#[unsafe]` require callers to establish preconditions. Vetted scalar
+  and `@unsafe` require callers to establish preconditions. Vetted scalar
   math and standard-library wrappers retain their existing contracts.
   Source calls cannot gain privileges from a private runtime name. Formatted
   byte arrays/slices use their length, preserve embedded null bytes and evaluate
@@ -267,6 +267,13 @@ thread-confined. Coroutine promises are currently i32, brew does not implicitly
 capture locals. Automatic global cleanup does not run on process abort. Void errors
 propagate through result returns; typed dregs bindings require a payload.
 Raw pointer operations remain programmer-checked inside their explicit boundary.
+
+Attributes now use `@name`; the former hash syntax is rejected. C-style raw
+pointer null checks (`!ptr`, `ptr == 0`, and `if (ptr)`) are supported without
+managed metadata. The separate
+[struct/impl readiness audit](docs/compiler-and-toolchain/struct-readiness.md)
+records concrete visibility, collision, method-resolution, and capacity defects;
+the struct system is not claimed production-ready.
 
 Design constraints: reference identity cannot depend on an allocation's address;
 descriptor storage survives its payload; exhausted generations retire; checking

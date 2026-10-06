@@ -4,7 +4,7 @@
 // OPT: 0
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     [8]i32 xs = {1, 2, 3, 4, 5, 6, 7, 8};

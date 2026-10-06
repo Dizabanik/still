@@ -1,6 +1,6 @@
 struct Item { i64 tag; [2]owner<i64> data; }
 fn Item make(i64 n) { return {tag:n, data:{own(1),own(1)}}; }
-#[noalloc] fn i64 consume(Item value) { return value.tag; }
+@noalloc fn i64 consume(Item value) { return value.tag; }
 fn i64 early() {
     Item a = make(3);
     defer println("defer {a.tag} {allocated(a.data[0])}");

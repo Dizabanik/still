@@ -39,7 +39,7 @@ Global owning values clean up on normal program termination through an exit call
 
 `release(value)` frees an owning value early. Replacing an owning field drops its previous value. Structs, fixed arrays, tagged enums, options, results, channels, and coroutine handles participate in this cleanup. Cleanup follows lexical last-in, first-out order. Child allocations follow reverse acquisition order.
 
-The `#[noalloc]` attribute checks callees before optimization. Cleanup of handles or arenas can run user callbacks, so those operations are rejected inside a function marked `noalloc`. Cleanup and transfer of ordinary owned buffers remain allocation free.
+The `@noalloc` attribute checks callees before optimization. Cleanup of handles or arenas can run user callbacks, so those operations are rejected inside a function marked `noalloc`. Cleanup and transfer of ordinary owned buffers remain allocation free.
 
 ### Stability scopes: `stable` and `try_stable`
 
@@ -85,7 +85,7 @@ fn i32 main() {
 }
 ```
 
-An `unsafe fn` declaration indicates that callers must verify its preconditions. `#[unsafe]` can also be applied as an attribute. An `unsafe { ... }` block permits raw operations inside an otherwise safe function. Unsafe blocks do not disable managed reference lifetime or bounds checks.
+An `unsafe fn` declaration indicates that callers must verify its preconditions. `@unsafe` can also be applied as an attribute. An `unsafe { ... }` block permits raw operations inside an otherwise safe function. Unsafe blocks do not disable managed reference lifetime or bounds checks.
 
 `unchecked { ... }` blocks must be nested within an unsafe context. Taking a mutable address or view of immutable inline storage is rejected, including implicit array decay and pointer-receiver method calls on constant storage.
 

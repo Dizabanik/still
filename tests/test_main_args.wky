@@ -3,7 +3,7 @@
 // other test). Run without extra args: argc==1, argv[0] is the binary name.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn int main(i32 argc, str* argv) {
     stdc.printf("argc>0=%d name_set=%d\n", argc > 0,

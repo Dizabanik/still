@@ -1,7 +1,7 @@
 // []T slices: ptr+len views over arrays. Zero-cost in release.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 sum([]i32 xs) {
     i32 acc = 0;
@@ -11,7 +11,7 @@ fn i32 sum([]i32 xs) {
     return acc;
 }
 
-#[unsafe]
+@unsafe
 
 fn f64 avg([]f64 xs) {
     f64 acc = 0.0;
@@ -21,7 +21,7 @@ fn f64 avg([]f64 xs) {
     return acc / ((f64)xs.len);
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 count_char([]u8 bytes, u8 target) {
     i32 n = 0;
@@ -33,7 +33,7 @@ fn i32 count_char([]u8 bytes, u8 target) {
     return n;
 }
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     [5]i32 nums = { 10, 20, 30, 40, 50 };

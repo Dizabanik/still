@@ -4,7 +4,7 @@
 // just assert argc >= 1 and print a marker derived from it.
 import stdc;
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     let n = std.process.arg_count();

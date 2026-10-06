@@ -8,7 +8,7 @@ extern "c" fn i32 abs(i32 n);
 extern "c" fn i64 labs(i64 n);
 extern "c" fn i32 printf(char* fmt, ...);
 
-#[unsafe]
+@unsafe
 
 fn i32 main() {
     printf("sqrt=%.4f\n", sqrt(2.0));
