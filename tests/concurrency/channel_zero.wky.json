@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "channel capacity must be positive"
+}

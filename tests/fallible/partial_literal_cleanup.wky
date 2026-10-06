@@ -1,0 +1,5 @@
+struct Pair { owner<i64> first; i64 last; }
+fn result<i64,i32> fail() { return err(9); }
+fn result<i64,i32> make() { Pair p={first:own(1),last:try(fail())}; return ok(p.last); }
+fn main() { println("{match make() { Ok(v)=>v, Err(e)=>-(i64)e }}"); println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0; }
+

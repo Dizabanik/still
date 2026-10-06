@@ -1,0 +1,5 @@
+enum Pair { Value(owner<i64>,i64), Empty }
+fn result<i64,i32> fail() { return err(5); }
+fn result<i64,i32> make() { Pair p=Pair.Value(own(1),try(fail())); return ok(1); }
+fn main() { println("{match make() { Ok(v)=>v, Err(e)=>-(i64)e }}"); println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0; }
+

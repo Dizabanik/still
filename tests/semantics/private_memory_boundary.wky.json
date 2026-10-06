@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "managed runtime entry points are reserved for the compiler"
+}

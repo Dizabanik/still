@@ -1,2 +1,3 @@
 char* text="hello";
+#[unsafe]
 fn i32 main() { println("{text[0]} {text[4]}"); return 0; }

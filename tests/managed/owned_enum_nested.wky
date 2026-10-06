@@ -1,0 +1,12 @@
+enum Payload { One(owner<i64>), Both(owner<i64>,owner<i64>), Scalar([8]u64), Empty }
+struct Entry { i64 key; Payload value; }
+fn main() {
+ { owner<Entry> rows=own(2); owner<i64> a=own(1), b=own(1); a[0]=11; b[0]=17;
+   rows[0].value=Payload.Both(move(a),move(b)); rows[1].value=Payload.Scalar({1,2,3,4,5,6,7,8});
+   let copy=clone(rows);
+   Payload value=move(copy[0].value);
+   println("{match move(value) { One(x)=>x[0], Both(x,y)=>x[0]+y[0], Scalar(x)=>0, Empty=>0 }}");
+   rows[0].value=Payload.Empty;
+ }
+ println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0;
+}

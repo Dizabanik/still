@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "calling an unsafe function requires an unsafe block"
+}

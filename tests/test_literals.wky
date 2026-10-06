@@ -2,6 +2,8 @@
 // exponents. Suffix wins over default typing; unsuffixed floats are f64.
 import stdc;
 
+#[unsafe]
+
 fn i32 main() {
     // Digit separators (ints and floats)
     let big = 1_000_000;

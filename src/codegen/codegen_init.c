@@ -178,6 +178,10 @@ void still_init(StillCompiler *c, const char *module_name, Arena *arena) {
 		LLVMFunctionType(LLVMInt1TypeInContext(c->context), done_args, 1, 0);
 	c->coro_done =
 		LLVMAddFunction(c->module, "llvm.coro.done", c->coro_done_type);
+	c->coro_destroy_type=LLVMFunctionType(LLVMVoidTypeInContext(c->context),(LLVMTypeRef[]){i8ptr},1,0);
+	c->coro_destroy=LLVMAddFunction(c->module,"llvm.coro.destroy",c->coro_destroy_type);
+	c->coro_free_type=LLVMFunctionType(i8ptr,(LLVMTypeRef[]){token,i8ptr},2,0);
+	c->coro_free=LLVMAddFunction(c->module,"llvm.coro.free",c->coro_free_type);
 
 	// llvm.coro.resume -- eagerly declared so sip() doesn't rebuild the type
 	// on every call (each rebuild would defeat caching via LLVMTypeRef identity).

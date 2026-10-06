@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "receive on an empty closed channel"
+}

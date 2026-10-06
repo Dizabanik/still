@@ -1,0 +1,2 @@
+fn result<i32,i32> missing(bool flag) { if(flag) {return ok(1);} }
+fn main() { return 0; }

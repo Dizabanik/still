@@ -1,12 +1,10 @@
-# Generics & Monomorphization
+# Generics and monomorphization
 
-Whisky supports multi-type-parameter generic structs and generic `impl` blocks. Generics compile via compile-time monomorphization: each distinct instantiation produces a specialized, concrete machine-code struct and method suite with zero runtime indirection or virtual method table (vtable) overhead.
+Whisky supports generic structs and generic `impl` blocks. The compiler monomorphizes generic definitions at compile time, emitting specialized, concrete machine code for each distinct type combination without runtime virtual method tables or dynamic boxing.
 
----
+## Multi-parameter generic structs
 
-## 1. Multi-Parameter Generic Structs
-
-Generic structs define type parameters within parentheses after the struct name:
+Generic structs declare type parameter names within parentheses following the struct name:
 
 ```wky
 import stdc;
@@ -23,13 +21,11 @@ fn i32 main() {
 }
 ```
 
-Up to 8 type parameters per generic struct are supported.
+Whisky supports up to eight type parameters per generic struct.
 
----
+## Generic impl blocks
 
-## 2. Generic `impl` Blocks
-
-Methods and constructors for generic types are declared in `impl` blocks:
+Methods and associated constructors for generic types are declared in `impl` blocks parameterized over the corresponding type variables:
 
 ```wky
 import stdc;
@@ -40,12 +36,10 @@ struct Pair(A, B) {
 }
 
 impl(A, B) Pair(A, B) {
-    // Associated constructor
     fn Pair(A, B) new(A f, B s) {
         return Pair(A, B) { first: f, second: s };
     }
 
-    // Methods
     fn A get_first(self) {
         return self.first;
     }
@@ -54,7 +48,6 @@ impl(A, B) Pair(A, B) {
         return self.second;
     }
 
-    // Swapping type parameters
     fn Pair(B, A) swap(self) {
         return Pair(B, A) { first: self.second, second: self.first };
     }
@@ -76,11 +69,9 @@ Original: (42, answer)
 Swapped: (answer, 42)
 ```
 
----
+## Method chaining on generic instances
 
-## 3. Method Chaining on Generic Types
-
-Generic methods can be chained seamlessly. The compiler infers the intermediate monomorphized return types at each step:
+Generic method return types are tracked by the type deduction pass, allowing method calls to chain across changing type parameters:
 
 ```wky
 import stdc;
@@ -103,7 +94,7 @@ impl(A, B) Pair(A, B) {
 fn i32 main() {
     let p = Pair(i32, i64).new(10, 20);
 
-    // Swap twice: Pair(i32, i64) -> Pair(i64, i32) -> Pair(i32, i64)
+    // Initial: Pair(i32, i64) -> swap: Pair(i64, i32) -> swap: Pair(i32, i64)
     let p2 = p.swap().swap();
 
     println("p2 = ({p2.first}, {p2.second})");
@@ -111,12 +102,10 @@ fn i32 main() {
 }
 ```
 
----
+## Monomorphization model
 
-## 4. Performance: Zero-Overhead Monomorphization
+Each concrete instantiation of a generic struct produces a dedicated type symbol in the generated LLVM module.
 
-Each instantiation of a generic struct (e.g. `Pair(i64, i32)`) produces a concrete specialized type symbol (e.g. `Pair__i64__i32`).
-
-* Struct fields are laid out contiguously with exact natural alignment.
-* Methods are emitted directly for the target types without boxing, heap pointers, or type erasure.
-* In benchmark `b16_generics_multi`, 20,000,000 iterations of generic struct creation, swapping, and field reads finish in **0.020s**, outperforming Rust (0.021s) and matching C (0.021s).
+* Struct fields are laid out contiguously according to target alignment rules for the specialized types.
+* Function bodies are specialized for the concrete argument and return types, enabling direct call inlining and register passing.
+* Unused specializations are omitted from the final binary by the compiler and linker.

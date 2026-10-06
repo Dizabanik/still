@@ -1,0 +1,5 @@
+fn main() {
+    println("prefix");
+    __wky_print_cstr("direct");
+    return 0;
+}

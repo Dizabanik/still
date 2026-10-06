@@ -18,7 +18,8 @@ struct WkyDescriptor {
     _Atomic uint64_t generation;
     void *data;
     uint64_t bytes, capacity, pins;
-    unsigned arena;
+    unsigned arena, dropping;
+    void (*destroy)(void *);
     WkyRef *owner_slot;
     WkyDescriptor *parent, *first, *last, *previous, *next, *free_next;
 };
@@ -43,6 +44,34 @@ _Noreturn static void fail(const char *message) {
     fprintf(stderr, "Whisky memory trap: %s\n", message);
     abort();
 }
+/* A resource destructor may run Whisky code. Keep its containing storage
+ * alive and reject transfers back into storage that is already being cleared.
+ * Guards live on the C stack; ordinary operations only check a null TLS head. */
+typedef struct Mutation {
+    const void *slot;
+    uint64_t size;
+    struct Mutation *previous;
+} Mutation;
+static _Thread_local Mutation *mutations;
+static void mutation_check(const void *slot, uint64_t size) {
+    uintptr_t address=(uintptr_t)slot;
+    for (Mutation *m=mutations; m; m=m->previous) {
+        uintptr_t other=(uintptr_t)m->slot;
+        if (size && m->size && (address>=other ? address-other<m->size : other-address<size))
+            fail("reentrant ownership mutation");
+    }
+}
+static void mutation_begin(Mutation *m, const void *slot, uint64_t size) {
+    *m=(Mutation){slot,size,mutations}; mutations=m;
+}
+static void mutation_end(Mutation *m) { mutations=m->previous; }
+static void protect_container(WkyDescriptor *parent) {
+    if (parent) {
+        if (parent->pins==UINT64_MAX) fail("stable guard count exhausted");
+        ++parent->pins;
+    }
+}
+static void unprotect_container(WkyDescriptor *parent) { if (parent) --parent->pins; }
 __attribute__((noinline,cold)) static uint64_t initialize_thread(void) {
         /* Saturate instead of allowing thread identities to wrap. */
         uint64_t id = atomic_load_explicit(&next_thread, memory_order_relaxed);
@@ -119,6 +148,7 @@ static int allocate(WkyRef *out, uint64_t count, uint64_t size, unsigned arena) 
     d->capacity = bytes;
     d->pins = 0;
     d->arena = arena;
+    d->dropping=0; d->destroy=NULL;
     d->owner_slot = NULL;
     d->parent = d->first = d->last = d->previous = d->next = NULL;
     atomic_store_explicit(&d->thread, current_thread(), memory_order_release);
@@ -131,6 +161,19 @@ static int allocate(WkyRef *out, uint64_t count, uint64_t size, unsigned arena) 
 }
 int32_t __wky_mem_alloc(WkyRef *out, uint64_t count, uint64_t size) {
     return allocate(out, count, size, 0);
+}
+int32_t __wky_mem_adopt(WkyRef *out, void *resource, void (*destroy)(void *)) {
+    *out=(WkyRef){0};
+    if (!resource || !destroy) return 0;
+    WkyDescriptor *d=slot_new();
+    if (!d) { destroy(resource); return 0; }
+    d->data=resource; d->bytes=d->capacity=d->pins=0;
+    d->arena=d->dropping=0; d->destroy=destroy; d->owner_slot=NULL;
+    d->parent=d->first=d->last=d->previous=d->next=NULL;
+    atomic_store_explicit(&d->thread,current_thread(),memory_order_release);
+    *out=(WkyRef){d,atomic_load_explicit(&d->generation,memory_order_relaxed),0,0};
+    ++allocations;
+    return 1;
 }
 static void detach(WkyDescriptor *d) {
     if (d->previous) d->previous->next = d->next;
@@ -158,16 +201,23 @@ static void attach(WkyDescriptor *d, WkyDescriptor *parent, WkyRef *slot, int la
 static void dispose(WkyDescriptor *d) {
     if (d->owner_slot) *d->owner_slot = (WkyRef){0};
     detach(d);
-    free(d->data);
+    void *data=d->data;
+    void (*destroy)(void *)=d->destroy;
     live_bytes -= d->capacity;
     ++frees;
     d->data = NULL;
     slot_release(d);
+    /* Retire the identity before calling user cleanup: reentrant resource
+     * cancellation cannot observe a live descriptor for this resource. */
+    if (destroy) destroy(data);
+    else free(data);
 }
 static void ancestors_unpinned(WkyDescriptor *d) {
-    for (; d; d = d->parent)
+    for (; d; d = d->parent) {
+        if (d->dropping) fail("reentrant ownership destruction");
         if (d->pins) fail(d->arena ? "arena invalidation during stable access" :
                                      "invalidation during stable access");
+    }
 }
 /* The ownership forest doubles as drop/clone metadata. Plain allocations
  * have no children and retain their fast path. Traversal needs no recursive
@@ -175,6 +225,7 @@ static void ancestors_unpinned(WkyDescriptor *d) {
 static void preflight(WkyDescriptor *root) {
     WkyDescriptor *d = root;
     for (;;) {
+        if (d->dropping) fail("reentrant ownership destruction");
         if (d->pins) fail(root->arena ? "arena invalidation during stable access" :
                                         "invalidation during stable access");
         if (d->first) { d = d->first; continue; }
@@ -184,6 +235,7 @@ static void preflight(WkyDescriptor *root) {
     }
 }
 static void dispose_tree(WkyDescriptor *root) {
+    root->dropping=1;
     WkyDescriptor *d = root;
     for (;;) {
         if (d->first) { d = d->first; continue; }
@@ -223,14 +275,23 @@ void __wky_mem_view(WkyRef *out,const WkyRef *container,void *slot,uint64_t size
     out->extent=size;
 }
 void __wky_mem_drop(WkyRef *r) {
+    mutation_check(r,sizeof(*r));
     if (!r->descriptor) return; /* moved-from/failed owner */
     WkyDescriptor *d = whole_owner(r);
     ancestors_unpinned(d->parent);
     preflight(d); /* Check the entire forest before changing any state. */
-    dispose_tree(d);
+    if (!d->destroy && !d->first) {
+        *r=(WkyRef){0}; dispose(d); return;
+    }
+    Mutation guard;
+    mutation_begin(&guard,r,sizeof(*r));
     *r = (WkyRef){0};
+    dispose_tree(d);
+    mutation_end(&guard);
 }
 void __wky_mem_take(WkyRef *out, WkyRef *slot, const WkyRef *container) {
+    mutation_check(slot,sizeof(*slot));
+    mutation_check(out,sizeof(*out));
     WkyDescriptor *parent = owning_slot(slot, container);
     ancestors_unpinned(parent);
     WkyRef value = *slot;
@@ -243,6 +304,8 @@ void __wky_mem_take(WkyRef *out, WkyRef *slot, const WkyRef *container) {
     *out = value;
 }
 void __wky_mem_replace(WkyRef *slot, WkyRef *incoming) {
+    mutation_check(slot,sizeof(*slot));
+    mutation_check(incoming,sizeof(*incoming));
     if (incoming->descriptor) {
         WkyDescriptor *d=whole_owner(incoming);
         if (d->parent) fail("owner must be moved before transfer");
@@ -254,6 +317,8 @@ void __wky_mem_replace(WkyRef *slot, WkyRef *incoming) {
     *incoming=(WkyRef){0};
 }
 void __wky_mem_store_owner(WkyRef *slot, WkyRef *incoming, const WkyRef *container) {
+    mutation_check(slot,sizeof(*slot));
+    mutation_check(incoming,sizeof(*incoming));
     WkyDescriptor *parent = owning_slot(slot, container), *next = NULL, *old = NULL;
     ancestors_unpinned(parent);
     if (incoming->descriptor) {
@@ -268,10 +333,17 @@ void __wky_mem_store_owner(WkyRef *slot, WkyRef *incoming, const WkyRef *contain
         if (old->owner_slot != slot || old->parent != parent) fail("unregistered owning slot");
         preflight(old);
     }
+    Mutation guard;
+    int callbacks=old && (old->destroy || old->first);
+    if (callbacks) {
+        mutation_begin(&guard,slot,sizeof(*slot));
+        protect_container(parent);
+    }
     if (old) dispose_tree(old);
     *slot = *incoming;
     *incoming = (WkyRef){0};
     if (next) attach(next, parent, slot, 0);
+    if (callbacks) { unprotect_container(parent); mutation_end(&guard); }
 }
 static int child_in_view(WkyDescriptor *d, uint64_t offset, uint64_t extent) {
     if (!d->owner_slot) fail("cannot clone arena ownership");
@@ -289,6 +361,7 @@ static WkyDescriptor *child_next(WkyDescriptor *d, uint64_t offset, uint64_t ext
     return d;
 }
 static int copy_allocation(WkyRef *out, WkyDescriptor *source, uint64_t offset, uint64_t extent) {
+    if (source->destroy) fail("cannot clone an opaque resource");
     if (source->arena) fail("cannot clone an arena");
     if (!allocate(out, extent, 1, 0)) return 0;
     memcpy(out->descriptor->data, (unsigned char *)source->data + offset, extent);
@@ -342,6 +415,10 @@ static int value_walk(void *slot, const WkyValueLayout *layout, int reverse,
     for (uint64_t at=0; at<layout->count; ++at) {
         uint64_t i=reverse ? layout->count-1-at : at;
         const WkyOwnedField *field=&layout->fields[i];
+        if (field->conditional) {
+            int64_t tag; memcpy(&tag,slot,sizeof(tag));
+            if (tag!=field->tag) continue;
+        }
         for (uint64_t element=0; element<field->count; ++element) {
             uint64_t j=reverse ? field->count-1-element : element;
             void *child=(unsigned char *)slot+field->offset+j*field->stride;
@@ -354,12 +431,13 @@ static int value_walk(void *slot, const WkyValueLayout *layout, int reverse,
 }
 typedef struct {
     WkyDescriptor *parent;
-    int mark_roots, dropping;
+    int mark_roots, dropping, callbacks;
 } ValueCheck;
 static int value_check(WkyRef *slot, void *context) {
     ValueCheck *check=context;
     if (!slot->descriptor) return 1;
     WkyDescriptor *d=whole_owner(slot);
+    if (d->destroy || d->first) check->callbacks=1;
     if (d->parent!=check->parent || d->owner_slot!=(check->parent ? slot : NULL))
         fail("unregistered or duplicated owning value");
     /* Root owner_slot is otherwise NULL. Marking it detects duplicate roots
@@ -387,15 +465,23 @@ static void value_disjoint(void *first, void *second, uint64_t size) {
 }
 static int value_dispose(WkyRef *slot, void *context) {
     (void)context;
-    if (slot->descriptor) dispose_tree(slot->descriptor);
+    WkyDescriptor *d=slot->descriptor;
     *slot=(WkyRef){0};
+    if (d) dispose_tree(d);
     return 1;
 }
 void __wky_mem_value_clear(void *slot, const WkyValueLayout *layout, const WkyRef *container) {
+    mutation_check(slot,layout->size);
     ValueCheck check={.parent=value_container(slot,layout,container,1),.mark_roots=1,.dropping=1};
     value_walk(slot,layout,0,value_check,&check);
+    Mutation guard;
+    if (check.callbacks) {
+        mutation_begin(&guard,slot,layout->size);
+        protect_container(check.parent);
+    }
     value_walk(slot,layout,1,value_dispose,NULL);
     memset(slot,0,layout->size);
+    if (check.callbacks) { unprotect_container(check.parent); mutation_end(&guard); }
 }
 void __wky_mem_value_drop(void *slot, const WkyValueLayout *layout) {
     __wky_mem_value_clear(slot,layout,NULL);
@@ -407,6 +493,8 @@ static int value_detach(WkyRef *slot, void *context) {
 }
 void __wky_mem_value_take(void *out, void *slot, const WkyValueLayout *layout,
                            const WkyRef *container) {
+    mutation_check(slot,layout->size);
+    mutation_check(out,layout->size);
     value_disjoint(out,slot,layout->size);
     ValueCheck check={.parent=value_container(slot,layout,container,1),.mark_roots=1};
     value_walk(slot,layout,0,value_check,&check);
@@ -438,16 +526,24 @@ static int value_install(WkyRef *slot, void *context) {
 }
 void __wky_mem_value_store(void *slot, void *incoming, const WkyValueLayout *layout,
                             const WkyRef *container) {
+    mutation_check(slot,layout->size);
+    mutation_check(incoming,layout->size);
     value_disjoint(slot,incoming,layout->size);
     WkyDescriptor *parent=value_container(slot,layout,container,1);
     ValueIncoming next={parent};
     value_walk(incoming,layout,0,value_incoming,&next);
     ValueCheck old={.parent=parent,.dropping=1};
     value_walk(slot,layout,0,value_check,&old);
+    Mutation guard;
+    if (old.callbacks) {
+        mutation_begin(&guard,slot,layout->size);
+        protect_container(parent);
+    }
     value_walk(slot,layout,1,value_dispose,NULL);
     memcpy(slot,incoming,layout->size);
     memset(incoming,0,layout->size);
     value_walk(slot,layout,0,value_install,parent);
+    if (old.callbacks) { unprotect_container(parent); mutation_end(&guard); }
 }
 static int value_zero(WkyRef *slot, void *context) {
     (void)context;
@@ -479,7 +575,9 @@ int32_t __wky_mem_value_clone(void *out, void *source, const WkyValueLayout *lay
  * realloc's internal copy/peak is allocator-dependent and is not fabricated
  * as a byte metric; live_bytes counts retained, requested payload capacity. */
 int32_t __wky_mem_resize(WkyRef *r, uint64_t count, uint64_t size) {
+    mutation_check(r,sizeof(*r));
     WkyDescriptor *d = validate(r);
+    if (d->destroy || d->dropping) fail("cannot resize an opaque or destroying resource");
     if (d->arena || d->parent || r->offset || r->extent != d->bytes)
         fail("resize requires a whole, independently owned allocation");
     if (d->pins) fail("invalidation during stable access");
@@ -515,6 +613,9 @@ int32_t __wky_mem_resize(WkyRef *r, uint64_t count, uint64_t size) {
         ++reallocations;
     }
     if (bytes > d->bytes) memset((unsigned char *)data + d->bytes, 0, (size_t)(bytes - d->bytes));
+    Mutation guard;
+    mutation_begin(&guard,r,sizeof(*r));
+    protect_container(d);
     for (WkyDescriptor *child=d->first; child;) {
         WkyDescriptor *next=child->next;
         uint64_t position=(uintptr_t)child->owner_slot-previous_data;
@@ -522,7 +623,9 @@ int32_t __wky_mem_resize(WkyRef *r, uint64_t count, uint64_t size) {
         else child->owner_slot=(WkyRef *)((unsigned char *)data+position);
         child=next;
     }
+    unprotect_container(d);
     if (replacement) {
+        replacement->destroy=NULL; replacement->dropping=0;
         replacement->data = data;
         replacement->bytes = bytes;
         replacement->capacity = capacity;
@@ -548,6 +651,7 @@ int32_t __wky_mem_resize(WkyRef *r, uint64_t count, uint64_t size) {
     live_bytes += increase;
     if (live_bytes > peak_bytes) peak_bytes = live_bytes;
     ++invalidations;
+    mutation_end(&guard);
     return 1;
 }
 uint64_t __wky_mem_capacity(const WkyRef *r) { return validate(r)->capacity; }
@@ -586,6 +690,7 @@ int32_t __wky_mem_arena(WkyRef *out) { return allocate(out, 0, 1, 1); }
 int32_t __wky_mem_arena_alloc(WkyRef *out, const WkyRef *r, uint64_t count, uint64_t size) {
     WkyDescriptor *arena = validate(r);
     if (!arena->arena) fail("allocation requires an arena");
+    ancestors_unpinned(arena);
     if (!allocate(out, count, size, 0)) return 0;
     WkyDescriptor *d = out->descriptor;
     attach(d, arena, NULL, 0);

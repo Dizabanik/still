@@ -1,0 +1,5 @@
+{
+  "kind": "run",
+  "flags": ["--bounds-check=safe", "--memory-metrics"],
+  "stdout": "7\ncleaned 0\n"
+}

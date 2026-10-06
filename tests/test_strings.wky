@@ -3,6 +3,8 @@
 // strings built at runtime. Escapes cover \n \t \r \0 \" \' \\ \xNN.
 import stdc;
 
+#[unsafe]
+
 fn int main() {
     let a = "apple";
     let same = "apple";

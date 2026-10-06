@@ -80,7 +80,7 @@ static void edge(Analysis *a, Binding **destination, Binding *base, Binding *inc
 static void bind(Analysis *a, Binding **env, ASTNode *decl, int cleanup) {
     Binding *b=arena_alloc(a->compiler->arena,sizeof(*b));
     b->declaration=decl; b->name=decl->data.var_decl.name;
-    b->owner=wky_contains_managed(a->compiler,decl->data_type,1);
+    b->owner=wky_contains_managed(a->compiler,decl->data_type,1) || (decl->data_type && decl->data_type->kind==TYPE_HANDLE);
     b->state=LIVE; b->next=*env; *env=b;
     if (b->owner && cleanup) {
         Pending *d=arena_alloc(a->compiler->arena,sizeof(*d));
@@ -127,6 +127,7 @@ static void alternatives(Analysis *a, ASTNode *first, ASTNode *second, Binding *
 }
 static void expression(Analysis *a, ASTNode *n, Binding **env) {
     if (!n) return;
+    StillCompiler *c=a->compiler;
     switch(n->type) {
     case NODE_VAR_REF: require_live(a,n,named(*env,n->data.var_ref.name)); break;
     case NODE_CALL: {
@@ -135,7 +136,13 @@ static void expression(Analysis *a, ASTNode *n, Binding **env) {
         // Inspecting the nullable owner slot is legal after a move.
         if (!strcmp(name,"allocated") && arg && arg->type==NODE_VAR_REF && !arg->next) break;
         for (ASTNode *it=arg; it; it=it->next) expression(a,it,env);
-        if ((!strcmp(name,"move") || !strcmp(name,"release")) && arg &&
+        if (!strcmp(name,"try") && a->handler) {
+            Binding *failed=copy(a,*env);
+            a->handler->has_errors=1;
+            cleanup(a,a->handler->defers,&failed);
+            edge(a,&a->handler->errors,a->handler->bindings,failed);
+        }
+        if ((!strcmp(name,"move") || !strcmp(name,"release") || !strcmp(name,"cancel")) && arg &&
             arg->type==NODE_VAR_REF && !arg->next) {
             Binding *b=named(*env,arg->data.var_ref.name);
             if (b && b->owner) { b->state=CONSUMED; b->consumed_at=n; }
@@ -169,10 +176,15 @@ static void expression(Analysis *a, ASTNode *n, Binding **env) {
     case NODE_SET_LITERAL:
         for (ASTNode *it=n->data.set_lit.items; it; it=it->next) expression(a,it,env);
         break;
-    case NODE_SEND: expression(a,n->data.send.chan,env); expression(a,n->data.send.value,env); break;
-    case NODE_RECV: expression(a,n->data.recv.chan,env); break;
+    case NODE_SEND: case NODE_RECV:
+        if (a->in_defer) { still_error(STILL_E_OWNERSHIP,n,"deferred code cannot suspend"); exit(1); }
+        expression(a,n->type==NODE_SEND ? n->data.send.chan : n->data.recv.chan,env);
+        if (n->type==NODE_SEND) expression(a,n->data.send.value,env);
+        break;
     case NODE_SIP: expression(a,n->data.sip.handle,env); break;
-    case NODE_DROP: expression(a,n->data.drop.val,env); break;
+    case NODE_DROP:
+        if (a->in_defer) { StillCompiler *c=a->compiler; still_error(STILL_E_OWNERSHIP,n,"deferred code cannot suspend"); exit(1); }
+        expression(a,n->data.drop.val,env); break;
     case NODE_SET_POUR:
         expression(a,n->data.set_pour.target,env); expression(a,n->data.set_pour.value,env); break;
     case NODE_BLOCK: case NODE_MATCH: statement(a,n,env); break;
@@ -239,7 +251,10 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
         ASTNode *target=n->data.assign.target;
         Binding *b=target && target->type==NODE_VAR_REF ? named(*env,target->data.var_ref.name) : NULL;
         if (!b || !b->owner) expression(a,target,env);
-        expression(a,n->data.assign.value,env);
+        ASTNode *value=n->data.assign.value;
+        if (value && value->type==NODE_BINARY_OP && value->data.bin_op.left==target)
+            expression(a,value->data.bin_op.right,env);
+        else expression(a,value,env);
         if (b && b->owner) { b->state=LIVE; b->consumed_at=NULL; }
         break;
     }
@@ -249,7 +264,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
     case NODE_WHILE: loop(a,n->data.while_stmt.cond,n->data.while_stmt.body,NULL,env); break;
     case NODE_FOR: {
         Binding *base=*env; Pending *saved=a->defers;
-        statement(a,n->data.for_stmt.init,env);
+        for (ASTNode *init=n->data.for_stmt.init; init; init=init->next) statement(a,init,env);
         loop(a,n->data.for_stmt.cond,n->data.for_stmt.body,n->data.for_stmt.step,env);
         cleanup(a,saved,env); a->defers=saved; *env=base;
         break;
@@ -328,8 +343,33 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
         Binding *joined=NULL;
         for (ASTNode *arm=n->data.match_stmt.arms; arm; arm=arm->next) {
             Binding *body=copy(a,*env);
-            for (ASTNode *b=arm->data.match_arm.bindings; b; b=b->next) bind(a,&body,b,0);
-            if (!statement(a,arm->data.match_arm.body,&body)) edge(a,&joined,*env,body);
+            Pending *saved=a->defers;
+            for (ASTNode *b=arm->data.match_arm.bindings; b; b=b->next) bind(a,&body,b,1);
+            if (!statement(a,arm->data.match_arm.body,&body)) {
+                cleanup(a,saved,&body); edge(a,&joined,*env,body);
+            }
+            a->defers=saved;
+        }
+        if (!joined) return 1;
+        for (Binding *b=*env; b; b=b->next) {
+            Binding *other=declared(joined,b->declaration);
+            if (other) { b->state=other->state; b->consumed_at=other->consumed_at; }
+        }
+        break;
+    }
+    case NODE_SELECT: {
+        if (a->in_defer && !n->data.select_stmt.has_default) { still_error(STILL_E_OWNERSHIP,n,"deferred code cannot suspend"); exit(1); }
+        Binding *joined=NULL;
+        for (struct SelectCase *cs=n->data.select_stmt.cases; cs; cs=cs->next) {
+            Binding *body=copy(a,*env); Pending *saved=a->defers;
+            expression(a,cs->chan,&body);
+            if (cs->var_decl) bind(a,&body,cs->var_decl,1);
+            if (!statement(a,cs->body,&body)) { cleanup(a,saved,&body); edge(a,&joined,*env,body); }
+            a->defers=saved;
+        }
+        if (n->data.select_stmt.has_default) {
+            Binding *body=copy(a,*env);
+            if (!statement(a,n->data.select_stmt.default_body,&body)) edge(a,&joined,*env,body);
         }
         if (!joined) return 1;
         for (Binding *b=*env; b; b=b->next) {
@@ -353,7 +393,7 @@ static int statement(Analysis *a, ASTNode *n, Binding **env) {
         a->loop=frame.next;
         break;
     }
-    case NODE_UNCHECKED_BLOCK: statement(a,n->data.block.stmts,env); break;
+    case NODE_UNCHECKED_BLOCK: case NODE_UNSAFE_BLOCK: statement(a,n->data.block.stmts,env); break;
     default: expression(a,n,env); break;
     }
     return 0;

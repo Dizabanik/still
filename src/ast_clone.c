@@ -28,6 +28,7 @@ static Type *type_copy(Clone *c,Type *source,int substitute) {
         !strcmp(source->name,c->generic_struct))
         copy->name=(char *)c->instance_struct;
     copy->inner=type_copy(c,source->inner,substitute);
+    copy->error=type_copy(c,source->error,substitute);
     return copy;
 }
 static char *rename_symbol(Clone *c,char *name) {
@@ -65,7 +66,7 @@ static ASTNode *node_copy(Clone *c,ASTNode *source) {
     copy->data_type=type_copy(c,source->data_type,1);
     switch (source->type) {
     case NODE_PROGRAM: case NODE_BLOCK: LIST(block.stmts); break;
-    case NODE_UNCHECKED_BLOCK: NODE(block.stmts); break;
+    case NODE_UNCHECKED_BLOCK: case NODE_UNSAFE_BLOCK: NODE(block.stmts); break;
     case NODE_FUNC_DECL:
         copy->data.func.name=rename_symbol(c,source->data.func.name);
         LIST(func.args); NODE(func.body); TYPE(func.ret_type); break;

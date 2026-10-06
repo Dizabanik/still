@@ -9,9 +9,11 @@ struct Person {
     u8 age;
 }
 impl Person {
+    #[unsafe]
     fn u32 describe(Person p) {
         return ((u32)p.age) * 100 + 1;
     }
+    #[unsafe]
     fn void birthday(Person* p) {
         p->age = p->age + 1;
     }
@@ -27,6 +29,7 @@ struct Inner {
     i32 deep;
 }
 impl Inner {
+    #[unsafe]
     fn i32 get(Inner* s) {
         return s->deep;
     }
@@ -45,6 +48,7 @@ struct Base {
     i32 value;
 }
 impl Base {
+    #[unsafe]
     fn i32 who(Base b) {
         return 1;
     }
@@ -54,10 +58,13 @@ struct Derived {
     i32 value;
 }
 impl Derived {
+    #[unsafe]
     fn i32 who(Derived d) {
         return 2;
     }
 }
+
+#[unsafe]
 
 fn i32 main() {
     // 1. Field promotion both directions (read and write).

@@ -1,4 +1,4 @@
 {
-  "kind": "reject",
-  "diagnostic": "enum owners require recursive drop"
+  "kind": "run",
+  "stdout": "42\n42\n0 true\n"
 }

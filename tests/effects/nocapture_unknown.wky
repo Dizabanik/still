@@ -1,3 +1,3 @@
 extern "c" fn void remember(i32* p);
-#[nocapture] fn void forward(i32* p){remember(p);}
-fn main(){return 0;}
+#[nocapture] unsafe fn void forward(i32* p){remember(p);}
+unsafe fn main(){return 0;}

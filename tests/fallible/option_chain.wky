@@ -1,0 +1,8 @@
+fn option<i64> get(i64 x) { if (x < 0) { return none(); } return some(x); }
+fn option<i64> next(i64 x) { let v = try(get(x)); return some(v + 1); }
+fn main() {
+ let inferred = some(9);
+ println("{match inferred { Some(x) => x, None => -1 }}");
+ println("{match next(4) { Some(x) => x, None => -1 }}");
+ println("{match next(-1) { Some(x) => x, None => -1 }}"); return 0;
+}

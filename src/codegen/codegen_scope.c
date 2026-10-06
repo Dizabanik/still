@@ -484,6 +484,7 @@ void scope_push(StillCompiler *c, const char *name, LLVMValueRef val,
 	s->val = val;
 	s->type = type;
 	s->node = node;
+	s->orbit_scope = c->scope_stack;
 	s->used = 0;
 	s->all_next = c->function_locals;
 	c->function_locals = s;
@@ -748,8 +749,31 @@ static LLVMValueRef slice_index_addr(StillCompiler *c, ASTNode *n,
 }
 
 LLVMValueRef get_address(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
+    if (n->type==NODE_MEMBER_ACCESS) {
+        Type *type=wky_expr_type(c,n->data.member_access.object);
+        if (type && type->kind==TYPE_CHAN) {
+            const char *name=n->data.member_access.member;
+            const char *fields[]={"buf","cap","head","count","mask","closed"};
+            int index=-1;
+            for (int i=1; i<6; ++i) if (!strcmp(name,fields[i])) index=i;
+            if (!strcmp(name,"buf")) {
+                still_error(STILL_E_TYPE,n,"channel storage is private; use send and receive"); exit(1);
+            }
+            if (index<0) { still_error(STILL_E_TYPE,n,"unknown channel field `%s`",name); exit(1); }
+            LLVMValueRef address=get_address(c,n->data.member_access.object,NULL);
+            LLVMTypeRef llvm=get_llvm_type(c,type);
+            if (out_type) *out_type=LLVMStructGetTypeAtIndex(llvm,(unsigned)index);
+            return LLVMBuildStructGEP2(c->builder,llvm,address,(unsigned)index,"channel_field");
+        }
+    }
     LLVMValueRef managed=wky_memory_lvalue(c,n,out_type,NULL);
     if (managed) return managed;
+    ASTNode *base=n->type==NODE_INDEX ? n->data.index.object : n->type==NODE_DEREF ? n->data.deref.expr :
+        n->type==NODE_MEMBER_ACCESS ? n->data.member_access.object : NULL;
+    Type *base_type=wky_expr_type(c,base);
+    if (base_type && (base_type->kind==TYPE_PTR || base_type->kind==TYPE_AMP)) {
+        wky_require_unsafe(c,n,"raw pointer access");
+	}
 	switch (n->type) {
 	case NODE_VAR_REF: {
 		Scope *s = scope_find(c, n->data.var_ref.name);
@@ -791,39 +815,7 @@ LLVMValueRef get_address(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				Scope *sv = scope_find(
 					c, n->data.member_access.object->data.var_ref.name);
 				vt = (sv && sv->node) ? sv->node->data_type : NULL;
-				if (vt && vt->kind == TYPE_CHAN) {
-					// Channel introspection: .buf/.cap/.head/.count/.mask
-					// map straight onto ring-record fields. .head is the
-					// monotonic read cursor (never wraps).
-					int slot2 =
-						strcmp(n->data.member_access.member, "buf") == 0
-							? 0
-						: strcmp(n->data.member_access.member, "cap") == 0
-							? 1
-						: strcmp(n->data.member_access.member, "head") == 0
-							? 2
-						: strcmp(n->data.member_access.member, "count") == 0
-							? 3
-						: strcmp(n->data.member_access.member, "mask") == 0
-							? 4
-							: -1;
-					if (slot2 < 0) {
-						still_diag_note(
-							"channel fields: `buf`, `cap`, `head`, "
-							"`count`, `mask`");
-						still_error(STILL_E_UNDEF, n,
-							 "chan<T> has no field `%s`",
-							 n->data.member_access.member);
-						exit(1);
-					}
-					LLVMTypeRef cllt = get_llvm_type(c, vt);
-					LLVMValueRef fld2 = LLVMBuildStructGEP2(
-						c->builder, cllt, sv->val, slot2, "chan_fld");
-					if (out_type)
-						*out_type = LLVMStructGetTypeAtIndex(
-							cllt, (unsigned)slot2);
-					return fld2;
-				}
+
 				if (vt && vt->kind == TYPE_SLICE)
 					pair_addr = sv->val;
 				else
@@ -897,6 +889,7 @@ LLVMValueRef get_address(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 				(strcmp(n->data.member_access.member, "len") == 0 ||
 				 strcmp(n->data.member_access.member, "data") == 0)) {
 				if (strcmp(n->data.member_access.member, "data") == 0) {
+					wky_require_mutable(c,n->data.member_access.object);
 					// An array has no pointer field: build one in an entry
 					// alloca holding &arr[0] so the lvalue contract holds
 					// (callers load through the returned address). -O2
@@ -1323,11 +1316,17 @@ LLVMValueRef get_address(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_type) {
 // Rvalue evaluation for lvalue-shaped nodes. Loads exactly once from the
 // resolved address; `&x` (NODE_AMP) is the address itself, no load.
 LLVMValueRef value_of_lvalue(StillCompiler *c, ASTNode *n) {
-    if (wky_contains_managed(c,wky_expr_type(c, n),1)) {
+    if (n->type==NODE_VAR_REF) {
+        Scope *s=scope_find(c,n->data.var_ref.name);
+        if (s && s->node && s->node->type==NODE_VAR_DECL && s->node->data.var_decl.is_orbit)
+            return wky_orbit_value(c,s);
+    }
+    if (wky_contains_managed(c,wky_expr_type(c, n),1) || (wky_expr_type(c,n) && wky_expr_type(c,n)->kind==TYPE_HANDLE)) {
 		still_error(STILL_E_TYPE, n, "an owner cannot be copied; use move, ref_of, or clone");
 		exit(1);
 	}
 	if (n->type == NODE_AMP) {
+		wky_require_mutable(c,n->data.deref.expr);
 		ASTNode *base = n->data.deref.expr;
 		while (base && (base->type == NODE_INDEX || base->type == NODE_DEREF || base->type == NODE_MEMBER_ACCESS)) {
 			base = base->type == NODE_INDEX ? base->data.index.object :
@@ -1390,8 +1389,27 @@ LLVMValueRef coerce_value(StillCompiler *c, LLVMValueRef v, Type *src_ast,
 	LLVMTypeRef src = LLVMTypeOf(v);
 	wky_check_conversion(c, v, src_ast, dst, dst_ast);
     Type *source_type=wky_concrete_type(c,src_ast), *destination_type=wky_concrete_type(c,dst_ast);
-    if (source_type && destination_type && source_type->kind==TYPE_ENUM &&
-        destination_type->kind==TYPE_ENUM && !wky_types_same(source_type,destination_type)) {
+    if (source_type && source_type->kind==TYPE_VOID && LLVMGetTypeKind(dst)!=LLVMVoidTypeKind) {
+        still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,c->source_line,"a void expression cannot initialize a value"); exit(1);
+    }
+    if ((source_type && source_type->kind==TYPE_HANDLE) || (destination_type && destination_type->kind==TYPE_HANDLE)) {
+        if (!wky_types_same(source_type,destination_type)) {
+            still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,c->source_line,"coroutine handles cannot be forged or converted to raw pointers"); exit(1);
+        }
+    }
+    if (source_type && destination_type &&
+        ((source_type->kind==TYPE_STRUCT && destination_type->kind==TYPE_STRUCT) ||
+         (source_type->kind==TYPE_SLICE && destination_type->kind==TYPE_SLICE) ||
+         (source_type->kind==TYPE_ARRAY && destination_type->kind==TYPE_ARRAY)) &&
+        !wky_types_same(source_type,destination_type)) {
+        still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,c->source_line,"incompatible aggregate types require an explicit conversion"); exit(1);
+    }
+    if (source_type && destination_type &&
+        (source_type->kind==TYPE_PTR || source_type->kind==TYPE_AMP || destination_type->kind==TYPE_PTR || destination_type->kind==TYPE_AMP) &&
+        !wky_types_same(source_type,destination_type) && source_type->kind!=TYPE_SLICE && source_type->kind!=TYPE_ARRAY)
+        wky_require_unsafe(c,NULL,"raw pointer conversion");
+    if ((wky_is_tagged(source_type) || wky_is_tagged(destination_type)) &&
+        !wky_types_same(source_type,destination_type)) {
         still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,0,
             "cannot implicitly convert between distinct enum types");
         exit(1);
@@ -1466,6 +1484,13 @@ LLVMValueRef coerce_value(StillCompiler *c, LLVMValueRef v, Type *src_ast,
 		return LLVMBuildExtractValue(c->builder, v, 0, "slice_decay");
 	if (sk == LLVMPointerTypeKind && dk == LLVMPointerTypeKind)
 		return LLVMBuildPointerCast(c->builder, v, dst, "ptr_cast");
+	if (sk==LLVMPointerTypeKind && dk==LLVMIntegerTypeKind) { wky_require_unsafe(c,NULL,"raw address conversion"); return LLVMBuildPtrToInt(c->builder,v,dst,"address_bits"); }
+	if (sk==LLVMIntegerTypeKind && dk==LLVMPointerTypeKind) { wky_require_unsafe(c,NULL,"raw address conversion"); return LLVMBuildIntToPtr(c->builder,v,dst,"raw_address"); }
+	if (sk==LLVMArrayTypeKind && dk==LLVMPointerTypeKind && source_type && source_type->kind==TYPE_ARRAY) {
+		LLVMValueRef slot=create_entry_block_alloca(c,src,"array_decay_temp");
+		LLVMBuildStore(c->builder,v,slot);
+		return slot;
+	}
 	if (sk == LLVMArrayTypeKind && dk == LLVMStructTypeKind &&
 		src_ast && src_ast->kind == TYPE_ARRAY &&
 		dst_ast && dst_ast->kind == TYPE_SLICE) {
@@ -1504,8 +1529,8 @@ LLVMValueRef coerce_value(StillCompiler *c, LLVMValueRef v, Type *src_ast,
 			1, "slice_ins_len");
 		return view;
 	}
-	if (sk == LLVMPointerTypeKind && dk == LLVMStructTypeKind)
-		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
+	if (sk==LLVMIntegerTypeKind && dk==LLVMPointerTypeKind && LLVMIsAConstantInt(v) && !LLVMConstIntGetZExtValue(v))
+		return LLVMConstNull(dst);
 	if (sk == LLVMStructTypeKind && dk == LLVMStructTypeKind) {
 		if (src == dst)
 			return v;
@@ -1518,12 +1543,8 @@ LLVMValueRef coerce_value(StillCompiler *c, LLVMValueRef v, Type *src_ast,
 		return v;
 	// Last resort: bitcast between same-sized types; otherwise the value is
 	// incompatible with the destination and that's a real codegen bug.
-	if (LLVMGetTypeKind(dst) == LLVMPointerTypeKind ||
-		LLVMGetTypeKind(src) == LLVMPointerTypeKind)
-		return LLVMBuildPointerCast(c->builder, v, dst, "raw_cast");
-
-	still_diag_error_at(STILL_E_SEMANTIC, "<wky>", NULL, 0,
-				   "cannot coerce value in codegen"); // internal
+	still_diag_error_at(STILL_E_TYPE,c->source_filename,NULL,c->source_line,
+				   "incompatible value types; use an explicit conversion");
 	exit(1);
 }
 

@@ -6,21 +6,21 @@ struct Pair(A, B) {
 }
 
 impl(A, B) Pair(A, B) {
-    fn Pair(A, B) new(A f, B s) {
+    unsafe fn Pair(A, B) new(A f, B s) {
         return Pair(A, B) { first: f, second: s };
     }
-    fn A get_first(self) {
+    unsafe fn A get_first(self) {
         return self.first;
     }
-    fn B get_second(self) {
+    unsafe fn B get_second(self) {
         return self.second;
     }
-    fn Pair(B, A) swap(self) {
+    unsafe fn Pair(B, A) swap(self) {
         return Pair(B, A) { first: self.second, second: self.first };
     }
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 20000000;
     let p = Pair(i64, i32).new(123456789, 42);
     i64 acc = 0;

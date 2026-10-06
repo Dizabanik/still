@@ -5,19 +5,19 @@ pub struct Counter {
 pub impl Counter {
     pub const MAX = 1000;
 
-    pub fn new(i32 start) Counter {
+    pub unsafe fn new(i32 start) Counter {
         return Counter { count: start };
     }
 
-    pub fn inc(self*, i32 step) void {
+    pub unsafe fn inc(self*, i32 step) void {
         self.count += step;
     }
 
-    pub fn get(self) i32 {
+    pub unsafe fn get(self) i32 {
         return self.count;
     }
 }
 
-pub fn create_counter(i32 start) Counter {
+pub unsafe fn create_counter(i32 start) Counter {
     return Counter.new(start);
 }

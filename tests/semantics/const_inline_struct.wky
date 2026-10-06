@@ -1,0 +1,1 @@
+struct Pair { i64 x; } fn main() { const Pair p = {x:1}; p.x = 2; return 0; }

@@ -1,49 +1,47 @@
-# The Whisky Programming Language
+# Whisky documentation
 
-**Whisky** is an experimental systems and numerical programming language.
-Its compiler is **`still`**, and source files use **`.wky`**. It compiles
-ahead of time to native machine code via LLVM.
+Whisky is a systems programming language that compiles ahead of time to native machine code using LLVM. Its compiler is `still`, and source files use the `.wky` extension.
 
-These guides describe the language and its goals. For the current implementation
-and remaining work, consult the [implementation ledger](../IMPLEMENTATION.md)
-and executable contracts in `tests/`. Use [INSTALL.md](../INSTALL.md) for the
-supported toolchain and [CODE_STYLE.md](../CODE_STYLE.md) for contributor naming.
+The language provides direct memory control through explicit pointers and stack structures, alongside managed owners, bounded references, arenas, and stability scopes.
 
-Whisky is engineered with four core tenets:
-1. **Performance**: Aim for efficient native code. Compare reviewed workloads using independent output oracles and reported measurements; no general speed ranking is established.
-2. **Boringly Simple**: An explicit, transparent syntax inspired by Go and C without hidden control flow, runtime garbage collection pauses, or hidden heap allocations.
-3. **Memory Safety with Simple Use**: Combine managed owners, bounded references, and stability scopes with static checks and runtime validation. The complete safety model remains in progress.
-4. **LLM-First Ergonomics**: Deterministic grammar, single-pass type inference, stable compiler diagnostics (`E0001`–`E0010`), and machine-readable output formats.
+## Design goals
 
----
+1. Efficient machine code: Whisky generates native code directly through LLVM, supporting optimizations such as link-time optimization and loop vectorization.
+2. Explicit syntax: The grammar avoids hidden control flow, background garbage collection, and silent heap allocations.
+3. Structured memory management: The type system distinguishes owned heap buffers (`owner<T>`) from bounded views (`ref<T>`), tracking ownership transfers statically and validating references at runtime.
+4. Predictable compiler tooling: Single-pass type deduction, deterministic grammar, stable error codes (`E0001` to `E0010`), and machine-readable JSON diagnostic output.
 
-## Documentation Contents
+## Documentation index
 
-### 1. Vision & Architecture
-* [Vision, Philosophy & Roadmap](vision-and-roadmap.md): Architectural identity, non-negotiable anti-goals, and the roadmap for native Machine Learning, autodiff, and GPU targets.
+### 1. Vision and architecture
+* [Vision and roadmap](vision-and-roadmap.md): Design principles, anti-goals, and proposed numerical and compute extensions.
 
-### 2. [Getting Started](getting-started/installation.md)
-* [Installation & Toolchain Setup](getting-started/installation.md): Building the compiler from source, dependencies, and environment setup.
-* [Hello World & First Steps](getting-started/hello-world.md): Writing, compiling, and running your first Whisky program.
+### 2. Getting started
+* [Installation and toolchain setup](getting-started/installation.md): Building the compiler from source, required dependencies, and environment setup.
+* [Hello world](getting-started/hello-world.md): Writing, compiling, and running your first Whisky program.
 
-### 3. Language Guide
-* [Basic Types & Variables](language-guide/basic-types-and-variables.md): Primitive integer, float, boolean, and character types, constants, variables, and type deduction.
-* [Control Flow](language-guide/control-flow.md): Conditionals (`if`/`else`), loops (`while`, range `for`), `match` expressions, and deterministic `defer`.
-* [Functions & Operator Overloading](language-guide/functions-and-operators.md): Function declarations, `pure fn`, parameter attributes, and whitelisted operator overloading.
-* [Structs, Methods & Impls](language-guide/structs-methods-and-impls.md): Struct declarations, `impl` blocks, `self`/`self*` receivers, associated functions, and composition.
-* [Tuples & Destructuring](language-guide/tuples-and-destructuring.md): First-class tuples, multi-return functions, positional indexing, and pattern destructuring.
-* [Generics & Monomorphization](language-guide/generics.md): Multi-parameter generic structs, generic `impl` blocks, associated constructors, and method chaining.
-* [Enums & Tagged Unions](language-guide/enums-and-tagged-unions.md): Tagged union variants with payloads, exhaustive pattern matching, and memory layout.
-* [Slices, Arrays & Memory Safety](language-guide/slices-and-arrays.md): Fixed-size arrays, non-owning slice views, bounds-checking policies, and induction variable elision.
-* [Coroutines & Channels](language-guide/coroutines-and-channels.md): Cooperative stackless coroutines (`brew`/`sip`/`drop`), power-of-two channel rings, and `select`.
-* [High-Performance Formatted I/O](language-guide/formatted-io.md): String interpolation, compile-time typed desugaring, and zero-allocation buffered output.
+### 3. Language guide
+* [Basic types and variables](language-guide/basic-types-and-variables.md): Primitive scalar types, constants, variable declarations, and derived bindings (`orbit`).
+* [Control flow](language-guide/control-flow.md): Conditionals (`if`/`else`), loops (`while`, range `for`), `match` statements, and scoped cleanup (`defer`).
+* [Functions and operator overloading](language-guide/functions-and-operators.md): Function declarations, multi-return values, `pure fn`, unsafe boundaries, and operator overloading.
+* [Structs, methods, and impls](language-guide/structs-methods-and-impls.md): Struct declarations, field access, `impl` blocks, `self`/`self*` receivers, associated functions, and struct embedding.
+* [Tuples and destructuring](language-guide/tuples-and-destructuring.md): First-class tuples, positional indexing, and pattern destructuring for tuples, structs, and arrays.
+* [Generics and monomorphization](language-guide/generics.md): Parameterized generic structs, generic `impl` blocks, and compile-time monomorphization.
+* [Enums and tagged unions](language-guide/enums-and-tagged-unions.md): Variant declarations, payload storage, exhaustive pattern matching, and memory layout.
+* [Slices and arrays](language-guide/slices-and-arrays.md): Fixed-size arrays, non-owning slices (`[]T`), slicing syntax, and bounds-checking policies.
+* [Ownership, raw access, and typed errors](language-guide/memory-and-errors.md): Managed owners (`owner<T>`), references (`ref<T>`), arenas, unsafe operations, options, results, and `filter`/`dregs` blocks.
+* [Coroutines and channels](language-guide/coroutines-and-channels.md): Cooperative stackless tasks (`brew`/`sip`/`drop`), managed channel rings, and `select` expressions.
+* [Formatted I/O](language-guide/formatted-io.md): String interpolation, format specifiers, and compile-time desugared printing.
 
-### 4. Standard Library
-* [`stdc`: Native C Runtime Interop](stdlib/stdc.md): Seamless zero-overhead C standard library FFI.
-* [`std.io`: Low-Level & Streaming I/O](stdlib/std-io.md): Direct POSIX write wrappers, standard file descriptors, and buffered streams.
-* [`std.process`: OS & Runtime Introspection](stdlib/std-process.md): Command-line argument access, execution environment, and exit codes.
+### 4. Standard library
+* [`stdc`: Native C runtime](stdlib/stdc.md): C standard library function declarations and foreign function calls.
+* [`std.io`: Stream output](stdlib/std-io.md): Standard output and standard error writing functions.
+* [`std.process`: Process metadata](stdlib/std-process.md): Command-line argument access and process termination.
 
-### 5. Compiler & Toolchain
-* [Compiler CLI Reference](compiler-and-toolchain/cli-reference.md): All flags and options: `-O3`, `--lto`, `--pgo-gen`, `--pgo-use`, `--bounds-check`, `--emit-hash`, and `--test`.
-* [Diagnostics & Error Codes](compiler-and-toolchain/diagnostics-and-errors.md): Stable error codes, multi-span terminal reporting, and did-you-mean suggestions.
-* [Performance & Benchmark Suite](compiler-and-toolchain/performance-guide.md): Matched workloads, managed-memory checks, historical cases, and measurement policy.
+### 5. Compiler and toolchain
+* [Compiler CLI reference](compiler-and-toolchain/cli-reference.md): Command-line options for `still`, optimization settings, diagnostic modes, and formatting flags.
+* [Diagnostics and error codes](compiler-and-toolchain/diagnostics-and-errors.md): Compiler error code catalog (`E0001` to `E0010`), warnings, and terminal formatting.
+* [Performance and benchmarks](compiler-and-toolchain/performance-guide.md): Matched workload suite, measurement methodology, and testing harnesses.
+
+### 6. Design proposals
+* [C and C++ interoperability proposal](design/c-cpp-interop.md): Prospective design for bidirectional C and C++ header import and symbol export.

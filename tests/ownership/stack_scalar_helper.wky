@@ -1,3 +1,6 @@
+#[unsafe]
 fn u64 encode(i32* pointer) { return (u64)pointer; }
+#[unsafe]
 fn u64 bad() { i32 local=42; return encode(&local); }
+#[unsafe]
 fn main() { return 0; }

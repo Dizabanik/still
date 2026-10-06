@@ -1,0 +1,1 @@
+fn main() { const x=1; return 0; x=2; }

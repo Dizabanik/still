@@ -1,0 +1,3 @@
+owner<chan<i32>> channels=own(1);
+fn main() { channels[0]=make_chan(1); let task=brew { i32 value=<-channels[0]; drop(value); };
+ sip(task); release(channels); sip(task); return 0; }

@@ -1,0 +1,1 @@
+fn main() { let x = 2; orbit y := x + 1, z := y * 3; x = 4; println("{y} {z}"); return 0; }

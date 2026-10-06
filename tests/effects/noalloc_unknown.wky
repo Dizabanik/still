@@ -1,1 +1,1 @@
-extern "c" fn void mystery(); #[noalloc] fn void kernel() { mystery(); } fn main(){return 0;}
+extern "c" fn void mystery(); #[noalloc] unsafe fn void kernel() { mystery(); } fn main(){return 0;}

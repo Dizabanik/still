@@ -4,6 +4,7 @@
 import stdc;
 
 // --- 2.1 comptime: pure fns run at compile time ---
+#[unsafe]
 pure fn i64 fib(i64 n) {
     if (n < 2) { return n; }
     return fib(n - 1) + fib(n - 2);
@@ -12,6 +13,7 @@ const F10 = comptime fib(10);
 const SQ = comptime fib(7) + fib(5);
 
 // --- 2.2 generics: T is monomorphized per call site ---
+#[unsafe]
 fn T max_of(T a, T b) {
     if (a > b) { return a; }
     return b;
@@ -24,6 +26,8 @@ fn T max_of(T a, T b) {
 }
 
 extern "c" fn f64 sqrt(f64 x);
+
+#[unsafe]
 
 fn i32 main() {
     printf("fib=%lld sq=%lld\n", ((i64)F10), ((i64)SQ));

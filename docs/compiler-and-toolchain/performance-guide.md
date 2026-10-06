@@ -1,48 +1,55 @@
 # Performance and benchmarks
 
-Whisky aims to generate efficient native code while preserving its safety
-contracts. Performance depends on the workload, target, and toolchain. This
-repository does not establish a general ranking against C or Rust.
+Whisky compiles to native machine code through LLVM. Performance varies with workload, target platform, and optimization flags. This repository establishes no broad speed ranking against C or Rust.
 
 ## Matched comparisons
 
-`scripts/bench.py` rebuilds `.wky`, C, and Rust implementations from source.
-Reviewed matched workloads have independent Python output oracles. The harness
-validates edge cases and the full timed input before collecting samples, rotates
-execution order, and records samples, median/MAD, flags, versions, and hashes.
-Machine-readable results use `wky` as the language key and `still` as its compiler.
+The benchmark driver in `scripts/bench.py` builds Whisky, C, and Rust implementations from source on each invocation. Matched workloads compare equivalent algorithms and memory layouts against independent Python output oracles.
+
+The test harness validates boundary conditions and the full timed input before recording execution samples. It alternates execution order, reporting individual samples, median, median absolute deviation (MAD), compiler versions, and binary checksums.
 
 ```sh
+# Correctness verification with C address and undefined behavior sanitizers:
 python3 scripts/bench.py --still build-cmake/still \
   --quick --verify-only --sanitize-c --json build-cmake/verified.json
 
-# Collect timings separately on an idle host.
+# Measurements on an idle system:
 python3 scripts/bench.py --still build-cmake/still \
   --runs 9 --warmups 2 --json build-cmake/measurements.json
 ```
 
-Byte-exact comparisons are the default. Explicit numeric contracts specify
-finite output and bounded tolerances where floating-point comparisons require
-them. Comparative ratios are limited to the reviewed matched suite.
+### Reviewed matched workloads
 
-The historical `b1`–`b16` and `bench2` cases have differential or smoke coverage.
-They do not establish comparable speed results. In particular, the historical
-channel workload compares different scheduling mechanisms across languages.
-Old timing tables and ratios are not evidence for the current implementation.
+* `runtime_mix`: Runtime-seeded scalar recurrence with carried loop dependencies and bounded 64-bit integer arithmetic.
+* `dynamic_gather`: Checked random read, modify, and write operations across an initialized 4096-slot buffer with varying active lengths.
+* `indexed_graph`: In-place mutation during dependent traversal across inline graph nodes.
+* `overlap_views`: Sequential updates through overlapping slice views of the same buffer.
+* `matrix4`: 4x4 integer matrix and vector recurrence with explicit output buffers.
+* `ring_pipeline`: Three capacity-64 batch buffers executing an identical single-thread pipeline schedule.
 
-## Safety and compiler tooling
+Byte-exact stdout comparison is standard across workloads. When floating-point rounding differs across platforms, workloads specify bounded absolute error tolerances.
 
-The managed-memory harnesses exercise bounded references, stable guards,
-subobjects, owners, and owning aggregates. They check independent output oracles,
-allocation/check counters, and sanitized C references outside timed runs.
-`scripts/bench_tools.py` covers checking, formatting, and native builds with
-deterministic corpora and independent checksums.
+### Historical benchmarks
+
+The historical test suite (`b1` to `b16` and `bench2`) provides differential regression coverage. These tests do not establish comparative language speed rankings:
+* `b6_chan` compares cooperative Whisky coroutines with C `ucontext` switches and Rust operating system threads. Different scheduling mechanisms cannot be treated as equivalent costs.
+* `b14_format` measures standard formatting routines and stdout buffer flush policies.
+* `b4_reductions` contains loop-invariant operations that optimizers can hoist depending on compilation flags.
+* Prior published numbers from earlier compiler versions do not apply to revised sources.
+
+## Managed memory and compiler tooling suites
+
+Specialized harnesses test managed memory performance, ownership costs, and compiler driver throughput:
+
+* `bench_memory.py`: Tests bounded reference lookups and stability scope pins (`stable`), comparing checked reference overhead against sanitized C implementations.
+* `bench_owners.py`: Measures allocation, cloning, transfer, and drop cycles for complex ownership graphs.
+* `bench_semantics.py`: Verifies typed result propagation, enum payload matching, and single-threaded channel transfers.
+* `bench_tools.py`: Tests `still` compilation throughput, syntax check speeds (`--check`), and code formatting (`--format`).
+
+Run the automated correctness verification script:
 
 ```sh
 bash scripts/ci/verify_benchmarks.sh build-cmake
 ```
 
-This is CI's correctness gate. Hosted runner timings are not performance gates.
-See [bench/README.md](../../bench/README.md) for exact workloads and measurement
-limits, and [IMPLEMENTATION.md](../../IMPLEMENTATION.md) for the implemented
-optimizations and remaining language work.
+Continuous integration runs this check as a correctness gate rather than measuring execution speed on shared virtual machines.

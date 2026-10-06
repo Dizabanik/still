@@ -1,0 +1,9 @@
+import stdc;
+fn drip work() {
+    defer { unsafe { stdc.printf("cleaned %llu\n", mem_metric(2)); } }
+    owner<i64> payload = own(1);
+    payload[0] = 7;
+    drop((i32)payload[0]);
+}
+handle job = work();
+fn main() { println("{sip(job)}"); return 0; }

@@ -1,0 +1,17 @@
+chan<owner<i64>> pipe = make_chan(1);
+i32 cleaned = 0;
+fn main() {
+    owner<i64> first = own(1); first[0] = 11; pipe <- move(first);
+    let task = brew {
+        owner<i64> second = own(1); second[0] = 22;
+        defer { cleaned += 1; }
+        pipe <- move(second);
+    };
+    sip(task);
+    cancel(task);
+    owner<i64> value = <-pipe;
+    println("{value[0]} {cleaned} {mem_metric(0) == mem_metric(1) + 2}");
+    release(value); release(pipe);
+    println("{mem_metric(2)}");
+    return 0;
+}

@@ -190,13 +190,41 @@ LLVMValueRef wky_memory_lvalue(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_ty
 LLVMValueRef wky_memory_write_address(StillCompiler *c, LLVMValueRef slot,
                                       LLVMTypeRef type, LLVMValueRef container);
 void wky_memory_store_owner(StillCompiler *c, LLVMValueRef slot,
-                             LLVMValueRef value, LLVMValueRef container);
+                             LLVMValueRef value, LLVMValueRef container, Type *type);
+LLVMValueRef wky_memory_take_value(StillCompiler *, ASTNode *, LLVMValueRef slot,
+                                    Type *, LLVMValueRef container);
 void wky_check_value_type(StillCompiler *c, ASTNode *n, Type *type);
 LLVMValueRef wky_memory_value(StillCompiler *c, ASTNode *n);
-void wky_memory_cleanup(StillCompiler *c, LLVMValueRef slot, int unpin);
+LLVMValueRef wky_memory_cleanup(StillCompiler *c, LLVMValueRef slot, int unpin);
 void wky_memory_defer(StillCompiler *c, LLVMValueRef slot, int unpin);
 void wky_memory_stable(StillCompiler *c, ASTNode *n);
 void wky_verify_ownership(StillCompiler *c, ASTNode *function);
+void wky_verify_semantics(StillCompiler *c, ASTNode *function);
+void wky_require_mutable(StillCompiler *c, ASTNode *target);
+void wky_require_unsafe(StillCompiler *c, ASTNode *node, const char *operation);
+void wky_check_orbit(StillCompiler *c, ASTNode *node);
+LLVMValueRef wky_array_view(StillCompiler *, ASTNode *, Type *destination);
+int wky_block_reachable(StillCompiler *, LLVMBasicBlockRef target);
+LLVMValueRef wky_orbit_value(StillCompiler *c, Scope *binding);
+int wky_is_tagged(Type *type);
+char *wky_type_key(StillCompiler *c, Type *type);
+void wky_check_call_safety(StillCompiler *c, ASTNode *node, LLVMValueRef function);
+ASTNode *wky_tagged_decl(StillCompiler *c, Type *type);
+LLVMValueRef wky_result_builtin(StillCompiler *c, ASTNode *node, const char *name);
+LLVMValueRef wky_result_construct(StillCompiler *, ASTNode *, Type *, int, LLVMValueRef, Type *);
+void wky_propagate_failure(StillCompiler *, ASTNode *, LLVMValueRef, Type *);
+LLVMBasicBlockRef wky_coro_cancel_block(StillCompiler *);
+void wky_coro_drop(StillCompiler *, LLVMValueRef);
+LLVMValueRef wky_coro_handle(StillCompiler *c, LLVMValueRef raw);
+LLVMValueRef wky_coro_sip(StillCompiler *c, ASTNode *node);
+int wky_value_contains_handle(StillCompiler *c, Type *type);
+void wky_mark_cleanup_effect(StillCompiler *, LLVMValueRef call, Type *type);
+LLVMValueRef wky_channel_builtin(StillCompiler *, ASTNode *, const char *);
+LLVMValueRef wky_channel_operation(StillCompiler *, ASTNode *);
+LLVMValueRef wky_channel_validate(StillCompiler *, ASTNode *, Type *, LLVMValueRef address,
+                                   LLVMValueRef container);
+LLVMValueRef wky_channel_operation_at(StillCompiler *, ASTNode *, LLVMValueRef address,
+                                       LLVMValueRef container);
 LLVMValueRef wky_generic_function(StillCompiler *c, ASTNode *call, const char *name);
 
 // --- codegen_scope.c ---
@@ -236,7 +264,6 @@ LLVMValueRef const_eval_global_init(StillCompiler *c, ASTNode *n,
 int const_eval_i64(StillCompiler *c, ASTNode *n, long long *out);
 
 // --- codegen_expr.c ---
-void trigger_orbit_updates(StillCompiler *c, ASTNode *origin_node);
 LLVMValueRef codegen_expr(StillCompiler *c, ASTNode *n);
 LLVMValueRef codegen_index_overload(StillCompiler *c, ASTNode *n);
 LLVMValueRef build_binop(StillCompiler *c, ASTNode *n, LLVMValueRef l,
@@ -257,14 +284,6 @@ LLVMValueRef build_coro_frame(StillCompiler *c, LLVMValueRef fn,
 							  int promise_index, LLVMBasicBlockRef *cleanup_bb,
 							  LLVMBasicBlockRef *suspend_bb);
 
-// Same, with heap elision: when use_stack_frame is set the coroutine frame
-// is allocated in the caller's stack (exact size via llvm.coro.size) and no
-// malloc path exists in the emitted code.
-LLVMValueRef build_coro_frame_ex(StillCompiler *c, LLVMValueRef fn,
-								 int promise_index,
-								 LLVMBasicBlockRef *cleanup_bb,
-								 LLVMBasicBlockRef *suspend_bb,
-								 int use_stack_frame);
 void finish_coro_body(StillCompiler *c, LLVMBasicBlockRef cleanup_bb,
 					  LLVMBasicBlockRef suspend_bb);
 

@@ -1,0 +1,3 @@
+fn result<T,i32> identity(T value) { return ok(value); }
+fn result<i64,i32> call() { i64 x=42; return ok(try(identity(x))); }
+fn main() { println("{match call() { Ok(v)=>v, Err(e)=>-(i64)e }}"); return 0; }

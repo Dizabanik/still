@@ -1,0 +1,1 @@
+fn main() { let a=brew { drop(1); }; cancel(a); return sip(a); }

@@ -1,0 +1,2 @@
+fn drip work(owner<i64> p) { println("unexpected {p[0]}"); drop(1); }
+fn main() { owner<i64> p=own(1); handle task=work(move(p)); cancel(task); println("{mem_metric(2)}"); return 0; }

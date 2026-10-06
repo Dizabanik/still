@@ -3,6 +3,8 @@
 // break binds to the switch, continue passes through to the loop.
 enum Fruit { APPLE = 1, BANANA, CHERRY };
 
+#[unsafe]
+
 fn int classify(int v) {
     switch (v) {
         case 0:
@@ -22,6 +24,8 @@ fn int classify(int v) {
     }
     return 0;
 }
+
+#[unsafe]
 
 fn int main() {
     classify(0);

@@ -1,0 +1,2 @@
+handle task;
+fn main() { task=brew { cancel(task); drop(1); }; sip(task); return 0; }

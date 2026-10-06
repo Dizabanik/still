@@ -1,3 +1,6 @@
+#[unsafe]
 fn i32 effect(i32* p) { *p=9; return 0; }
+#[unsafe]
 pure fn i32 bad(i32* p) { return effect(p); }
+#[unsafe]
 fn i32 main() { return 0; }

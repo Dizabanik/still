@@ -1,46 +1,40 @@
-# Standard Library: `std.io`
+# Standard library: `std.io`
 
-The `std.io` namespace provides basic input and output primitives for writing to standard streams and low-level file descriptors.
+The `std.io` module provides basic stream output routines for standard output and standard error.
 
----
+## Writing to standard output: `std.io.puts`
 
-## 1. Writing to Standard Output: `std.io.puts`
-
-`std.io.puts` writes a null-terminated string to standard output, followed by a newline:
+`std.io.puts` writes a string directly to `stdout`:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    std.io.puts("Direct output via std.io.puts");
+    std.io.puts("Output via std.io.puts\n");
     return 0;
 }
 ```
 
----
-
-## 2. Writing to Standard Error: `std.io.eputs`
+## Writing to standard error: `std.io.eputs`
 
 `std.io.eputs` writes a string directly to `stderr` (file descriptor 2).
 
-Because `stderr` is unbuffered by standard POSIX rules, `std.io.eputs` lowers directly to a raw `write(2, ptr, len)` system call inside a module-local wrapper. This guarantees that error output cannot reorder against buffered stdout streams:
+Standard error writes bypass the stdout user-space buffer and invoke the `write` system call directly. This ensures error messages appear immediately without interleaving behind buffered stdout output:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    std.io.eputs("Error: operation failed");
+    std.io.eputs("Fatal error encountered\n");
     return 1;
 }
 ```
 
----
+## Function summary
 
-## 3. Comparison with `println`
-
-| Feature | `println(...)` | `std.io.puts` | `std.io.eputs` |
-|:---|:---:|:---:|:---:|
-| **Destination** | `stdout` | `stdout` | `stderr` |
-| **Formatting / Interpolation** | Yes (`{x}`) | No (Raw string only) | No (Raw string only) |
-| **Buffering** | 64KB user buffer | Line buffered | Unbuffered (raw `write`) |
-| **Best Used For** | Formatted data & logs | Simple stdout text | Immediate error messages |
+| Function | Output stream | Buffering | Formatting support |
+|:---|:---|:---|:---|
+| `println(...)` | `stdout` | 64KB user buffer | Full string interpolation (`{}`) |
+| `print(...)` | `stdout` | 64KB user buffer | Full string interpolation (`{}`) |
+| `std.io.puts` | `stdout` | System line buffering | Raw string |
+| `std.io.eputs` | `stderr` | Unbuffered direct write | Raw string |

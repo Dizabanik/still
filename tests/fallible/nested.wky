@@ -1,0 +1,2 @@
+fn result<option<i64>,i32> make() { return ok(some(42)); }
+fn main() { let r=make(); println("{match r { Ok(o)=>match o { Some(v)=>v, None=>0 }, Err(e)=>-(i64)e }}"); return 0; }

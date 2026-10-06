@@ -1,0 +1,6 @@
+fn result<i64,i32> read(i64 x) { if (x < 0) { return err(7); } return ok(x + 1); }
+fn result<i64,i32> twice(i64 x) { let a = try(read(x)); return ok(a * 2); }
+fn main() {
+ println("{match twice(20) { Ok(v) => v, Err(e) => -(i64)e }}");
+ println("{match twice(-1) { Ok(v) => v, Err(e) => -(i64)e }}"); return 0;
+}

@@ -1,0 +1,4 @@
+fn main() { [3]i32 values={2,3,4}; i32* first=values; i32* second;
+ unsafe { first[0]=10; second=values; second[1]=20; }
+ []i32 view=values; unsafe { view[2]=30; }
+ println("{values[0]} {values[1]} {values[2]}"); return 0; }

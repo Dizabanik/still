@@ -1,21 +1,17 @@
-# Tuples & Destructuring
+# Tuples and destructuring
 
-Whisky provides first-class tuples and pattern destructuring. Tuples compile to canonical C-ABI struct layouts that scalarize directly into CPU registers via LLVM's Scalar Replacement of Aggregates (SROA).
+Whisky provides first-class tuples and pattern destructuring. Tuples compile to standard C aggregate layouts that scalarize directly into CPU registers during optimization passes.
 
----
+## First-class tuples
 
-## 1. First-Class Tuples
-
-A tuple groups heterogeneous values together without requiring an explicit struct definition:
+A tuple groups heterogeneous values together without requiring an explicit struct declaration:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    // Tuple literal
     let pair = (42, "hello", 3.14);
 
-    // Positional element access (.0, .1, .2)
     let int_part = pair.0;
     let str_part = pair.1;
     let flt_part = pair.2;
@@ -25,22 +21,26 @@ fn i32 main() {
 }
 ```
 
----
+Tuple fields can be accessed with dot-index notation (`pair.0`, `pair.1`) or underscore notation (`pair._0`, `pair._1`).
 
-## 2. Multi-Return Functions
+## Returning tuples from functions
 
-Functions can return tuples directly. Return types use tuple notation `(T1, T2, ...)`:
+Functions declare tuple return types using `(T1, T2, ...)`:
 
 ```wky
 import stdc;
 
-fn (i64, i64) stats([4]i64 items) {
+fn (i64, i64) minmax([4]i64 items) {
     let min_val = items[0];
     let max_val = items[0];
 
-    for i in 1..4 {
-        if items[i] < min_val { min_val = items[i]; }
-        if items[i] > max_val { max_val = items[i]; }
+    for (i in 1..4) {
+        if (items[i] < min_val) {
+            min_val = items[i];
+        }
+        if (items[i] > max_val) {
+            max_val = items[i];
+        }
     }
 
     return (min_val, max_val);
@@ -48,18 +48,16 @@ fn (i64, i64) stats([4]i64 items) {
 
 fn i32 main() {
     [4]i64 data = {12, 45, 3, 89};
-    let result = stats(data);
+    let bounds = minmax(data);
 
-    println("min={result.0} max={result.1}");
+    println("min={bounds.0} max={bounds.1}");
     return 0;
 }
 ```
 
----
+## Tuple destructuring
 
-## 3. Tuple Destructuring
-
-The `let (a, b) = tuple_expr;` syntax unpacks tuple members into local variables in a single statement:
+The `let (a, b) = tuple_expr;` syntax unpacks tuple elements into local variables:
 
 ```wky
 import stdc;
@@ -70,20 +68,18 @@ fn (str, i32) get_user() {
 
 fn i32 main() {
     let (name, age) = get_user();
-
     println("User: {name}, Age: {age}");
     return 0;
 }
 ```
 
----
+## Struct destructuring
 
-## 4. Struct Destructuring
+Whisky supports named, renamed, and positional destructuring for structs.
 
-Whisky also supports pattern destructuring for structs.
+### Named field destructuring
 
-### Named Field Destructuring
-Extract fields directly into local variables of the same name:
+Extract fields into local variables matching the field names:
 
 ```wky
 import stdc;
@@ -95,15 +91,16 @@ struct Point {
 
 fn i32 main() {
     let pt = Point { x: 100, y: 200 };
-
     let Point { x, y } = pt;
+
     println("x={x}, y={y}");
     return 0;
 }
 ```
 
-### Renamed Field Destructuring
-Bind extracted fields to different local variable names:
+### Renamed field destructuring
+
+Bind fields to custom local variable names using `:`:
 
 ```wky
 import stdc;
@@ -115,14 +112,15 @@ struct Point {
 
 fn i32 main() {
     let pt = Point { x: 15, y: 30 };
-
     let Point { x: px, y: py } = pt;
+
     println("px={px}, py={py}");
     return 0;
 }
 ```
 
-### Positional Struct Destructuring
+### Positional struct destructuring
+
 Unpack struct fields positionally in order of their declaration:
 
 ```wky
@@ -136,22 +134,29 @@ struct RGB {
 
 fn i32 main() {
     let color = RGB { r: 255, g: 128, b: 0 };
-
     let (red, green, blue) = color;
+
     println("R={red} G={green} B={blue}");
     return 0;
 }
 ```
 
----
+## Array destructuring
 
-## 5. Performance: Zero-Cost Scalarization
+Fixed-size arrays can be unpacked into individual elements positionally:
 
-Tuples and destructuring in Whisky produce zero runtime memory allocations or pointer indirections. LLVM scalarizes tuple components into machine registers:
+```wky
+import stdc;
 
+fn i32 main() {
+    [2]i32 coords = {10, 20};
+    let (x, y) = coords;
+
+    println("x={x} y={y}");
+    return 0;
+}
 ```
-mov w0, 42         ; first tuple element in register
-adrp x1, .strlit   ; second tuple element in register
-```
 
-In benchmark `b15_tuples`, 20,000,000 tuple creation and destructuring iterations execute in **0.034s**, matching hand-tuned C and Rust clock-for-clock.
+## Machine code scalarization
+
+Tuples and destructuring patterns do not allocate heap memory or introduce pointer indirection. During compilation, LLVM's scalar replacement pass decomposes tuple and struct components into independent SSA scalar values, placing them directly into CPU registers.

@@ -1,0 +1,13 @@
+pure fn i64 sum(ref<i64> values) { return values[0] + values[1]; }
+pure fn i64 width(ref<i64> values) { return mem_len(values); }
+fn main() {
+    owner<i64> values = own(2);
+    values[0] = 7;
+    values[1] = 11;
+    ref<i64> view = ref_of(values);
+    orbit total := sum(view);
+    println("{total} {width(view)}");
+    view[0] = 9;
+    println("{total} {width(view)}");
+    return 0;
+}

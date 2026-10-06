@@ -1,0 +1,6 @@
+i32 cleaned = 0;
+fn main() {
+ let task=brew { owner<i64> p=own(1); defer { cleaned += 1; } return 42; };
+ println("{sip(task)} {sip(task)} {cleaned} {mem_metric(2)}");
+ cancel(task); println("{allocated(task)} {cleaned}"); return 0;
+}

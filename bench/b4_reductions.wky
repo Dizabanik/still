@@ -4,7 +4,7 @@ import stdc;
 [262144]i32 xi;
 [131072]f32 xf;
 
-fn i32 main() {
+unsafe fn i32 main() {
     for (i32 i = 0; i < 262144; i += 1) { xi[i] = i % 977; }
     for (i32 i = 0; i < 131072; i += 1) {
         f32 fv = ((f32)i);

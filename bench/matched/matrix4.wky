@@ -1,6 +1,6 @@
 import stdc;
 // Inputs are runtime decimal integers: iterations, seed, active length (1..4096).
-fn i64 input(i32 arg) {
+unsafe fn i64 input(i32 arg) {
     // Decay the sized argv view to a C pointer for decimal parsing.
     char* text = std.process.arg_at(arg);
     i64 value = 0;
@@ -8,7 +8,7 @@ fn i64 input(i32 arg) {
     return value;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     i64 rounds=input(1); i64 seed=input(2); [16]i64 m; [4]i64 v;
     for(i64 i=0;i<16;i+=1) { m[i]=(i*7+seed)&15; }
     for(i64 i=0;i<4;i+=1) { v[i]=(seed+i)&65535; }

@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "requires an error payload|cannot allocate.*void|handler.*void"
+}

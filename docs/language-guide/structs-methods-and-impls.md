@@ -1,12 +1,10 @@
-# Structs, Methods & Impls
+# Structs, methods, and impl blocks
 
-Whisky uses explicit struct declarations combined with separate `impl` blocks for defining methods, associated functions, and associated constants.
+Whisky provides struct declarations for defining data layouts, with methods and associated functions declared in separate `impl` blocks.
 
----
+## Struct declarations and field initialization
 
-## 1. Struct Declarations & Field Defaults
-
-Structs define named collections of fields. Fields can have default initializers:
+Structs declare named fields with explicit types:
 
 ```wky
 import stdc;
@@ -14,29 +12,29 @@ import stdc;
 struct ServerConfig {
     str host;
     i32 port;
-    i32 max_conns;
+    i32 max_connections;
 }
 
 fn i32 main() {
     let cfg = ServerConfig {
         host: "127.0.0.1",
         port: 8080,
-        max_conns: 1000,
+        max_connections: 1000,
     };
 
-    println("Listening on {cfg.host}:{cfg.port} (max {cfg.max_conns})");
+    println("Listening on {cfg.host}:{cfg.port} (max {cfg.max_connections})");
     return 0;
 }
 ```
 
----
+Fields are laid out contiguously according to their natural data alignment.
 
-## 2. Methods and Receiver Semantics
+## Methods and receiver semantics
 
-Methods are defined inside `impl StructName` blocks. A method takes an explicit `self` receiver as its first parameter:
+Methods are defined inside an `impl StructName` block. The first parameter specifies how the instance is passed:
 
-* `self`: Passed by value (copied). Ideal for small, immutable types like vectors or coordinates.
-* `self*`: Passed by pointer (reference). Ideal for mutating the receiver in-place or avoiding copies of large structs.
+* `self`: Passed by value (copied). Used for small, read-only instances.
+* `self*`: Passed by pointer. Used to mutate the receiver in place or avoid copying large structures.
 
 ```wky
 import stdc;
@@ -47,24 +45,22 @@ struct Point {
 }
 
 impl Point {
-    // Value receiver (immutable)
-    fn f64 distance_sq(self) {
+    fn f64 distance_squared(self) {
         return self.x * self.x + self.y * self.y;
     }
 
-    // Pointer receiver (mutable in-place)
-    fn void scale(self*, f64 factor) {
-        self.x = self.x * factor;
-        self.y = self.y * factor;
+    fn void translate(self*, f64 dx, f64 dy) {
+        self.x += dx;
+        self.y += dy;
     }
 }
 
 fn i32 main() {
     let pt = Point { x: 3.0, y: 4.0 };
-    println("dist_sq = {pt.distance_sq():.1f}");
+    println("dist_sq = {pt.distance_squared():.1f}");
 
-    pt.scale(2.0);
-    println("scaled = ({pt.x:.1f}, {pt.y:.1f})");
+    pt.translate(2.0, 1.0);
+    println("translated = ({pt.x:.1f}, {pt.y:.1f})");
     return 0;
 }
 ```
@@ -72,14 +68,12 @@ fn i32 main() {
 Output:
 ```
 dist_sq = 25.0
-scaled = (6.0, 8.0)
+translated = (5.0, 5.0)
 ```
 
----
+## Associated functions and constructors
 
-## 3. Associated Functions & Constructors
-
-Functions defined in an `impl` block without a `self` receiver are **associated functions**. They are invoked using the type name directly (`StructName.func_name`):
+Functions declared in an `impl` block without a `self` parameter are associated functions. They are invoked using the type name:
 
 ```wky
 import stdc;
@@ -92,7 +86,6 @@ struct Matrix2 {
 }
 
 impl Matrix2 {
-    // Associated constructor
     fn Matrix2 identity() {
         return Matrix2 {
             m00: 1.0, m01: 0.0,
@@ -102,17 +95,15 @@ impl Matrix2 {
 }
 
 fn i32 main() {
-    let id = Matrix2.identity();
-    println("m00={id.m00:.1f} m11={id.m11:.1f}");
+    let mat = Matrix2.identity();
+    println("m00={mat.m00:.1f} m11={mat.m11:.1f}");
     return 0;
 }
 ```
 
----
+## Associated constants
 
-## 4. Associated Constants
-
-Constants scoped to a struct type are declared inside the `impl` block and accessed via `StructName.CONST_NAME`:
+Constants associated with a struct are declared inside the `impl` block and accessed via `StructName.CONSTANT_NAME`:
 
 ```wky
 import stdc;
@@ -123,50 +114,60 @@ struct Mat4 {
 
 impl Mat4 {
     const DIM = 4;
-    const SIZE = 16;
+    const TOTAL_ELEMENTS = 16;
 }
 
 fn i32 main() {
-    println("Mat4 Dimension: {Mat4.DIM}x{Mat4.DIM}, Size: {Mat4.SIZE}");
+    println("Dimension: {Mat4.DIM}x{Mat4.DIM}, Elements: {Mat4.TOTAL_ELEMENTS}");
     return 0;
 }
 ```
 
----
+## Struct embedding and promotion
 
-## 5. Struct Composition & Method Promotion
-
-Whisky supports composition by embedding one struct directly inside another without inheritance overhead. Methods from embedded structs are promoted to the enclosing struct automatically:
+Whisky supports struct composition through embedding. Placing an unadorned struct type as a field embeds that struct directly into the outer layout, promoting its fields and methods to the outer struct:
 
 ```wky
 import stdc;
 
-struct Position {
-    f64 x;
-    f64 y;
+struct Person {
+    str name;
+    u32 age;
 }
 
-impl Position {
-    fn void move_by(self*, f64 dx, f64 dy) {
-        self.x = self.x + dx;
-        self.y = self.y + dy;
+impl Person {
+    fn u32 get_age(self) {
+        return self.age;
+    }
+
+    fn void have_birthday(self*) {
+        self.age += 1;
     }
 }
 
-struct Entity {
-    i64 id;
-    Position pos;
+struct Employee {
+    Person;
+    u32 badge;
 }
 
 fn i32 main() {
-    let e = Entity {
-        id: 101,
-        pos: Position { x: 0.0, y: 0.0 },
+    Employee emp = Employee {
+        Person: Person { name: "Alice", age: 30 },
+        badge: 1042,
     };
 
-    // move_by is promoted from pos to Entity
-    e.pos.move_by(5.0, 10.0);
-    println("Entity {e.id} at ({e.pos.x:.1f}, {e.pos.y:.1f})");
+    println("Name: {emp.name}, Age: {emp.age}, Badge: {emp.badge}");
+    println("Method promotion: age={emp.get_age()}");
+
+    emp.have_birthday();
+    println("After birthday: age={emp.age}");
+
+    emp.Person.age = 25;
+    println("Explicit access: age={emp.Person.age}");
     return 0;
 }
 ```
+
+### Collision rules
+
+Direct fields and methods on the outer struct shadow promoted fields or methods with the same name. Promoted members from the embedded struct remain accessible by qualifying through the embedded type name (for example, `emp.Person.age`).

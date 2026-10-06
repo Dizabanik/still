@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <unistd.h>
 
 #define WKY_IO_BUF_SIZE 65536
@@ -110,7 +111,7 @@ void __wky_print_u64(uint64_t u) {
 void __wky_print_i64(int64_t v) {
     if (v < 0) {
         __wky_print_char('-');
-        __wky_print_u64((uint64_t)(-v));
+        __wky_print_u64(0 - (uint64_t)v);
     } else {
         __wky_print_u64((uint64_t)v);
     }
@@ -144,7 +145,7 @@ void __wky_print_pad_i64(int64_t v, int width, char pad_char) {
     uint64_t u;
     if (v < 0) {
         neg = 1;
-        u = (uint64_t)(-v);
+        u = 0 - (uint64_t)v;
     } else {
         u = (uint64_t)v;
     }
@@ -165,14 +166,29 @@ void __wky_print_pad_i64(int64_t v, int width, char pad_char) {
     int num_len = (int)((tmp + sizeof(tmp)) - p);
     int total_len = num_len + neg;
     int pad_len = width > total_len ? width - total_len : 0;
+    if ((size_t)total_len + (size_t)pad_len > WKY_IO_BUF_SIZE) {
+        if (neg && pad_char == '0') {
+            __wky_print_char('-');
+            neg = 0;
+        }
+        while (pad_len > 0) {
+            size_t chunk = (size_t)pad_len > WKY_IO_BUF_SIZE ? WKY_IO_BUF_SIZE : (size_t)pad_len;
+            __wky_ensure_cap(chunk);
+            memset(__wky_io_buf + __wky_io_pos, pad_char, chunk);
+            __wky_io_pos += chunk;
+            pad_len -= (int)chunk;
+        }
+        if (neg) __wky_print_char('-');
+        __wky_print_str(p, num_len);
+        return;
+    }
     __wky_ensure_cap((size_t)(total_len + pad_len));
     if (neg && pad_char == '0') {
         __wky_io_buf[__wky_io_pos++] = '-';
         neg = 0;
     }
-    while (pad_len-- > 0) {
-        __wky_io_buf[__wky_io_pos++] = pad_char;
-    }
+    memset(__wky_io_buf + __wky_io_pos, pad_char, (size_t)pad_len);
+    __wky_io_pos += (size_t)pad_len;
     if (neg) {
         __wky_io_buf[__wky_io_pos++] = '-';
     }
@@ -180,10 +196,29 @@ void __wky_print_pad_i64(int64_t v, int width, char pad_char) {
     __wky_io_pos += (size_t)num_len;
 }
 
+static void __wky_print_f64_format(double v, int prec, int fixed) {
+    char tmp[64];
+    int n = fixed ? snprintf(tmp, sizeof(tmp), "%.*f", prec, v) :
+                    snprintf(tmp, sizeof(tmp), "%g", v);
+    if (n <= 0) return;
+    if ((size_t)n < sizeof(tmp)) {
+        __wky_print_str(tmp, n);
+        return;
+    }
+    size_t capacity = (size_t)n + 1;
+    char *full = malloc(capacity);
+    if (!full) abort();
+    int written = fixed ? snprintf(full, capacity, "%.*f", prec, v) :
+                          snprintf(full, capacity, "%g", v);
+    if (written > 0 && (size_t)written < capacity) __wky_print_str(full, written);
+    free(full);
+}
+
 void __wky_print_f64_prec(double v, int prec) {
     if (!__wky_io_inited) __wky_io_init();
     if (prec == 2 && v >= -1e14 && v <= 1e14 && v == v) {
         if (v == 0.0) {
+            if (signbit(v)) __wky_print_char('-');
             __wky_print_str("0.00", 4);
             return;
         }
@@ -223,17 +258,9 @@ void __wky_print_f64_prec(double v, int prec) {
         __wky_io_pos += 2;
         return;
     }
-    char tmp[64];
-    int n = snprintf(tmp, sizeof(tmp), "%.*f", prec, v);
-    if (n > 0) {
-        __wky_print_str(tmp, n);
-    }
+    __wky_print_f64_format(v, prec, 1);
 }
 
 void __wky_print_f64(double v) {
-    char tmp[64];
-    int n = snprintf(tmp, sizeof(tmp), "%g", v);
-    if (n > 0) {
-        __wky_print_str(tmp, n);
-    }
+    __wky_print_f64_format(v, 0, 0);
 }

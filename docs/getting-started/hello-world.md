@@ -1,12 +1,10 @@
-# Hello World & First Steps
+# Hello world and basic workflow
 
-This guide walks through writing, compiling, and running your first Whisky program.
+This guide shows how to write, compile, and run a Whisky program.
 
----
+## Writing a first program
 
-## 1. Writing Your First Program
-
-Create a new file named `hello.wky`:
+Create a source file named `hello.wky`:
 
 ```wky
 import stdc;
@@ -17,35 +15,34 @@ fn i32 main() {
 }
 ```
 
-### Key Elements of the Program:
-* `import stdc;`: Imports standard C library definitions and hooks the runtime.
+The program includes the following components:
+* `import stdc;`: Imports C runtime declarations and hooks the standard I/O runtime.
 * `fn i32 main()`: The program entry point. Functions specify their return type before the function name.
-* `println(...)`: Built-in high-performance formatted printing with automatic newline appending.
-* `return 0;`: Returns status code `0` to the operating system.
+* `println(...)`: Formatted printing with an automatic trailing newline.
+* `return 0;`: Returns status code 0 to the host operating system.
 
----
-
-## 2. Compiling and Running
+## Compiling and executing
 
 Compile the source file into a native executable using `still`:
 
-```bash
+```sh
 still hello.wky -o hello
 ```
 
 Run the compiled executable:
 
-```bash
+```sh
 ./hello
-# Output:
-# Hello, Whisky!
 ```
 
----
+Output:
+```
+Hello, Whisky!
+```
 
-## 3. String Interpolation
+## String interpolation
 
-Whisky features first-class compile-time string interpolation. Expressions enclosed in `{}` are evaluated, formatted according to their concrete type, and printed without any runtime format-string parsing overhead:
+Expressions enclosed in `{}` inside string literals are evaluated and formatted according to their static types at compile time:
 
 ```wky
 import stdc;
@@ -54,44 +51,49 @@ fn i32 main() {
     let language = "Whisky";
     let version_major = 0;
     let version_minor = 1;
-    let speed_multiplier = 4.69;
+    let ratio = 3.14159;
 
     println("Language: {language} v{version_major}.{version_minor}");
-    println("Speedup vs C printf: {speed_multiplier:.2f}x");
+    println("Ratio formatted: {ratio:.2f}");
     return 0;
 }
 ```
 
-Compile and run:
+Running this program prints:
 
-```bash
-still hello.wky -o hello && ./hello
-# Output:
-# Language: Whisky v0.1
-# Speedup vs C printf: 4.69x
+```
+Language: Whisky v0.1
+Ratio formatted: 3.14
 ```
 
----
+## Common compiler options
 
-## 4. Compilation Modes
+Check syntax and types without generating object files or invoking the linker:
 
-`still` provides options for tuning compilation, safety, and optimization:
-
-### Development & Debugging
-Enable runtime bounds checking for all array and slice indexing:
-```bash
-still --bounds-check=always hello.wky -o hello
+```sh
+still --check hello.wky
 ```
 
-### Production Release
-Enable aggressive LLVM `-O3` optimizations and Link-Time Optimization (LTO):
-```bash
+Format source code in place:
+
+```sh
+still --format hello.wky
+```
+
+Enable full optimizations and link-time optimization:
+
+```sh
 still -O3 --lto hello.wky -o hello
 ```
 
-### Inspecting LLVM Bitcode
-To emit LLVM bitcode without invoking the system linker, pass `-c`:
-```bash
+Force runtime bounds checks on all array and slice indexing operations:
+
+```sh
+still --bounds-check=always hello.wky -o hello
+```
+
+Emit intermediate LLVM bitcode without linking:
+
+```sh
 still -c hello.wky
-# Generates output.bc
 ```

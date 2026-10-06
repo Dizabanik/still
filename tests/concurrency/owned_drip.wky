@@ -1,0 +1,4 @@
+i32 cleaned=0;
+fn drip work(owner<i64> p) { defer { cleaned += 1; } drop((i32)p[0]); return 8; }
+fn main() { owner<i64> p=own(1); p[0]=7; let task=work(move(p));
+ println("{sip(task)} {sip(task)} {sip(task)} {cleaned} {mem_metric(2)}"); return 0; }

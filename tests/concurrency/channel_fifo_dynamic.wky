@@ -1,0 +1,6 @@
+fn main() {
+ let capacity=3; chan<i64> pipe=make_chan(capacity);
+ i64 sum=0;
+ for (i64 i=0; i<10; i+=1) { pipe<-i; pipe<-(i+10); i64 a=<-pipe; i64 b=<-pipe; sum+=a*100+b; }
+ println("{sum} {pipe.count} {pipe.cap}"); release(pipe); println("{mem_metric(2)}"); return 0;
+}

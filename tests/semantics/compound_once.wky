@@ -1,0 +1,5 @@
+i64 calls = 0;
+fn i64 index() { calls += 1; return 0; }
+fn main() { [2]i64 x = {3,4}; x[index()] += 5;
+ owner<i64> y = own(1); y[0] = 8; y[index()] *= 2;
+ println("{calls} {x[0]} {y[0]}"); return 0; }

@@ -30,3 +30,5 @@ for workload in owner_tree owned_values; do
 done
 python3 scripts/bench_tools.py --still "$still" --verify-only \
   --json "$build_dir/tooling-verification.json"
+python3 scripts/bench_semantics.py --still "$still" --rounds 2048 --result-rounds 4096 \
+  --verify-only --json "$build_dir/semantics-verification.json"

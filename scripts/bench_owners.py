@@ -20,12 +20,12 @@ def verify(output,args,instrumented,workload='owner_tree'):
         checksum=(34*size*(size-1)+4*size*seed+138*size+seed)*trials
         allocations=(8+shape)*trials
         peak,cloned=64*size+136*shape,32*size*trials
-        checks=(12*size+2*int(size>0)+3*shape)*trials
+        checks=(12*size+int(size>0)+3*shape)*trials
     else:
         checksum=(17*size*(size-1)//2+size*seed)*trials
         allocations=2*((max(1,size) if shape==0 else size+1))*trials
         peak,cloned=80*size,40*size*trials
-        checks=(6*size+1 if shape==0 else 7*size+4)*trials if size else 0
+        checks=(6*size if shape==0 else 7*size+2)*trials if size else 0
     expected=[checksum,checksum+trials*int(size>0),allocations,allocations,0,peak,cloned]
     assert len(values)==9 and values[:7]==expected,(args,values,expected)
     assert values[7]>0 and values[8]==(checks if instrumented else UNAVAILABLE),(args,values,checks)

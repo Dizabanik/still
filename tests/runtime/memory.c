@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <stdlib.h>
 
 typedef struct { int64_t value; WkyRef child, other; } Node;
 static Node *node(WkyRef r, uint64_t i) {
@@ -255,11 +256,96 @@ static void *foreign(void *arg) {
     assert(__wky_mem_try_pin(arg) == NULL);
     return NULL;
 }
+
+typedef struct { int64_t tag; WkyRef payload; } Tagged;
+static const WkyOwnedField tagged_fields[]={
+    {offsetof(Tagged,payload),1,sizeof(WkyRef),NULL,0,1}
+};
+static const WkyValueLayout tagged_layout={sizeof(Tagged),1,tagged_fields};
+static int tagged_values(const char *test) {
+    if (strcmp(test,"tagged")) return 0;
+    Tagged scalar={.tag=1}, copy={0}, owned={0};
+    memset(&scalar.payload,0xa5,sizeof(scalar.payload)); /* inactive bits are not pointers */
+    assert(__wky_mem_value_clone(&copy,&scalar,&tagged_layout,NULL));
+    assert(!memcmp(&copy,&scalar,sizeof(copy)));
+    __wky_mem_value_drop(&copy,&tagged_layout);
+    assert(__wky_mem_alloc(&owned.payload,1,8));
+    *(uint64_t *)__wky_mem_address(owned.payload.descriptor,owned.payload.generation,0,8,0,8)=91;
+    __wky_mem_budget(0);
+    assert(!__wky_mem_value_clone(&copy,&owned,&tagged_layout,NULL));
+    assert(__wky_mem_metric(WKY_MEM_LIVE_BYTES)==8);
+    __wky_mem_budget(UINT64_MAX);
+    assert(__wky_mem_value_clone(&copy,&owned,&tagged_layout,NULL));
+    assert(copy.payload.descriptor!=owned.payload.descriptor);
+    assert(*(uint64_t *)__wky_mem_address(copy.payload.descriptor,copy.payload.generation,0,8,0,8)==91);
+    __wky_mem_value_store(&copy,&scalar,&tagged_layout,NULL);
+    __wky_mem_value_drop(&owned,&tagged_layout);
+    __wky_mem_value_drop(&copy,&tagged_layout);
+    assert(__wky_mem_metric(WKY_MEM_LIVE_BYTES)==0);
+    puts("memory runtime: verified"); return 1;
+}
+static WkyRef *cleanup_target;
+static Tagged *cleanup_value;
+static const char *cleanup_action;
+static unsigned resource_destroys;
+static void resource_destroy(void *resource) {
+    ++resource_destroys;
+    free(resource);
+    if (!strcmp(cleanup_action,"resource_drop_reentry") ||
+        !strcmp(cleanup_action,"resource_store_reentry") ||
+        !strcmp(cleanup_action,"resource_shrink_reentry")) __wky_mem_drop(cleanup_target);
+    else if (!strcmp(cleanup_action,"resource_value_reentry"))
+        __wky_mem_value_drop(cleanup_value,&tagged_layout);
+    else {
+        WkyRef local;
+        assert(__wky_mem_alloc(&local,1,8));
+        __wky_mem_drop(&local); /* independent nested cleanup may reuse a retired descriptor */
+    }
+}
+static int resources(const char *test) {
+    if (strncmp(test,"resource",8)) return 0;
+    cleanup_action=test;
+    WkyRef handle={0}, parent={0}, incoming={0};
+    void *resource=malloc(8); assert(resource);
+    assert(__wky_mem_adopt(&handle,resource,resource_destroy));
+    WkyRef old_handle=handle;
+    if (!strcmp(test,"resource_pin")) {
+        assert(__wky_mem_pin(&handle)==resource);
+        __wky_mem_drop(&handle); return 99;
+    }
+    if (!strcmp(test,"resource_clone")) { __wky_mem_clone(&incoming,&handle); return 99; }
+    if (!strcmp(test,"resource_drop_reentry")) {
+        cleanup_target=&handle; __wky_mem_drop(&handle); return 99;
+    }
+    if (!strcmp(test,"resource_value_reentry")) {
+        Tagged value={.payload=handle}; cleanup_value=&value;
+        __wky_mem_value_drop(&value,&tagged_layout); return 99;
+    }
+    assert(__wky_mem_alloc(&parent,1,sizeof(Tagged)));
+    Tagged *slot=__wky_mem_address(parent.descriptor,parent.generation,0,parent.extent,0,sizeof(Tagged));
+    __wky_mem_store_owner(&slot->payload,&handle,&parent);
+    if (!strcmp(test,"resource_store_reentry")) {
+        cleanup_target=&parent; __wky_mem_store_owner(&slot->payload,&incoming,&parent); return 99;
+    }
+    if (!strcmp(test,"resource_shrink_reentry")) {
+        cleanup_target=&parent; __wky_mem_resize(&parent,0,sizeof(Tagged)); return 99;
+    }
+    assert(!strcmp(test,"resource"));
+    __wky_mem_value_clear(slot,&tagged_layout,&parent);
+    assert(resource_destroys==1 && __wky_mem_try_pin(&old_handle)==NULL);
+    __wky_mem_drop(&parent);
+    assert(__wky_mem_metric(WKY_MEM_LIVE_BYTES)==0);
+    assert(__wky_mem_metric(WKY_MEM_ALLOCATIONS)==__wky_mem_metric(WKY_MEM_FREES));
+    puts("memory runtime: verified"); return 1;
+}
+
 int main(int argc, char **argv) {
     assert(argc == 2);
     const char *test = argv[1];
     if (nested(test)) return 0;
     if (values(test)) return 0;
+    if (tagged_values(test)) return 0;
+    if (resources(test)) return 0;
     WkyRef a, b, r, s;
     assert(__wky_mem_alloc(&a, 4, sizeof(int64_t)));
     r = a;

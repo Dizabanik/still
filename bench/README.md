@@ -79,6 +79,8 @@ python3 scripts/bench_memory.py --still ./build-cmake/still --workload subobject
 python3 scripts/bench_owners.py --still ./build-cmake/still --verify-only
 python3 scripts/bench_owners.py --still ./build-cmake/still --workload owned_values --trials 64 --json build/owned-values-benchmark.json
 python3 scripts/bench_tools.py --still ./build-cmake/still --verify-only
+python3 scripts/bench_semantics.py --still ./build-cmake/still --verify-only
+python3 scripts/bench_semantics.py --still ./build-cmake/still --json build/semantics-benchmark.json
 ```
 
 The reference and field-view walks compare Whisky and C using the same descriptor runtime, reference ABI, initialization, and arithmetic policy. Each has an independent Python checksum oracle, 80 boundary runs, and eight separately instrumented cases. The field-view walk constructs two bounded references per iteration into a 32-byte row. Checked mode performs four indexed validations per iteration. Stable mode performs zero indexed validations, but acquires two guards per iteration plus one outer guard. This workload includes that guard cost; it does not assume stability always improves speed.
@@ -102,3 +104,40 @@ Managed timings use seven samples and two warmups by default. Reports preserve n
 [future-contracts.json](future-contracts.json) specifies workloads, input distributions, correctness oracles, and required metrics for every proposed language area. It is linked from [future compiler acceptance cases](../tests/future-contracts.json).
 
 The plan includes per-access checked references versus inferred/explicit stability, descriptor reuse, cyclic arenas, resize invalidation, ownership moves/clones, noalloc effects, typed error paths, strings/C conversion, FFI, synchronization/transfer, shaped numerics and compiler tooling. It asks for allocation/check counts and peak memory where relevant, as well as time. Counters and native implementations must exist before those entries become measurements; no fabricated placeholder timings are reported.
+
+## Typed values and ownership transfer
+
+`bench_semantics.py` builds fresh Whisky/C pairs at O0, O2 and O3, instrumented
+O3 pairs, and separate untimed C ASan/UBSan builds. Five boundary inputs per
+binary include empty work, all failures/scalars, non-power-of-two channel sizes,
+partial batches and ring wraparound. The three workloads are:
+
+- `typed_result`: two function boundaries with `result<u64,u64>` and `try`,
+  a runtime failure period, and independent success/error checksum formulas.
+- `owned_enum`: a 40-byte union alternates scalar garbage pointer bits and an
+  owned buffer. Clone and consuming match check independence and active-tag cleanup.
+- `owned_channel`: owned buffers cross a FIFO ring under the same batch schedule
+  in both languages. Requested capacity stays exact, backing storage rounds up,
+  and a position-weighted checksum detects ordering errors.
+
+The C ownership pairs inline the same runtime and use the same ABI, zero
+initialization, checks, transfer and drop policy. Instrumented runs must match
+allocation/free/peak/cloned-byte/validation counters as well as their independent
+Python oracle. Instrumentation, sanitizers, builds and oracles are excluded from
+reported timings; normal runs use fresh processes, balanced randomized order,
+warmups, samples, median/MAD, individual peak RSS, hashes and compiler versions.
+These workloads measure the specified whole process. The channel workload does
+not measure coroutine suspension or cross-thread scheduling. Scalar result
+propagation allocates no heap storage; owning payloads allocate explicitly.
+
+Use `--rounds` for owning workloads and `--result-rounds` for the scalar workload.
+Defaults are two million owning iterations and 100 million scalar iterations;
+increase them when the reported duration is too short for your machine.
+Durations below 50 ms and MAD over 5% are flagged. CI runs verification only,
+including all optimization levels; it imposes no performance threshold.
+
+Compound assignments now evaluate their target once. C comparison sources use
+the same already-validated address for reading the old value, and ownership
+counter formulas account for that reduced validation count. Runtime resource
+adoption affects descriptor accounting. Opaque coroutine frame bytes are not
+included in managed payload-byte metrics; those require allocator/RSS measurements.

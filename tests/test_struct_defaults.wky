@@ -9,6 +9,8 @@ struct Config {
 
 struct Offset { i32 dx; i32 dy; }
 
+#[unsafe]
+
 fn i32 main() {
     // All defaults
     Config a = { };

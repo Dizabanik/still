@@ -9,7 +9,7 @@ impl Mat4 {
     const SIZE = 16;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 20000000;
     [Mat4.SIZE]i64 m;
     for (i64 i = 0; i < Mat4.SIZE; i += 1) {

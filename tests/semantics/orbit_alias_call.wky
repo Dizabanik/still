@@ -1,0 +1,9 @@
+pure fn i64 twice(i64 n) { return n * 2; }
+fn void update(ref<i64> p) { p[0] = 11; }
+fn main() {
+ owner<i64> x = own(1); x[0] = 3;
+ orbit derived := twice(x[0]); println("{derived}");
+ let p = ref_of(x); update(p); println("{derived}");
+ { let x = 99; println("{derived} {x}"); }
+ p[0] = 7; println("{derived}"); return 0;
+}

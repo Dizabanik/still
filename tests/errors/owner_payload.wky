@@ -1,1 +1,8 @@
-enum Value { Owned(owner<i64>), Empty } fn main() { return 0; }
+enum Value { Owned(owner<i64>), Empty }
+fn main() {
+ { owner<i64> p=own(1); p[0]=42; Value a=Value.Owned(move(p));
+   Value copied=clone(a);
+   println("{match move(a) { Owned(v)=>v[0], Empty=>0 }}");
+   println("{match move(copied) { Owned(v)=>v[0], Empty=>0 }}"); }
+ println("{mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0;
+}

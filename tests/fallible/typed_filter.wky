@@ -1,0 +1,6 @@
+struct Error { i64 code; }
+fn result<i64,Error> fail() { return err(Error{code:17}); }
+fn main() {
+ filter { let v = try(fail()); println("unexpected {v}"); }
+ dregs(Error e) { println("{e.code}"); } return 0;
+}

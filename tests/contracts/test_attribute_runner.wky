@@ -1,6 +1,9 @@
 #[test]
+#[unsafe]
 fn check_value() { if (6 * 7 != 42) { std.process.exit(1); } }
 #[ignore]
 #[test]
+#[unsafe]
 fn ignored() { std.process.exit(8); }
+#[unsafe]
 fn i32 main() { println("wrong entry"); return 0; }

@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "propagation requires a matching fallible return type"
+}

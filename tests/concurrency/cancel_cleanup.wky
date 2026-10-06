@@ -1,0 +1,6 @@
+i32 cleaned = 0;
+fn main() {
+ { let task=brew { owner<i64> p=own(1); p[0]=7; defer { cleaned += 1; } drop(3); println("unexpected"); };
+   println("{sip(task)} {cleaned}"); }
+ println("{cleaned} {mem_metric(2)}"); return 0;
+}

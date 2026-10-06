@@ -1,6 +1,6 @@
 import stdc;
 
-fn i64 sum_slice([]i64 s) {
+unsafe fn i64 sum_slice([]i64 s) {
     i64 total = 0;
     for (v in s) {
         total += v;
@@ -8,13 +8,13 @@ fn i64 sum_slice([]i64 s) {
     return total;
 }
 
-fn void transform_slice([]i64 s, i64 delta) {
+unsafe fn void transform_slice([]i64 s, i64 delta) {
     for (i in 0..((i64)s.len)) {
         s[i] = (s[i] * 3 + delta) & 65535;
     }
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 50000;
     [1024]i64 buf;
     for (i in 0..1024) {

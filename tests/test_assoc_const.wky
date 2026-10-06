@@ -8,6 +8,8 @@ impl Mat4 {
     const SCALE = 10;
 }
 
+#[unsafe]
+
 fn int main() {
     let dim = Mat4.DIM;
     let eps = Mat4.EPSILON;

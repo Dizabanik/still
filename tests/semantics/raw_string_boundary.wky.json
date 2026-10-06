@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "printing a raw C string requires an unsafe block"
+}

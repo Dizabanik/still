@@ -1,0 +1,1 @@
+fn main() { option<i64> x=some(2); return match x { Some(v)=>v }; }

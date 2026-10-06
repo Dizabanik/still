@@ -5,6 +5,8 @@
 // OPT: 0
 import stdc;
 
+#[unsafe]
+
 fn i32 main() {
     let a = "wky";
     let b = "coffee";

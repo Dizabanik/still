@@ -1,0 +1,3 @@
+owner<handle> handles=own(1);
+fn drip work() { defer {release(handles);} drop(1); }
+fn main() { handles[0]=work(); sip(handles[0]); handles[0]=work(); return 0; }

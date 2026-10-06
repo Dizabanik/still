@@ -1,0 +1,1 @@
+fn main() { let x=2, y=10; [3]i32 values={x,y,x+y}; println("{values[0]} {values[1]} {values[2]}"); return 0; }

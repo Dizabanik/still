@@ -1,6 +1,6 @@
 import stdc;
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 50000;
     [1024]i64 buf;
     for (i in 0..1024) {

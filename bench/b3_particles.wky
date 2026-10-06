@@ -16,7 +16,7 @@ pure fn f64 accel(f64 d) {
     return d * 9.8 - 0.01 * d * d;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     for (i32 i = 0; i < N; i += 1) {
         parts[i].x = (f64)i * 0.001;
         parts[i].y = (f64)(i & 1023) * 0.5;

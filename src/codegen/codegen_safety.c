@@ -142,6 +142,10 @@ static int origin_flow(LLVMValueRef v,LLVMValueRef origin,const unsigned *indice
     }
     if (!origin && LLVMIsAAllocaInst(v)) return 1;
     if (!LLVMIsAInstruction(v)) return 0;
+    /* A same-allocation pointer difference is a scalar element count. The
+     * source operation is unsafe; the compiler stamps only this subtraction,
+     * never a pointer-to-integer cast that could retain an address. */
+    if (LLVMGetMetadata(v,LLVMGetMDKindIDInContext(LLVMGetTypeContext(LLVMTypeOf(v)),"wky.pointer.diff",16))) return 0;
     int entered=enter_flow(v,origin,indices,count,path,depth);
     if (entered<=0) return entered<0;
     if (entered==2) {
@@ -236,6 +240,14 @@ static int local_flow(LLVMValueRef value,LLVMValueRef unused,FlowPath *path,unsi
     return origin_flow(value,NULL,NULL,0,path,depth);
 }
 
+static int pure_runtime_read(LLVMValueRef callee) {
+	if (!LLVMIsAFunction(callee) || LLVMGetStringAttributeAtIndex(callee,
+			LLVMAttributeFunctionIndex,"wky.source",sizeof("wky.source")-1)) return 0;
+	const char *name=LLVMGetValueName(callee);
+	if (!strcmp(name,"__wky_mem_address") || !strcmp(name,"__wky_mem_capacity")) return 1;
+	if (!strcmp(name,"__wky_mem_view") || !strcmp(name,"__wky_mem_slice") || !strcmp(name,"__wky_mem_offset")) return 2;
+	return 0;
+}
 static int permitted_pure_call(LLVMValueRef call) {
 	LLVMValueRef callee = LLVMGetCalledValue(call);
 	if (!LLVMIsAFunction(callee))
@@ -244,6 +256,11 @@ static int permitted_pure_call(LLVMValueRef call) {
 									  "wky.pure", sizeof("wky.pure") - 1))
 		return 1;
 	const char *name = LLVMGetValueName(callee);
+	/* Checked reads preserve the same source-level effect as raw reads. The
+	 * optional diagnostic counters are instrumentation, not user mutations.
+	 * Helpers constructing a view may only write the caller's local output. */
+	int read=pure_runtime_read(callee);
+	if (read) return read==1 || local_address(LLVMGetArgOperand(call,0),0);
 	// Memory intrinsics may only write local storage. Arithmetic/debug/lifetime
 	// intrinsics have no observable writes. Trap remains an allowed failure.
 	if (strncmp(name, "llvm.memcpy.", 12) == 0 ||
@@ -267,6 +284,8 @@ static int permitted_pure_call(LLVMValueRef call) {
  * Returning a parameter is distinct from retaining it: an identity helper may
  * return a local view to its caller, but the caller still cannot export it. */
 static int nonretaining_leaf(const char *name) {
+	/* Embedded Darwin libc calls carry LLVM's explicit assembler-name prefix. */
+	if (name[0] == '\1' && name[1] == '_') name += 2;
 	const char *known[]={"memcmp","memcpy","memmove","memset","strlen","strcmp",
 		"strncmp","strchr","strrchr","printf","fprintf","sprintf","snprintf",
 		"puts","putchar","fwrite","fread","read","write","abort","free",NULL};
@@ -290,8 +309,8 @@ static int ast_carries_address(StillCompiler *c,Type *type,unsigned depth) {
             if (ast_carries_address(c,def->fields[i].ast_type,depth+1)) return 1;
         return 0;
     }
-    case TYPE_ENUM: {
-        ASTNode *en=find_enum_decl(c,type->name);
+    case TYPE_ENUM: case TYPE_OPTION: case TYPE_RESULT: {
+        ASTNode *en=wky_tagged_decl(c,type);
         for (EnumVariant *v=en ? en->data.enum_decl.variants : NULL; v; v=v->next)
             for (int i=0; i<v->payload_count; ++i)
                 if (ast_carries_address(c,v->payload_types[i],depth+1)) return 1;
@@ -314,15 +333,18 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 	if (!LLVMIsAFunction(fn) || depth==128) { snprintf(trace,capacity,"%s",name); return 1; }
 	/* Compiler-owned runtime slots are borrowed for the call. Descriptor
 	 * pointers copied out of a slot refer to process-lived metadata, never
-	 * the caller's slot. Source functions cannot acquire this exception. */
+	 * the caller's slot. Printing copies bytes, not the source pointer.
+	 * Source functions cannot acquire these exceptions. */
 	if (!LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,"wky.source", sizeof("wky.source") - 1)) {
 		const char *runtime[]={"__wky_mem_alloc","__wky_mem_drop","__wky_mem_clone",
+			"__wky_mem_adopt",
 			"__wky_mem_resize","__wky_mem_capacity","__wky_mem_address","__wky_mem_slice",
 			"__wky_mem_pin","__wky_mem_try_pin","__wky_mem_unpin","__wky_mem_arena",
             "__wky_mem_arena_alloc","__wky_mem_remove","__wky_mem_store_owner",
             "__wky_mem_take","__wky_mem_write_address","__wky_mem_replace","__wky_mem_view",
             "__wky_mem_value_drop","__wky_mem_value_take","__wky_mem_value_store",
-            "__wky_mem_value_clone","__wky_mem_value_clear",NULL};
+            "__wky_mem_value_clone","__wky_mem_value_clear",
+            "__wky_print_str","__wky_print_cstr",NULL};
 		for (unsigned i=0; runtime[i]; ++i) if (!strcmp(name,runtime[i])) return 0;
 	}
 	if (!LLVMCountBasicBlocks(fn) && nonretaining_leaf(name)) return 0;
@@ -361,7 +383,14 @@ static int retention_trace(LLVMValueRef fn, unsigned parameter, int include_retu
 
 void wky_verify_safety(StillCompiler *c, LLVMTargetMachineRef machine) {
     wky_verify_effects(c);
-    LLVMModuleRef copy = LLVMCloneModule(c->module);
+	LLVMModuleRef copy = LLVMCloneModule(c->module);
+	/* Preserve trusted read-validation boundaries in this analysis copy.
+	 * Inlining them exposes TLS setup and optional metric increments as if
+	 * the source pure function had explicitly mutated application memory.
+	 * Production optimization keeps all original inlining attributes. */
+	unsigned always_inline=LLVMGetEnumAttributeKindForName("alwaysinline",12);
+	for (LLVMValueRef fn=LLVMGetFirstFunction(copy); fn; fn=LLVMGetNextFunction(fn))
+		if (pure_runtime_read(fn)) LLVMRemoveEnumAttributeAtIndex(fn,LLVMAttributeFunctionIndex,always_inline);
     /* Keep every source body available, including unused always-inline
      * accessors, so normalization cannot erase an invalid source contract. */
     for (LLVMValueRef fn=LLVMGetFirstFunction(copy); fn; fn=LLVMGetNextFunction(fn)) {
@@ -412,11 +441,12 @@ void wky_verify_safety(StillCompiler *c, LLVMTargetMachineRef machine) {
 					 LLVMIsAAtomicRMWInst(in) || LLVMIsAAtomicCmpXchgInst(in) ||
 					 LLVMIsAFenceInst(in) ||
 					 (LLVMIsALoadInst(in) && LLVMGetVolatile(in)))) {
+					const char *effect=LLVMIsACallInst(in) ? LLVMGetValueName(LLVMGetCalledValue(in)) : "non-local memory mutation";
 					still_diag_error_at(STILL_E_SEMANTIC, c->source_filename, NULL,
 								   line,
 								   "pure function `%s` has an external write "
-								   "or an unverified call effect",
-								   LLVMGetValueName(fn));
+								   "or an unverified call effect (%s)",
+								   LLVMGetValueName(fn),*effect ? effect : "indirect call");
 					exit(1);
 				}
 				LLVMValueRef value = NULL;

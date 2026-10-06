@@ -1,0 +1,3 @@
+#[noalloc]
+fn void remove_view(ref<i64> view) { remove(view); }
+fn main() { return 0; }

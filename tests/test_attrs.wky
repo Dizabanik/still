@@ -3,20 +3,25 @@
 import stdc;
 
 /// Doubles the input.
+#[unsafe]
 fn i32 twice(i32 x) {
     return x * 2;
 }
 
 #[test]
+#[unsafe]
 fn check_twice() {
     if (twice(21) != 42) { std.process.exit(1); }
 }
 
 #[ignore]
 #[test]
+#[unsafe]
 fn check_ignored() {
     std.process.exit(7);
 }
+
+#[unsafe]
 
 fn i32 main() {
     stdc.printf("%d\n", twice(10));

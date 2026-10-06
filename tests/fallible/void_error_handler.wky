@@ -1,0 +1,2 @@
+fn result<i32,void> empty() { return err(); }
+fn main() { filter {let value=try(empty());} dregs(void error) {} return 0; }

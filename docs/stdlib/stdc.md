@@ -1,66 +1,69 @@
-# Standard Library: `stdc`
+# Standard library: `stdc`
 
-The `stdc` module provides direct, zero-overhead access to the host C standard library and POSIX environment.
+The `stdc` module provides access to the host C standard library and POSIX runtime symbols.
 
----
+## Built-in declarations
 
-## 1. Overview
-
-Whisky treats the C standard library as its primary native FFI surface. Importing `stdc` makes standard C symbols callable directly from Whisky code without boilerplate wrapper stubs or overhead:
+Importing `stdc` makes standard C runtime functions callable through compiler-provided prototypes:
 
 ```wky
 import stdc;
 
+#[unsafe]
 fn i32 main() {
     let s = "Hello from Whisky";
-    let len = stdc.strlen(s);
+    let len = strlen(s);
 
-    println("String length via stdc.strlen: {len}");
+    println("String length: {len}");
     return 0;
 }
 ```
 
----
+Raw foreign calls require an unsafe context (`unsafe fn`, `#[unsafe]`, or an `unsafe { ... }` block). Callers must provide valid pointers, buffer sizes, and lifetimes.
 
-## 2. Common Functions
+### Memory management
 
-### Memory Allocation & Copying
 ```wky
 import stdc;
 
+#[unsafe]
 fn i32 main() {
-    // Allocate 1024 bytes of heap memory
-    let ptr = stdc.malloc(1024);
+    char* buf = malloc(1024);
+    memset(buf, 0, 1024);
+    free(buf);
 
-    // Fill memory
-    stdc.memset(ptr, 0, 1024);
-
-    // Free memory
-    stdc.free(ptr);
-
-    println("Memory allocated and freed successfully");
+    println("Memory allocated and freed");
     return 0;
 }
 ```
 
-### Mathematical Functions
+## External function declarations
+
+Foreign C functions outside the built-in standard set are declared using `extern "c"`:
+
 ```wky
 import stdc;
 
-fn i32 main() {
-    let angle = 0.785398; // pi / 4
-    let s = stdc.sin(angle);
-    let c = stdc.cos(angle);
+extern "c" fn f64 sqrt(f64 x);
+extern "c" fn i32 abs(i32 n);
 
-    println("sin={s:.4f} cos={c:.4f}");
+#[unsafe]
+fn i32 main() {
+    let root = sqrt(16.0);
+    let val = abs(-42);
+
+    println("sqrt={root:.1f} abs={val}");
     return 0;
 }
 ```
 
----
+Output:
+```
+sqrt=4.0 abs=42
+```
 
-## 3. ABI & Codegen Guarantees
+## ABI and lowering properties
 
-* **Exact Prototype Mapping**: Known standard C library functions (`strlen`, `strcpy`, `memcpy`, `memcmp`, `memset`, `puts`) are declared with their exact platform signatures in the LLVM module, ensuring correct register routing on x86-64 and ARM64.
-* **Direct Symbol Calls**: Function invocations compile directly to single `call` or `bl` assembly instructions without runtime shims or marshalling layers.
-* **Optimizer Cooperation**: LLVM recognizes standard C library symbols and can fold constant inputs (e.g. `strlen("abc")` folds to `3` at compile time).
+* Exact signatures: Built-in declarations (`strlen`, `memcpy`, `memset`, `malloc`, `free`) map directly to platform C calling conventions on x86-64 and ARM64.
+* Direct calls: Foreign invocations compile directly to platform call instructions without runtime wrapper shims.
+* Optimization: LLVM recognizes standard C library symbols and can fold constant inputs, such as evaluating `strlen("abc")` to `3` at compile time.

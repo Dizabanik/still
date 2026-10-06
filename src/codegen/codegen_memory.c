@@ -2,14 +2,15 @@
 static void error(StillCompiler *c, ASTNode *n, const char *message);
 
 int wky_is_managed(Type *t) {
-    return t && (t->kind == TYPE_OWNER || t->kind == TYPE_REF || t->kind == TYPE_ARENA);
+    return t && (t->kind == TYPE_OWNER || t->kind == TYPE_REF || t->kind == TYPE_ARENA || t->kind==TYPE_HANDLE);
 }
 int wky_is_owner(Type *t) {
-    return t && (t->kind == TYPE_OWNER || t->kind == TYPE_ARENA);
+    return t && (t->kind == TYPE_OWNER || t->kind == TYPE_ARENA || t->kind==TYPE_HANDLE);
 }
 static int contains(StillCompiler *c, Type *t, int owners_only, Type **path, unsigned depth) {
     if (!t) return 0;
     t = wky_resolve_type(c, t);
+    if (t->kind==TYPE_CHAN) return 1; /* channel owns its ring and queued messages */
     if (owners_only ? wky_is_owner(t) : wky_is_managed(t)) return 1;
     if (t->kind == TYPE_REF) return 0; /* its referent is not embedded */
     for (unsigned i=0; i<depth; ++i)
@@ -33,7 +34,7 @@ static int contains(StillCompiler *c, Type *t, int owners_only, Type **path, uns
             for (int i=0; i<v->payload_count; ++i)
                 if (contains(c,v->payload_types[i],owners_only,path,depth+1)) return 1;
     }
-    return contains(c,t->inner,owners_only,path,depth+1);
+    return contains(c,t->inner,owners_only,path,depth+1) || contains(c,t->error,owners_only,path,depth+1);
 }
 int wky_contains_managed(StillCompiler *c, Type *t, int owners_only) {
     Type *path[128];
@@ -45,6 +46,13 @@ Type *wky_expr_type(StillCompiler *c, ASTNode *n) {
     if (n->type == NODE_VAR_REF) {
         Scope *s = scope_find(c, n->data.var_ref.name);
         if (s && s->node) n->data_type = s->node->data_type;
+    }
+    if (n->type==NODE_CALL && n->data.call.callee && n->data.call.callee->type==NODE_VAR_REF) {
+        const char *name=n->data.call.callee->data.var_ref.name;
+        if (!strcmp(name,"try")) {
+            Type *input=wky_expr_type(c,n->data.call.args);
+            if (input && (input->kind==TYPE_RESULT || input->kind==TYPE_OPTION)) n->data_type=input->inner;
+        }
     }
     if (n->type==NODE_BINARY_OP) {
         Type *left=wky_expr_type(c,n->data.bin_op.left), *right=wky_expr_type(c,n->data.bin_op.right);
@@ -67,6 +75,10 @@ Type *wky_expr_type(StillCompiler *c, ASTNode *n) {
     }
     if (n->type == NODE_MEMBER_ACCESS) {
         Type *base=wky_expr_type(c,n->data.member_access.object);
+        if (base && base->kind==TYPE_CHAN) {
+            n->data_type=arena_alloc(c->arena,sizeof(Type));
+            n->data_type->kind=!strcmp(n->data.member_access.member,"closed") ? TYPE_BOOL : TYPE_I64;
+        }
         if (base && base->kind==TYPE_STRUCT) {
             LLVMTypeRef type=get_llvm_type(c,base);
             for (unsigned depth=0; depth<16; ++depth) {
@@ -88,7 +100,7 @@ Type *wky_expr_type(StillCompiler *c, ASTNode *n) {
 void wky_check_value_type(StillCompiler *c, ASTNode *n, Type *type) {
     type=wky_resolve_type(c,type);
     if (!wky_is_owner(type) && wky_contains_managed(c,type,1) &&
-        type->kind!=TYPE_STRUCT && type->kind!=TYPE_ARRAY) {
+        type->kind!=TYPE_STRUCT && type->kind!=TYPE_ARRAY && !wky_is_tagged(type) && type->kind!=TYPE_CHAN) {
         error(c,n,"owned values require owner, arena, struct or fixed array types");
     }
 }
@@ -110,6 +122,14 @@ static LLVMValueRef call_runtime(StillCompiler *c, ASTNode *node,const char *nam
     }
     LLVMValueRef call=LLVMBuildCall2(c->builder,LLVMGlobalGetValueType(fn),fn,args,count,
                                     LLVMGetTypeKind(ret)==LLVMVoidTypeKind ? "" : "memory");
+    if (node && node->type==NODE_CALL && (strstr(name,"drop") || strstr(name,"clear") || strstr(name,"resize") || !strcmp(name,"__wky_mem_remove"))) {
+        Type *type=wky_expr_type(c,node->data.call.args);
+        /* Removing even a scalar subview can destroy its entire arena object,
+         * including resource fields outside that view's static type. */
+        Type arena_type={.kind=TYPE_ARENA};
+        if (!strcmp(name,"__wky_mem_remove")) type=&arena_type;
+        wky_mark_cleanup_effect(c,call,type);
+    }
     if (strcmp(name,"__wky_mem_metric") && strcmp(name,"__wky_mem_budget")) {
         const char *kind=!strcmp(name,"__wky_mem_address") ? "lifetime_and_bounds" :
             !strcmp(name,"__wky_mem_write_address") ? "lifetime_and_extent" :
@@ -137,9 +157,17 @@ static LLVMValueRef element_size(StillCompiler *c, Type *type) {
 static int managed_element(StillCompiler *c, Type *t, int depth) {
     if (!t || depth>64) return 0;
     t=wky_resolve_type(c,t);
-    if (t->kind==TYPE_OWNER || t->kind==TYPE_REF ||
+    if (t->kind==TYPE_OWNER || t->kind==TYPE_REF || t->kind==TYPE_HANDLE ||
         (t->kind>=TYPE_BOOL && t->kind<=TYPE_F64)) return 1;
     if (t->kind==TYPE_ARRAY) return managed_element(c,t->inner,depth+1);
+    if (t->kind==TYPE_CHAN) return managed_element(c,t->inner,depth+1);
+    if (wky_is_tagged(t)) {
+        ASTNode *en=wky_tagged_decl(c,t);
+        for (EnumVariant *v=en ? en->data.enum_decl.variants : NULL; v; v=v->next)
+            for (int i=0; i<v->payload_count; ++i)
+                if (!managed_element(c,v->payload_types[i],depth+1)) return 0;
+        return en!=NULL;
+    }
     if (t->kind==TYPE_STRUCT) {
         StructDef *sd=find_struct_def_pub(c,get_llvm_type(c,t));
         if (!sd) return 0;
@@ -164,8 +192,8 @@ static LLVMValueRef spill(StillCompiler *c, LLVMValueRef value) {
     LLVMBuildStore(c->builder, value, slot);
     return slot;
 }
-void wky_memory_cleanup(StillCompiler *c, LLVMValueRef slot, int unpin) {
-    call_runtime(c,NULL, unpin ? "__wky_mem_unpin" : "__wky_mem_drop",
+LLVMValueRef wky_memory_cleanup(StillCompiler *c, LLVMValueRef slot, int unpin) {
+    return call_runtime(c,NULL, unpin ? "__wky_mem_unpin" : "__wky_mem_drop",
                  LLVMVoidTypeInContext(c->context), &slot, 1);
 }
 void wky_memory_defer(StillCompiler *c, LLVMValueRef slot, int unpin) {
@@ -262,6 +290,8 @@ LLVMValueRef wky_memory_lvalue(StillCompiler *c, ASTNode *n, LLVMTypeRef *out_ty
         return LLVMBuildGEP2(c->builder,array_type,address,indices,2,"managed_array_element");
     }
     if (n->type!=NODE_MEMBER_ACCESS) return NULL;
+    Type *base=wky_expr_type(c,n->data.member_access.object);
+    if (base && base->kind==TYPE_CHAN) return NULL; /* private ring metadata is resolved by get_address */
     LLVMTypeRef type=NULL;
     LLVMValueRef address=wky_memory_lvalue(c,n->data.member_access.object,&type,container);
     if (!address) return NULL;
@@ -296,20 +326,37 @@ LLVMValueRef wky_memory_write_address(StillCompiler *c, LLVMValueRef slot,
     return call_runtime(c,NULL,"__wky_mem_write_address",ptr(c),args,3);
 }
 void wky_memory_store_owner(StillCompiler *c, LLVMValueRef slot,
-                             LLVMValueRef value, LLVMValueRef container) {
+                             LLVMValueRef value, LLVMValueRef container, Type *type) {
     if (!container) {
         LLVMValueRef args[]={slot,spill(c,value)};
-        call_runtime(c,NULL,"__wky_mem_replace",LLVMVoidTypeInContext(c->context),args,2);
+        wky_mark_cleanup_effect(c,call_runtime(c,NULL,"__wky_mem_replace",LLVMVoidTypeInContext(c->context),args,2),type);
         return;
     }
     LLVMValueRef args[]={slot,spill(c,value),spill(c,container)};
-    call_runtime(c,NULL,"__wky_mem_store_owner",LLVMVoidTypeInContext(c->context),args,3);
+    wky_mark_cleanup_effect(c,call_runtime(c,NULL,"__wky_mem_store_owner",LLVMVoidTypeInContext(c->context),args,3),type);
+}
+LLVMValueRef wky_memory_take_value(StillCompiler *c, ASTNode *n, LLVMValueRef slot,
+                                    Type *type, LLVMValueRef container) {
+    LLVMTypeRef llvm=get_llvm_type(c,type), vi=LLVMVoidTypeInContext(c->context);
+    if (wky_is_owner(type) && !container) {
+        LLVMValueRef value=LLVMBuildLoad2(c->builder,llvm,slot,"moved_owner");
+        LLVMBuildStore(c->builder,LLVMConstNull(llvm),slot);
+        return value;
+    }
+    LLVMValueRef out=create_entry_block_alloca(c,llvm,"moved_value");
+    if (wky_is_owner(type)) {
+        LLVMValueRef args[]={out,slot,spill(c,container)};
+        call_runtime(c,n,"__wky_mem_take",vi,args,3);
+    } else {
+        LLVMValueRef args[]={out,slot,wky_memory_layout(c,type),container ? spill(c,container) : LLVMConstNull(ptr(c))};
+        call_runtime(c,n,"__wky_mem_value_take",vi,args,4);
+    }
+    return LLVMBuildLoad2(c->builder,llvm,out,"moved_value");
 }
 void wky_memory_stable(StillCompiler *c, ASTNode *n) {
     ASTNode *reference = n->data.stable.reference;
     if (reference->type != NODE_VAR_REF || !wky_is_managed(wky_expr_type(c, reference)))
         error(c, n, "stable expects a named owner or reference");
-    if (c->in_coroutine) error(c, n, "stable access cannot span a coroutine suspension");
     LLVMValueRef value = wky_memory_value(c, reference);
     LLVMValueRef guard = spill(c, value);
     LLVMValueRef data = call_runtime(c,n, n->data.stable.optional ? "__wky_mem_try_pin" : "__wky_mem_pin", ptr(c), &guard, 1);
@@ -370,7 +417,7 @@ LLVMValueRef wky_memory_binary(StillCompiler *c, ASTNode *n) {
 LLVMValueRef wky_memory_builtin(StillCompiler *c, ASTNode *n, const char *name) {
     const char *names[] = {"own", "try_own", "ref_of", "move", "clone", "try_clone", "release",
         "ref_slice", "mem_len", "allocated", "arena", "arena_new", "try_arena_new", "remove",
-        "mem_budget", "mem_metric", "resize", "try_resize", "mem_capacity", NULL};
+        "mem_budget", "mem_metric", "resize", "try_resize", "mem_capacity", "cancel", NULL};
     unsigned which = 0;
     while (names[which] && strcmp(names[which], name)) ++which;
     if (!names[which]) return NULL;
@@ -387,6 +434,14 @@ LLVMValueRef wky_memory_builtin(StillCompiler *c, ASTNode *n, const char *name) 
     LLVMTypeRef rt = ref_type(c), vi = LLVMVoidTypeInContext(c->context);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(c->context);
     Type *at = wky_expr_type(c, a);
+    if (!strcmp(name,"move") || !strcmp(name,"release") || !strcmp(name,"resize") || !strcmp(name,"try_resize") || !strcmp(name,"cancel"))
+        wky_require_mutable(c,a);
+    if (at && at->kind==TYPE_HANDLE) {
+        if (!strcmp(name,"cancel")) name="release";
+        if (strcmp(name,"allocated") && strcmp(name,"move") && strcmp(name,"release"))
+            error(c,n,"coroutine handles support move, cancel, release and allocated");
+    }
+    if (!strcmp(name,"cancel")) error(c,n,"cancel requires a coroutine handle");
     if (a && a->type == NODE_VAR_REF && !at) (void)get_address(c,a,NULL);
     if (!strcmp(name,"resize") || !strcmp(name,"try_resize")) {
         if (!at || at->kind != TYPE_OWNER || a->type != NODE_VAR_REF || !managed_element(c,at->inner,0))
@@ -457,6 +512,7 @@ LLVMValueRef wky_memory_builtin(StillCompiler *c, ASTNode *n, const char *name) 
         if (!strcmp(name,"move"))
             call_runtime(c,n,"__wky_mem_value_take",vi,args,4);
         else {
+            if (wky_value_contains_handle(c,at)) error(c,n,"coroutine handles cannot be cloned; move the owning value instead");
             if (wky_value_contains_arena(c,at)) error(c,n,"arenas cannot be cloned; move the owning value instead");
             LLVMValueRef ok=call_runtime(c,n,"__wky_mem_value_clone",i32,args,4);
             if (!strcmp(name,"clone")) emit_check_or_trap(c,n,cond_to_bool(c,ok),"owned value clone failed");
@@ -527,6 +583,7 @@ LLVMValueRef wky_memory_builtin(StillCompiler *c, ASTNode *n, const char *name) 
                                element_size(c, at->inner)};
         call_runtime(c,n, "__wky_mem_slice", vi, args, 5);
     } else {
+        if (wky_value_contains_handle(c,at)) error(c,n,"coroutine handles cannot be cloned; move the owning value instead");
         if (!managed_element(c, at->inner, 0)) error(c, n, "clone requires supported managed elements");
         LLVMValueRef args[] = {out, in};
         LLVMValueRef ok = call_runtime(c,n, "__wky_mem_clone", i32, args, 2);

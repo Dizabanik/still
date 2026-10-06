@@ -49,7 +49,7 @@ int main(int argc,char **argv) {
             __wky_mem_drop(&heap);
         }
         if (size) {
-            uint64_t *slot=at(copied.buffers[0],0), value=*at(copied.buffers[0],0)+1;
+            uint64_t *slot=at(copied.buffers[0],0), value=*slot+1;
             *slot=value;
         }
         originals+=moved.tag; copies+=copied.tag;

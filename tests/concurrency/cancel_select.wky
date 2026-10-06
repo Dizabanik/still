@@ -1,0 +1,4 @@
+chan<i64> pipe=make_chan(1); i32 cleaned=0;
+fn main() { let task=brew { owner<i64> p=own(1); defer { cleaned+=1; }
+ select { case v=<-pipe: { drop((i32)v); } } };
+ sip(task); cancel(task); println("{cleaned}"); release(pipe); println("{mem_metric(2)}"); return 0; }

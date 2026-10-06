@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_support import classify, environment, invoke, load_case, _check_execution, _check_variant
 from bench import checked_output, schedule, summary, benchmark, build_commands, ROOT
-from bench_oracles import oracle
+from bench_oracles import oracle, semantics_oracle
 from generate_property_cases import document
 
 
@@ -151,6 +151,24 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(oracle('indexed_graph',[1,1,1]),b'1 0\n')
         self.assertEqual(oracle('matrix4',[0,1]),b'0 1 4\n')
         self.assertEqual(oracle('ring_pipeline',[65,1]),str(sum((i+1)*27+13 for i in range(65))).encode()+b'\n')
+
+    def test_semantics_oracles_against_enumerated_specification(self):
+        for rounds in (0,1,2,16,97,98,257):
+            for seed in (0,1,31,65535):
+                for period in (1,3,17,256):
+                    data=list(range(seed,seed+rounds))
+                    failures=[x for x in data if x%period==0]
+                    result=sum(x if x%period==0 else x*17+14 for x in data)
+                    owned=sum(x*4+(3 if x%period else 0) for x in data)
+                    queued=sum(x*(i%97+7) for i,x in enumerate(data))
+                    for name,checksum,counted in (
+                            ('typed_result',result,len(failures)),
+                            ('owned_enum',owned,rounds-len(failures)),
+                            ('owned_channel',queued,rounds)):
+                        actual=semantics_oracle(name,rounds,seed,period,True)
+                        self.assertEqual(actual[:2],[checksum,counted])
+                        self.assertEqual(actual[2],actual[3])
+                        self.assertEqual(actual[4],0)
 
     def test_manifest_coverage(self):
         manifest=json.loads((ROOT/'bench/manifest.json').read_text())['benchmarks']

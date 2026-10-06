@@ -1,1 +1,4 @@
-{"kind":"reject","diagnostic":"global owners"}
+{
+  "kind": "run",
+  "stdout": "42 8\n0\n"
+}

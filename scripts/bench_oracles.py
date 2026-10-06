@@ -57,3 +57,34 @@ def oracle(name, args):
     else:
         raise ValueError("unknown oracle: " + name)
     return (" ".join(map(str,values))+"\n").encode()
+
+
+def semantics_oracle(workload, rounds, seed, parameter, instrumented):
+    """Closed-form models independent of the result/enum/ring implementations."""
+    total = rounds * seed + rounds * (rounds - 1) // 2
+    first = (seed + parameter - 1) // parameter
+    last = (seed + rounds - 1) // parameter
+    failures = max(0, last - first + 1) if rounds else 0
+    failure_sum = parameter * failures * (first + last) // 2
+    if workload == 'typed_result':
+        checksum = 17 * total + 14 * rounds - 16 * failure_sum - 14 * failures
+        counted, allocations, peak, cloned, checks = failures, 0, 0, 0, 0
+    elif workload == 'owned_enum':
+        counted = rounds - failures
+        checksum = 4 * total + 3 * counted
+        allocations, peak, cloned, checks = 2 * counted, 16 * bool(counted), 8 * counted, 4 * counted
+    elif workload == 'owned_channel':
+        # FIFO position is weighted by a 97-element period; order matters.
+        periods, rest = divmod(rounds, 97)
+        weights = sum(j + 7 for j in range(97))
+        offsets = sum(j * (j + 7) for j in range(97))
+        checksum = (periods * (seed * weights + offsets)
+                    + 97 * weights * periods * (periods - 1) // 2
+                    + sum((seed + periods * 97 + j) * (j + 7) for j in range(rest)))
+        slots = 1 << (parameter - 1).bit_length()
+        counted, allocations = rounds, rounds + 1
+        peak, cloned, checks = 32 * slots + 8 * min(parameter, rounds), 0, 4 * rounds
+    else:
+        raise ValueError(workload)
+    return [checksum % 2**64, counted, allocations, allocations, 0, peak, cloned,
+            checks if instrumented else 2**64 - 1]

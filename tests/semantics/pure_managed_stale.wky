@@ -1,0 +1,9 @@
+pure fn i64 read(ref<i64> values) { return values[0]; }
+fn main() {
+    owner<i64> values = own(1);
+    values[0] = 42;
+    ref<i64> view = ref_of(values);
+    release(values);
+    println("{read(view)}");
+    return 0;
+}

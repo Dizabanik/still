@@ -11,7 +11,7 @@ struct ParseErr {
 
 const i64 N = 200000000;
 
-fn i32 main() {
+unsafe fn i32 main() {
     i64 ok_count = 0;
     i64 acc = 0;
     for (i64 i = 0; i < N; i += 1) {

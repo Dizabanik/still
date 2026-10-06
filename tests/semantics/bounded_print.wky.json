@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "abc\nab calls=1\n\na\u0000b\nbc\n"
+}

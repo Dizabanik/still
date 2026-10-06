@@ -6,7 +6,7 @@ enum Shape {
     Point
 }
 
-fn i64 eval_shape(Shape s, i64 factor) {
+unsafe fn i64 eval_shape(Shape s, i64 factor) {
     return match s {
         Circle(radius) => radius * radius * 3 + factor,
         Rect(width, height) => width * height + factor * 2,
@@ -14,7 +14,7 @@ fn i64 eval_shape(Shape s, i64 factor) {
     };
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 20000000;
     i64 acc = 0;
     for (i64 r = 0; r < ROUNDS; r += 1) {

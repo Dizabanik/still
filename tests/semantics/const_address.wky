@@ -1,0 +1,1 @@
+fn main() { const i64 x = 1; unsafe { i64* p = &x; *p = 3; } return 0; }

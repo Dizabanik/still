@@ -14,7 +14,7 @@ pure fn u32 mix(u32 h, u32 v) {
     return (h ^ v) * 16777619;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     // mixed int/float mul + f64 accumulator
     f64 acc = 0;
     for (i32 i = 0; i < W; i += 1) {

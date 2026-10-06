@@ -1,0 +1,4 @@
+{
+  "kind": "trap",
+  "diagnostic": "send on a closed channel"
+}

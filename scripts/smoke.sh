@@ -9,7 +9,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 cat > "$WORK/smoke.wky" <<'EOF'
 import stdc;
-fn i32 main() {
+unsafe fn i32 main() {
     stdc.printf("smoke %d\n", 6 * 7);
     return 0;
 }

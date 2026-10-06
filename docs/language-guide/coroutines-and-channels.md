@@ -1,111 +1,158 @@
-# Coroutines & Channels
+# Coroutines and channels
 
-Whisky provides native, cooperative, stackless concurrency primitives built on top of LLVM coroutine intrinsics: `brew` (coroutine generation), `sip` (resumption / yielding), `drop` (cancellation / cleanup), and `chan<T>` (bounded channel ring buffers).
+Whisky coroutines are stackless and execute cooperatively on the calling thread. Tasks run when resumed with `sip(handle)`. Yielding uses `drop(value)`, and cancellation uses `cancel(handle)`.
 
----
+## Tasks
 
-## 1. Coroutines: `brew`, `sip`, and `drop`
-
-A coroutine is created using the `brew` expression, which compiles to an LLVM coroutine handle:
+Tasks can be defined as named functions using `fn drip` or as anonymous task blocks with `brew { ... }`:
 
 ```wky
 import stdc;
 
-fn i32 count_generator() {
-    println("Yielding 1");
-    sip 1;
-    println("Yielding 2");
-    sip 2;
-    println("Yielding 3");
+fn drip counter() {
+    defer println("counter cleanup");
+    drop(1);
+    drop(2);
     return 3;
 }
 
 fn i32 main() {
-    let task = brew count_generator();
-
-    let v1 = sip task;
-    let v2 = sip task;
-    let v3 = sip task;
-
-    println("Received: {v1}, {v2}, {v3}");
-    drop task;
+    handle task = counter();
+    println("sip 1: {sip(task)}");
+    println("sip 2: {sip(task)}");
+    println("sip 3: {sip(task)}");
+    println("sip 4: {sip(task)}");
+    cancel(task);
     return 0;
 }
 ```
 
-### Stack Frame Elision
-Unlike traditional runtime coroutine libraries that allocate a full stack or call `malloc` on every invocation, `still` statically analyzes coroutine frame lifetimes. Coroutine frames are allocated directly inside the caller's stack frame whenever possible, eliminating heap allocation completely.
+Output:
+```
+sip 1: 1
+sip 2: 2
+sip 3: 3
+sip 4: 3
+counter cleanup
+```
 
----
+A completed task retains its final return value across subsequent calls to `sip`.
 
-## 2. Channels: `chan<T>`
+A task begins in a suspended state. If a task is canceled before its first resumption, owned arguments are destroyed without running unregistered body defer statements. Canceling a task after a suspension point executes the defers and owned values active at that yield in last-in, first-out order. Control flow statements like `return`, `break`, `continue`, yields, and blocking channel operations cannot escape from inside a defer block.
 
-Channels allow type-safe message passing between coroutines and tasks:
+### Anonymous tasks: `brew`
+
+```wky
+import stdc;
+
+chan<i32> comms = make_chan(2);
+
+fn i32 main() {
+    handle worker = brew {
+        comms <- 100;
+        drop(1);
+    };
+
+    sip(worker);
+    let val = <-comms;
+    println("received: {val}");
+
+    cancel(worker);
+    close_chan(comms);
+    release(comms);
+    return 0;
+}
+```
+
+Tasks created with `brew` can read module-level globals, but do not capture local variables from their enclosing function scope. Data is passed into tasks via `fn drip` parameters or through channels.
+
+Task handles are managed, move-only resources. They can be stored in structs, arrays, and channels. Destroying an owning handle cancels the task automatically. Handles cannot be cloned.
+
+## Channels: `chan<T>`
+
+Channels provide FIFO message queues for coroutines.
+
+```wky
+import stdc;
+
+chan<i32> queue = make_chan(2);
+
+fn i32 main() {
+    handle producer = brew {
+        queue <- 10;
+        queue <- 20;
+        drop(0);
+    };
+
+    sip(producer);
+
+    let first = <-queue;
+    let second = <-queue;
+    println("first={first} second={second}");
+
+    cancel(producer);
+    close_chan(queue);
+    release(queue);
+    return 0;
+}
+```
+
+`make_chan(capacity)` allocates a managed ring buffer. The capacity parameter must be positive. Physical allocation rounds up to a power of two for bitmask indexing, while logical capacity matches the requested size.
+
+### Channel properties
+
+Channels expose read-only metadata fields:
+* `.cap`: Logical maximum capacity.
+* `.count`: Current number of queued items.
+* `.head`: Current read position index.
+* `.mask`: Bitmask used for circular indexing.
+* `.closed`: Boolean indicating if the channel has been closed.
+
+### Channel operations and lifecycle
+
+* Sending (`chan <- msg`): Evaluates the message expression once. If the channel is full inside a coroutine, the coroutine suspends until space is available. Sending to a full channel outside a coroutine traps.
+* Receiving (`let msg = <-chan`): Evaluates the channel once. If empty inside a coroutine, the task suspends until an item is available. Receiving from an empty channel outside a coroutine traps.
+* Closing (`close_chan(chan)`): Prohibits new sends. Queued items can still be drained. Sending to a closed channel, or receiving from an empty closed channel, traps.
+* Deallocation (`release(chan)`): Destroys the channel ring and cleans up any unread owned messages.
+
+Channels coordinate cooperative tasks on a single thread and do not synchronize multi-threaded operating system threads.
+
+## Multiplexing: `select`
+
+The `select` statement polls multiple channel operations in declaration order:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    // Allocate a channel with capacity 64
-    chan<i32> ch = make_chan(64);
+    chan<i32> ch1 = make_chan(2);
+    chan<i32> ch2 = make_chan(2);
 
-    // Send values
-    ch <- 100;
-    ch <- 200;
-
-    // Receive values
-    let val1 = <-ch;
-    let val2 = <-ch;
-
-    println("Received: {val1}, {val2}");
-    return 0;
-}
-```
-
-### Power-of-Two Ring Buffers
-Under the hood, `make_chan(cap)` rounds capacity up to a power of two. Channel head and tail pointers index directly using a bitwise mask (`head & mask`) rather than an integer division (`head % cap`). This eliminates costly hardware division instructions and keeps pipeline throughput high.
-
----
-
-## 3. The `select` Statement
-
-The `select` statement waits on multiple channel operations simultaneously:
-
-```wky
-import stdc;
-
-fn i32 main() {
-    chan<i32> c1 = make_chan(16);
-    chan<str> c2 = make_chan(16);
-
-    c1 <- 42;
+    ch2 <- 42;
 
     select {
-        val = <-c1 => {
-            println("Received from c1: {val}");
+        case v = <-ch1: {
+            println("ch1: {v}");
         }
-        msg = <-c2 => {
-            println("Received from c2: {msg}");
+        case v = <-ch2: {
+            println("ch2: {v}");
         }
-        else => {
-            println("No channel ready");
+        default: {
+            println("no channel ready");
         }
     }
 
+    close_chan(ch1);
+    close_chan(ch2);
+    release(ch1);
+    release(ch2);
     return 0;
 }
 ```
 
----
+Output:
+```
+ch2: 42
+```
 
-## 4. Benchmark Performance (`b6_chan`)
-
-In benchmark `b6_chan`, a multi-stage pipeline of coroutines passing messages across capacity-64 channel rings was benchmarked against C (using `ucontext`) and Rust (using `std::sync::mpsc` + threads):
-
-| Language | Wall Time (5 Runs) | vs Whisky |
-|:---|:---:|:---:|
-| **Whisky** | **0.011s** | **Baseline** |
-| **C (`ucontext`)** | 0.098s | 8.9x slower |
-| **Rust (`mpsc`)** | 0.225s | 20.4x slower |
-
-Whisky avoids thread-context switches, kernel traps, and heap allocations, achieving near-zero latency cooperative multitasking.
+`select` evaluates channel expressions once. The first ready channel executes its block. If no channel is ready, the `default` block executes immediately. Inside a coroutine without a default case, the task suspends until one of the polled channels becomes ready. Up to eight cases are supported in a single select statement.

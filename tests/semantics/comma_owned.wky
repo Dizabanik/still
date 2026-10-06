@@ -1,0 +1,6 @@
+fn main() {
+ { owner<i64> a = own(1), b = own(2); a[0]=5; b[1]=9;
+   let c = move(a), d = move(b);
+   println("{c[0]} {d[1]} {allocated(a)} {allocated(b)}"); }
+ println("{mem_metric(2)} {mem_metric(0) == mem_metric(1)}"); return 0;
+}

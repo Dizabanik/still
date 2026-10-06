@@ -48,10 +48,8 @@ static void emit_runtime_global_inits(StillCompiler *c,
 // synthesized `wky_globals_init` that main() calls first.
 static void codegen_global_decl(StillCompiler *c, ASTNode *n,
                                 PendingGlobalInit **pending) {
-    if (wky_contains_managed(c,n->data_type,1)) {
-        still_error(STILL_E_TYPE,n,"global owners require explicit program-lifetime cleanup support");
-        exit(1);
-    }
+    wky_check_value_type(c,n,n->data_type);
+    if (n->data.var_decl.is_orbit) wky_check_orbit(c,n);
 	LLVMTypeRef g_type = get_llvm_type(c, n->data_type);
 
 	// Propagate the declared type to a struct/array literal initializer so
@@ -135,8 +133,13 @@ static void emit_runtime_global_inits(StillCompiler *c,
 
 	LLVMValueRef saved_func = c->current_func;
 	LLVMTypeRef saved_ret = c->current_ret_type;
+	Type *saved_ret_node=c->current_ret_node_type;
+	DeferFrame *saved_defers=c->defer_stack;
 	c->current_func = *init_fn;
-	c->current_ret_type = *init_fn_type;
+	c->current_ret_type = LLVMVoidTypeInContext(c->context);
+	c->current_ret_node_type=arena_alloc(c->arena,sizeof(Type));
+	c->current_ret_node_type->kind=TYPE_VOID;
+	c->defer_stack=NULL;
 
 	for (PendingGlobalInit *p = rev; p; p = p->next) {
 		ASTNode *n = p->decl;
@@ -152,6 +155,8 @@ static void emit_runtime_global_inits(StillCompiler *c,
 
 	c->current_func = saved_func;
 	c->current_ret_type = saved_ret;
+	c->current_ret_node_type=saved_ret_node;
+	c->defer_stack=saved_defers;
 }
 
 static void register_enum_constructor(StillCompiler *c, LLVMValueRef fn, ASTNode *en,
@@ -176,6 +181,11 @@ static void register_enum_constructor(StillCompiler *c, LLVMValueRef fn, ASTNode
 	sig->next = c->function_signatures; c->function_signatures = sig;
 	LLVMAddTargetDependentFunctionAttr(fn,"wky.pure","true");
 	LLVMAddTargetDependentFunctionAttr(fn,"wky.noalloc","true");
+}
+
+static int has_type_parameter(Type *type) {
+    return type && ((type->kind==TYPE_STRUCT && type->name && !strcmp(type->name,"T")) ||
+        has_type_parameter(type->inner) || has_type_parameter(type->error));
 }
 
 static int reserved_symbol(const char *name) {
@@ -377,17 +387,7 @@ void still_compile(StillCompiler *c, ASTNode *root) {
 			if (a->data_type)
 				sig[sn++] = a->data_type;
 		int is_generic = 0;
-		for (int ti = 0; ti < sn && !is_generic; ti++) {
-			Type *ty = sig[ti];
-			while (ty &&
-                   (ty->kind == TYPE_ARRAY || ty->kind == TYPE_SLICE ||
-                    ty->kind == TYPE_PTR || ty->kind == TYPE_AMP || ty->kind==TYPE_OWNER ||
-                    ty->kind==TYPE_REF || ty->kind==TYPE_CHAN || ty->kind==TYPE_SET))
-				ty = ty->inner;
-			if (ty && ty->kind == TYPE_STRUCT && ty->name &&
-				strlen(ty->name) == 1 && ty->name[0] == 'T')
-				is_generic = 1;
-		}
+		for (int ti=0; ti<sn && !is_generic; ++ti) is_generic=has_type_parameter(sig[ti]);
 		if (is_generic)
 			c->generic_fns[c->generic_fn_count++] = g;
 	}
@@ -670,6 +670,35 @@ void still_compile(StillCompiler *c, ASTNode *root) {
 		}
 	}
 
+	int owned_globals=0;
+	for (Scope *s=c->global_scope; s; s=s->next)
+		if (s->node && (wky_contains_managed(c,s->node->data_type,1) ||
+		    (s->node->data_type && s->node->data_type->kind==TYPE_HANDLE))) owned_globals=1;
+	if (owned_globals) {
+		LLVMBasicBlockRef saved_block=LLVMGetInsertBlock(c->builder);
+		LLVMValueRef saved_func=c->current_func;
+		LLVMTypeRef cleanup_type=LLVMFunctionType(LLVMVoidTypeInContext(c->context),NULL,0,0);
+		LLVMValueRef cleanup=LLVMAddFunction(c->module,"__wky_globals_drop",cleanup_type);
+		LLVMSetLinkage(cleanup,LLVMInternalLinkage); c->current_func=cleanup;
+		LLVMPositionBuilderAtEnd(c->builder,wky_append_block(cleanup,"entry"));
+		for (Scope *s=c->global_scope; s; s=s->next)
+			if (s->node && (wky_contains_managed(c,s->node->data_type,1) ||
+			    (s->node->data_type && s->node->data_type->kind==TYPE_HANDLE)))
+				wky_memory_cleanup_value(c,s->val,s->node->data_type);
+		LLVMBuildRetVoid(c->builder); c->current_func=saved_func;
+		LLVMPositionBuilderAtEnd(c->builder,saved_block);
+		LLVMValueRef entry_fn=LLVMGetNamedFunction(c->module,"main");
+		if (entry_fn) {
+			LLVMTypeRef pointer=LLVMPointerTypeInContext(c->context,0);
+			LLVMTypeRef atexit_type=LLVMFunctionType(LLVMInt32TypeInContext(c->context),&pointer,1,0);
+			LLVMValueRef atexit_fn=LLVMGetNamedFunction(c->module,"atexit");
+			if (!atexit_fn) atexit_fn=LLVMAddFunction(c->module,"atexit",atexit_type);
+			LLVMBuilderRef entry_builder=LLVMCreateBuilderInContext(c->context);
+			LLVMPositionBuilderBefore(entry_builder,LLVMGetFirstInstruction(LLVMGetEntryBasicBlock(entry_fn)));
+			LLVMBuildCall2(entry_builder,atexit_type,atexit_fn,&cleanup,1,"register_global_cleanup");
+			LLVMDisposeBuilder(entry_builder);
+		}
+	}
 	if (c->uses_memory) {
 		LLVMMemoryBufferRef memory = LLVMCreateMemoryBufferWithMemoryRange(
 			(const char *)(c->memory_metrics ? wky_memory_metrics_bc : wky_memory_bc),

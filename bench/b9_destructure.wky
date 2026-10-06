@@ -10,7 +10,7 @@ struct Pair {
     i64 second;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 50000000;
     i64 acc = 123456789;
 

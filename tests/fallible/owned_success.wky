@@ -1,0 +1,9 @@
+fn result<owner<i64>,i32> value(bool pass) {
+ owner<i64> x = own(1); x[0] = 42;
+ if (!pass) { return err(8); } return ok(move(x)); }
+fn result<i64,i32> read(bool pass) { owner<i64> x = try(value(pass)); return ok(x[0]); }
+fn main() {
+ println("{match read(true) { Ok(v) => v, Err(e) => -(i64)e }}");
+ println("{match read(false) { Ok(v) => v, Err(e) => -(i64)e }}");
+ println("{mem_metric(2)} {mem_metric(0) == mem_metric(1)}"); return 0;
+}

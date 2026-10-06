@@ -1,0 +1,5 @@
+[2]chan<i32> pipes; i32 calls=0;
+fn i64 index() { calls+=1; return 0; }
+fn main() { pipes[0]=make_chan(1); pipes[0]<-42;
+ select { case value=<-pipes[index()]: {println("{value} {calls} {pipes[0].count}");} default: {println("bad");} }
+ return 0; }

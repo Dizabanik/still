@@ -1,0 +1,6 @@
+fn main() {
+    char* text;
+    unsafe { text = "raw"; }
+    println("{text}");
+    return 0;
+}

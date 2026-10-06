@@ -1,2 +1,2 @@
-owner<i64> root = own(1);
-fn main() { return 0; }
+owner<i64> root=own(1);
+fn main() { root[0]=42; println("{root[0]} {mem_metric(2)}"); release(root); println("{mem_metric(2)}"); return 0; }

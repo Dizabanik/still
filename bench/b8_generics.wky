@@ -5,20 +5,20 @@ struct Box(T) {
 }
 
 impl Box(T) {
-    fn new(T v) Box(T) {
+    unsafe fn new(T v) Box(T) {
         return Box(T) { value: v };
     }
 
-    fn get(self) T {
+    unsafe fn get(self) T {
         return self.value;
     }
 
-    fn put(self*, T v) void {
+    unsafe fn put(self*, T v) void {
         self.value = v;
     }
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 50000000;
     let b_i = Box(i64).new(1);
     let b_w = Box(i32).new(1);

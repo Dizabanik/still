@@ -19,6 +19,7 @@ typedef struct Scope {
 	LLVMValueRef val;
 	LLVMTypeRef type;
 	struct ASTNode *node;
+	struct Scope *orbit_scope; // lexical environment captured by a derived binding
 	int used; // set by scope_find; drives the unused-variable warning
 	struct Scope *all_next; // function's locals, including closed lexical scopes
 	struct Scope *next;
@@ -80,6 +81,7 @@ typedef struct {
     unsigned optimization_site_count;
 	StableFrame *stable_stack;
 	struct WkyValueLayoutCache *value_layouts;
+	struct ASTNode *builtin_tagged_types;
 	FunctionSignature *function_signatures;
 	unsigned fp_permissions;
 
@@ -89,10 +91,9 @@ typedef struct {
 	// >0 while emitting an `unchecked { ... }` block: bounds checks are
 	// suppressed regardless of debug_build. Nested blocks just count.
 	int unchecked_depth;
-	// Statement list currently being emitted (for brew escape analysis).
+	int unsafe_depth;
+	// Statement list currently being emitted.
 	struct ASTNode *cur_stmt_list;
-	// While emitting `let h = brew {...}`: the decl node, for escape analysis.
-	struct ASTNode *cur_brew_decl;
 	// Generics (IDEAS 2.2): declared type parameters of the generic fn
 	// currently being instantiated ("T" -> concrete Type*), plus the
 	// registry of generic fn ASTs awaiting instantiation.
@@ -181,6 +182,7 @@ typedef struct {
 
 	// Track the current coroutine handle & promise for use in 'drop'
 	LLVMValueRef current_coro_hdl;
+	LLVMValueRef current_coro_id;
 	LLVMValueRef current_promise_ptr;
 
 	Scope *scope_stack;
@@ -208,6 +210,7 @@ typedef struct {
 
 	int in_coroutine;
 	LLVMBasicBlockRef coro_cleanup_block;
+	LLVMBasicBlockRef coro_finish_block;
 	LLVMBasicBlockRef coro_suspend_block;
 	int brew_promise_index;
 	int drip_promise_index;
@@ -250,6 +253,8 @@ typedef struct {
 	LLVMTypeRef coro_alloc_type;
 	LLVMValueRef coro_done;
 	LLVMTypeRef coro_done_type;
+	LLVMValueRef coro_destroy, coro_free;
+	LLVMTypeRef coro_destroy_type, coro_free_type;
 
 	// Optimization & code generation flags (IDEAS 4.1, 4.3, 4.4)
 	int enable_lto;

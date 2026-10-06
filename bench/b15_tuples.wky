@@ -1,18 +1,18 @@
 import stdc;
 
-fn (u64, u64) lcg_step(u64 x, u64 y) {
+unsafe fn (u64, u64) lcg_step(u64 x, u64 y) {
     let nx = wrap_add(wrap_mul(x, 6364136223846793005), 1442695040888963407) & (u64)9223372036854775807;
     let ny = wrap_add(wrap_mul(y, 2862933555777941757), 3037000493) & (u64)9223372036854775807;
     return (nx, ny);
 }
 
-fn (u64, u64) mix((u64, u64) p) {
+unsafe fn (u64, u64) mix((u64, u64) p) {
     let q = p.0 / 65536;
     let r = p.1 % 65536;
     return (p.0 ^ r, wrap_add(p.1, q) & (u64)9223372036854775807);
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 20000000;
     let (x, y) = ((u64)123456789, (u64)987654321);
     u64 acc = 0;

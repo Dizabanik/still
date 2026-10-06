@@ -1,0 +1,16 @@
+i32 cleaned = 0;
+fn drip work() { defer { cleaned += 1; } drop(7); drop(9); }
+fn main() {
+    owner<handle> tasks = own(1);
+    tasks[0] = work();
+    owner<ref<handle>> views = own(1);
+    views[0] = ref_of(tasks);
+    owner<ref<handle>> copied = clone(views);
+    println("{sip(copied[0][0])}");
+    release(copied);
+    release(views);
+    println("{sip(tasks[0])} {cleaned}");
+    release(tasks);
+    println("{cleaned} {mem_metric(2)} {mem_metric(0)==mem_metric(1)}");
+    return 0;
+}

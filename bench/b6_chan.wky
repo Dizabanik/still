@@ -10,7 +10,7 @@ pure fn i64 step(i64 v) {
     return (v * 3 + 1) & 2147483647;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     let t1 = brew {
         for (i64 i = 0; i < N; i += 1) { c2 <- step(i); }
         drop(0);

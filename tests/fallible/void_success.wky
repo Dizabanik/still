@@ -1,0 +1,6 @@
+fn result<void,i32> check(bool pass) { if (pass) { return ok(); } return err(4); }
+fn result<i64,i32> next(bool pass) { try(check(pass)); return ok(42); }
+fn main() {
+ println("{match next(true) { Ok(v) => v, Err(e) => -(i64)e }}");
+ println("{match next(false) { Ok(v) => v, Err(e) => -(i64)e }}"); return 0;
+}

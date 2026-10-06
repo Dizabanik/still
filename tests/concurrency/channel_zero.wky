@@ -1,0 +1,1 @@
+fn main() { chan<i64> pipe=make_chan(0); return 0; }

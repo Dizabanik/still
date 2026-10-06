@@ -1,0 +1,8 @@
+let global = 2, next = global + 8;
+fn main() {
+    let x = 2, y = 10, sum = x + y, word = "whisky", precise = 1.5;
+    i64 wide = 100, second = wide + 2;
+    println("{global} {next} {x} {y} {sum} {word} {precise} {wide} {second}");
+    for (let i = 0, limit = 3; i < limit; i += 1) { print("{i}"); }
+    println(""); return 0;
+}

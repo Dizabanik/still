@@ -1,6 +1,7 @@
 import stdc;
 struct View { i32* pointer; }
 View saved;
+#[unsafe]
 fn main(){
     i32 local=42;
     View base={.pointer=&local};

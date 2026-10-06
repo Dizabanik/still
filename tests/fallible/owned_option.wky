@@ -1,0 +1,7 @@
+fn option<owner<i64>> make(bool pass) { if (!pass) { return none(); } owner<i64> p=own(1); p[0]=7; return some(move(p)); }
+fn option<i64> read(bool pass) { owner<i64> p=try(make(pass)); return some(p[0]); }
+fn main() {
+ println("{match read(true) { Some(v)=>v, None=>-1 }}");
+ println("{match read(false) { Some(v)=>v, None=>-1 }}");
+ println("{mem_metric(2)}"); return 0;
+}

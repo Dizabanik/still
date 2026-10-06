@@ -1,11 +1,13 @@
 #include "codegen_internal.h"
 
 void wky_literal_context(StillCompiler *c,ASTNode *n,Type *type) {
+    if (n && type && n->type==NODE_MATCH) n->data_type=type;
     if (n && n->type==NODE_CALL && !n->data_type && n->data.call.callee &&
         n->data.call.callee->type==NODE_VAR_REF) {
         const char *name=n->data.call.callee->data.var_ref.name;
         if (!strcmp(name,"own") || !strcmp(name,"try_own") || !strcmp(name,"arena") ||
-            !strcmp(name,"arena_new") || !strcmp(name,"try_arena_new")) n->data_type=type;
+            !strcmp(name,"arena_new") || !strcmp(name,"try_arena_new") || !strcmp(name,"ok") ||
+            !strcmp(name,"err") || !strcmp(name,"some") || !strcmp(name,"none") || !strcmp(name,"make_chan")) n->data_type=type;
     }
 	if (!n || n->type!=NODE_STRUCT_LITERAL) return;
 	if (!n->data_type) n->data_type=type;
@@ -45,16 +47,25 @@ LLVMValueRef wky_codegen_literal(StillCompiler *c,ASTNode *n) {
 	LLVMTypeRef type=get_llvm_type(c,n->data_type);
 	LLVMValueRef value=LLVMConstNull(type);
 	Type *actual=wky_resolve_type(c,n->data_type);
+	DeferFrame *saved_defers=c->defer_stack;
+	LLVMValueRef guard=NULL;
+	if (wky_contains_managed(c,actual,1)) {
+		guard=create_entry_block_alloca(c,type,"literal_cleanup");
+		LLVMBuildStore(c->builder,value,guard); wky_memory_defer_value(c,guard,actual);
+	}
 	if (LLVMGetTypeKind(type)==LLVMArrayTypeKind) {
 		unsigned index=0,length=LLVMGetArrayLength(type);
 		for (StructInitItem *item=n->data.struct_lit.items; item; item=item->next,++index) {
-			if (item->field_name || item->spread_from) { still_error(STILL_E_ARGS,n,"array initializers require positional elements"); exit(1); }
+			if ((item->field_name && !item->is_shorthand) || item->spread_from) { still_error(STILL_E_ARGS,n,"array initializers require positional elements"); exit(1); }
 			if (index>=length) { still_error(STILL_E_ARITY,n,"too many elements in array initializer"); exit(1); }
 			wky_literal_context(c,item->value,actual->inner);
 			LLVMValueRef element=codegen_expr(c,item->value);
 			element=coerce_value(c,element,wky_expr_type(c,item->value),LLVMGetElementType(type),actual->inner);
 			value=LLVMBuildInsertValue(c->builder,value,element,index,"array_element");
+			if (guard) LLVMBuildStore(c->builder,value,guard);
 		}
+		if (guard) LLVMBuildStore(c->builder,LLVMConstNull(type),guard);
+		c->defer_stack=saved_defers;
 		return value;
 	}
 	LiteralPlan plan=wky_literal_plan(c,n,type);
@@ -62,6 +73,7 @@ LLVMValueRef wky_codegen_literal(StillCompiler *c,ASTNode *n) {
 	if (plan.spread) {
 		wky_literal_context(c,plan.spread->spread_from,actual);
 		value=codegen_expr(c,plan.spread->spread_from);
+		if (guard) LLVMBuildStore(c->builder,value,guard);
 		if (LLVMTypeOf(value)!=type) { still_error(STILL_E_TYPE,n,"spread base must have the same struct type"); exit(1); }
 	} else if (definition) {
 		for (int i=0; i<definition->field_count; ++i) {
@@ -72,6 +84,7 @@ LLVMValueRef wky_codegen_literal(StillCompiler *c,ASTNode *n) {
 			field=coerce_value(c,field,wky_expr_type(c,default_value),
 				definition->fields[i].type,definition->fields[i].ast_type);
 			value=LLVMBuildInsertValue(c->builder,value,field,(unsigned)i,"default_field");
+			if (guard) LLVMBuildStore(c->builder,value,guard);
 		}
 	}
 	unsigned at=0;
@@ -81,6 +94,8 @@ LLVMValueRef wky_codegen_literal(StillCompiler *c,ASTNode *n) {
 		Type *field_type=definition ? definition->fields[index].ast_type : NULL;
         if (plan.spread && wky_contains_managed(c,field_type,1)) {
             LLVMValueRef previous=LLVMBuildExtractValue(c->builder,value,index,"replaced_field");
+			value=LLVMBuildInsertValue(c->builder,value,LLVMConstNull(LLVMTypeOf(previous)),index,"field_removed");
+			if (guard) LLVMBuildStore(c->builder,value,guard);
             LLVMValueRef slot=create_entry_block_alloca(c,LLVMTypeOf(previous),"replaced_field");
             LLVMBuildStore(c->builder,previous,slot);
             wky_memory_cleanup_value(c,slot,field_type);
@@ -89,6 +104,9 @@ LLVMValueRef wky_codegen_literal(StillCompiler *c,ASTNode *n) {
 		LLVMValueRef field=codegen_expr(c,item->value);
 		field=coerce_value(c,field,wky_expr_type(c,item->value),LLVMStructGetTypeAtIndex(type,index),field_type);
 		value=LLVMBuildInsertValue(c->builder,value,field,index,"explicit_field");
+		if (guard) LLVMBuildStore(c->builder,value,guard);
 	}
+	if (guard) LLVMBuildStore(c->builder,LLVMConstNull(type),guard);
+	c->defer_stack=saved_defers;
 	return value;
 }

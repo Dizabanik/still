@@ -6,6 +6,8 @@
 // OPT: 0
 import stdc;
 
+#[unsafe]
+
 fn i32 main() {
     u16 u = 65535;
     let w = u + 1;

@@ -1,0 +1,1 @@
+fn main() { [2]i32 values={1,2}; []i64 view=values; return 0; }

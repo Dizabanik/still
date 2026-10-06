@@ -1,99 +1,77 @@
-# Enums & Tagged Unions
+# Enums and tagged unions
 
-Whisky provides both simple enumerations and **tagged unions** (discriminated unions / sum types). Variants can carry arbitrary typed payloads packed into inline storage without heap allocations.
+Enums in Whisky are nominal tagged unions with inline payload storage. A variant may be a unit value or carry one or more typed payloads.
 
----
+## Declaration and matching
 
-## 1. Simple Enums
-
-Simple enums define a set of named integer constants:
-
-```wky
-import stdc;
-
-enum Direction {
-    North,
-    East,
-    South,
-    West,
-}
-
-fn i32 main() {
-    let d = Direction.East;
-
-    match d {
-        Direction.North => { println("Heading North"); }
-        Direction.East  => { println("Heading East"); }
-        Direction.South => { println("Heading South"); }
-        Direction.West  => { println("Heading West"); }
-    }
-
-    return 0;
-}
-```
-
----
-
-## 2. Tagged Unions with Payloads
-
-Variants can carry one or more data payloads. Payload storage is sized to the largest variant and aligned automatically:
+Variants are declared inside an `enum` block. Pattern matching must cover all variants or include an `else` arm:
 
 ```wky
 import stdc;
 
 enum Shape {
-    Circle(i64),
-    Rect(i64, i64),
-    Point,
+    Circle(f64),
+    Rect(f64, f64),
+    Point
 }
 
-fn i64 compute_area(Shape s) {
-    match s {
-        Shape.Circle(r) => {
-            return 3 * r * r;
-        }
-        Shape.Rect(w, h) => {
-            return w * h;
-        }
-        Shape.Point => {
-            return 0;
-        }
-    }
+fn f64 area(Shape shape) {
+    return match shape {
+        Circle(radius) => 3.141592653589793 * radius * radius,
+        Rect(width, height) => width * height,
+        Point => 0.0,
+    };
 }
 
 fn i32 main() {
-    let c = Shape.Circle(10);
-    let r = Shape.Rect(4, 5);
+    let c = Shape.Circle(10.0);
+    let r = Shape.Rect(4.0, 5.0);
     let p = Shape.Point;
 
-    println("Circle area: {compute_area(c)}");
-    println("Rect area: {compute_area(r)}");
-    println("Point area: {compute_area(p)}");
+    println("circle={area(c):.2f} rect={area(r):.2f} point={area(p):.2f}");
     return 0;
 }
 ```
 
-Output:
+Patterns can be qualified with the enum name (`Shape.Point`) or unqualified (`Point`). Unqualified variants resolve against the target expression type. The compiler rejects duplicate variants, arity mismatches, missing arms, and conversions between distinct enum types even when their binary layouts match.
+
+## Owning payloads
+
+When an enum variant contains an owning type (`owner<T>`), the enum becomes move-only:
+
+```wky
+import stdc;
+
+enum Message {
+    Data(owner<i64>),
+    Empty
+}
+
+fn i32 main() {
+    owner<i64> buffer = own(1);
+    buffer[0] = 42;
+
+    Message message = Message.Data(move(buffer));
+    Message copied = clone(message);
+
+    match move(message) {
+        Data(value) => {
+            println("value={value[0]}");
+        }
+        Empty => {}
+    }
+
+    release(copied);
+    return 0;
+}
 ```
-Circle area: 300
-Rect area: 20
-Point area: 0
-```
 
----
+Matching with `match move(message)` transfers the active payload into the arm bindings. Those bindings clean up when their arm block exits or returns.
 
-## 3. Memory Layout & Safety
+An `else` arm destroys an unbound owned payload when the match statement finishes. Replacement, moves, and explicit `clone` inspect the active discriminator tag so inactive union memory is never treated as owning headers.
 
-Tagged unions in Whisky are laid out as a contiguous struct containing:
-1. **Tag Discriminant**: A 32-bit integer indicating which variant is active.
-2. **Payload Union**: Raw storage sized to $\max(\text{sizeof}(\text{variant\_payload}))$.
+## Memory layout
 
-```
-+----------------+-----------------------------------------------+
-|  Tag (32-bit)  |  Payload Storage (max variant size, aligned)  |
-+----------------+-----------------------------------------------+
-```
+On supported 64-bit targets, the enum layout consists of an `i64` tag followed by an 8-byte aligned union sized to the largest variant payload.
 
-Because payload storage is entirely inline on the stack, creating and matching tagged unions involves **zero heap allocation (`malloc`) and zero garbage collection overhead**.
-
-In benchmark `b11_tagged_union`, 20,000,000 iterations of tagged union creation and pattern matching complete in **0.019s**, matching native C bitwise union benchmarks.
+For example, an enum containing a 32-byte owner header and scalar alternatives occupies 40 bytes. Scalar enum construction and pattern matching require no heap memory. Standard library types like `option<T>` and `result<T, E>` use this tagging and cleanup model.

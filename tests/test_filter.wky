@@ -4,6 +4,8 @@ import stdc;
 // into the innermost active filter's err slot and branches to its dregs
 // block. No unwinding, so nounwind survives on every function.
 
+#[unsafe]
+
 fn i32 main() {
     // 1. No press: try body runs, catch is skipped.
     filter {

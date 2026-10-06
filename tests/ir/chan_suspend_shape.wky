@@ -1,4 +1,4 @@
-// chan<T> blocking ops (IDEAS 3): a full-ring send suspends the enclosing
+// chan<T> blocking ops: a full-ring send suspends the enclosing
 // coroutine and RESUMES INTO A RE-CHECK of capacity -- the check block is a
 // loop header, so every wake-up re-reads count fresh from the channel record.
 // All suspend-exit arms converge on one coro.end block (the clang contract
@@ -7,6 +7,7 @@
 // OPT: 0
 import stdc;
 chan<i32> pipe = make_chan(1);
+#[unsafe]
 fn i32 main() {
     let t = brew {
         pipe <- 1;
@@ -20,7 +21,7 @@ fn i32 main() {
     return 0;
 }
 
-// CHECK-LABEL: define ptr @wky_task
-// CHECK: send_check:
-// CHECK: br i1 %is_full, label %{{.*}}, label %send_put
-// CHECK-LABEL: define void @wky_trap
+// CHECK-LABEL: define internal fastcc void @wky_task_{{[0-9]+}}.resume
+// CHECK: channel_check:
+// CHECK: br i1 %channel_unavailable{{.*}}, label %{{[^,]+}}, label %channel_ready
+// CHECK: br label %channel_check

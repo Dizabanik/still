@@ -1,0 +1,4 @@
+fn main() { chan<owner<i64>> pipe=make_chan(1);
+ owner<i64> p=own(1); p[0]=42; pipe<-move(p);
+ select { case value=<-pipe: { println("{value[0]}"); } default: { println("unexpected"); } }
+ println("{mem_metric(0)==mem_metric(1)+1}"); release(pipe); println("{mem_metric(2)}"); return 0; }

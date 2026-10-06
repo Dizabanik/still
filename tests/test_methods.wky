@@ -14,20 +14,25 @@ struct Vec {
 }
 impl Vec {
     // Associated constructor: Type.fn(...) call, no receiver injected.
+    #[unsafe]
     fn Vec new(f64 px, f64 py) {
         Vec v = { .x = px, .y = py };
         return v;
     }
+    #[unsafe]
     fn f64 mag2(self) {
         return self.x * self.x + self.y * self.y;
     }
+    #[unsafe]
     fn f64 dot(self, Vec o) {
         return self.x * o.x + self.y * o.y;
     }
+    #[unsafe]
     fn void scale(self* v, f64 k) {
         v->x = v->x * k;
         v->y = v->y * k;
     }
+    #[unsafe]
     fn void scale_self(self*, f64 k) {
         self->x = self->x * k;
         self->y = self->y * k;
@@ -38,20 +43,27 @@ struct Counter {
     i32 n;
 }
 impl Counter {
+    #[unsafe]
     fn void bump(self*) {
         self->n = self->n + 1;
     }
+    #[unsafe]
     fn void add(self*, i32 k) {
         self->n = self->n + k;
     }
+    #[unsafe]
     fn i32 get(self) {
         return self.n;
     }
 }
 
+#[unsafe]
+
 fn f64 mag2(Vec v) {
     return v.x * v.x + v.y * v.y;
 }
+
+#[unsafe]
 
 fn i32 main() {
     // 1. Value receiver + shorthand literal: local names feed fields.

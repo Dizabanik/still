@@ -1,5 +1,7 @@
 import stdc;
 
+#[unsafe]
+
 fn i32 main() {
     // 1. Half-open range loop
     i32 sum1 = 0;

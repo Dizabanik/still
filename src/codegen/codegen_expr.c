@@ -19,6 +19,7 @@ LLVMValueRef codegen_index_overload(StillCompiler *c, ASTNode *n) {
 		exit(1);
 	}
 	LLVMTypeRef fn_t = LLVMGlobalGetValueType(fn);
+	wky_check_call_safety(c,n,fn);
 	LLVMTypeRef base_elem_unused = NULL;
 	LLVMValueRef base_addr =
 		get_address(c, obj, &base_elem_unused);
@@ -26,6 +27,7 @@ LLVMValueRef codegen_index_overload(StillCompiler *c, ASTNode *n) {
 	// storage. Pointer receivers (`self*`) take the address as-is -- zero
 	// copy either way once the optimizer runs.
 	LLVMTypeRef recv_t = LLVMTypeOf(LLVMGetParam(fn, 0));
+	if (LLVMGetTypeKind(recv_t)==LLVMPointerTypeKind) wky_require_mutable(c,obj);
 	LLVMValueRef self_arg =
 		LLVMGetTypeKind(recv_t) == LLVMPointerTypeKind
 			? base_addr
@@ -54,64 +56,6 @@ LLVMValueRef codegen_index_overload(StillCompiler *c, ASTNode *n) {
 	return LLVMBuildCall2(c->builder, fn_t, fn,
 						  (LLVMValueRef[]){self_arg, idx}, 2,
 						  "idx_overload");
-}
-
-// True when evaluating the expression cannot produce side effects or trap:
-// literals, variable reads, member/index reads, pure operators over pure
-// operands, and calls to functions declared `pure fn` with pure arguments.
-// Used to decide whether a value may be (re)evaluated after a suspension
-// point -- e.g. a channel send that blocks must not re-run its operand.
-static int expr_is_pure(StillCompiler *c, ASTNode *n) {
-	if (!n)
-		return 0;
-	switch (n->type) {
-	case NODE_LITERAL:
-	case NODE_STRING_LIT:
-	case NODE_VAR_REF:
-		return 1;
-	case NODE_BINARY_OP:
-		return expr_is_pure(c, n->data.bin_op.left) &&
-			   expr_is_pure(c, n->data.bin_op.right);
-	case NODE_CAST:
-		return expr_is_pure(c, n->data.cast.val);
-	case NODE_MEMBER_ACCESS:
-		// Slice/chan field reads are plain loads; safe to speculate.
-		return expr_is_pure(c, n->data.member_access.object);
-	case NODE_INDEX:
-		return expr_is_pure(c, n->data.index.object) &&
-			   expr_is_pure(c, n->data.index.index);
-	case NODE_CALL: {
-		if (n->data.call.callee->type != NODE_VAR_REF)
-			return 0;
-		for (ASTNode *s = c->program_root ? c->program_root->next : NULL;
-			 s; s = s->next)
-			if (s->type == NODE_FUNC_DECL &&
-				strcmp(s->data.func.name,
-					   n->data.call.callee->data.var_ref.name) == 0)
-				return s->data.func.is_pure &&
-					   expr_is_pure(c, n->data.call.args);
-		return 0;
-	}
-	default:
-		return 0;
-	}
-}
-
-void trigger_orbit_updates(StillCompiler *c, ASTNode *origin_node) {
-	if (!origin_node || !origin_node->dependents)
-		return;
-	for (Dependency *dep = origin_node->dependents; dep; dep = dep->next) {
-		LLVMValueRef new_val = codegen_expr(c, dep->logic_expr);
-		// dep->dependent_node is a var_decl AST node. The scope is
-		// guaranteed to exist because the dependent was registered when
-		// the var_decl was lowered.
-		Scope *s = scope_find(c, dep->dependent_node->data.var_decl.name);
-		if (s) {
-			LLVMValueRef store = LLVMBuildStore(c->builder, new_val, s->val);
-			attach_tbaa(c, store, s->type);
-		}
-		trigger_orbit_updates(c, dep->dependent_node);
-	}
 }
 
 static void rehome_wide_literal(StillCompiler *c, ASTNode *n);
@@ -216,42 +160,6 @@ static LLVMValueRef resolve_callee(StillCompiler *c, ASTNode *callee, char *out,
 	}
 	return LLVMGetNamedFunction(c->module, out);
 }
-
-// --- Channel helpers (IDEAS 3) ---------------------------------------
-// The ring buffer is cooperative-only: a blocked op re-suspends the
-// enclosing coroutine via drop{}-style yields. No atomics, no locks --
-// on the ready path an op is one load, one store, two counter bumps.
-
-static LLVMValueRef chan_field_ptr(StillCompiler *c, LLVMTypeRef chan_t,
-								   LLVMValueRef chan_addr, int field,
-								   const char *name) {
-	return LLVMBuildStructGEP2(c->builder, chan_t, chan_addr, field, name);
-}
-
-static void chan_yield(StillCompiler *c) {
-	LLVMContextRef ctx = c->context;
-	if (!c->in_coroutine || !c->current_coro_hdl)
-		return;
-	LLVMValueRef save_token =
-		LLVMBuildCall2(c->builder, c->coro_save_type, c->coro_save,
-					   &c->current_coro_hdl, 1, "save");
-	LLVMValueRef suspend = LLVMBuildCall2(
-		c->builder, c->coro_suspend_type, c->coro_suspend,
-		(LLVMValueRef[]){save_token,
-						 LLVMConstInt(LLVMInt1TypeInContext(c->context),
-									  0, 0)},
-		2, "yield");
-	LLVMBasicBlockRef resume_bb =
-		wky_append_block(c->current_func, "chan_resume");
-	LLVMValueRef sw =
-		LLVMBuildSwitch(c->builder, suspend, c->coro_suspend_block, 2);
-	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
-				resume_bb);
-	LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 1, 0),
-				c->coro_cleanup_block);
-	LLVMPositionBuilderAtEnd(c->builder, resume_bb);
-}
-
 
 static LLVMValueRef codegen_expr_inner(StillCompiler *c,ASTNode *n);
 LLVMValueRef codegen_expr(StillCompiler *c,ASTNode *n) {
@@ -394,12 +302,13 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		}
 
 		if (obj_ast && obj_ast->kind == TYPE_ARRAY) {
+			wky_require_mutable(c,obj);
 			elem_t = get_llvm_type(c, obj_ast->inner);
 			total_len = LLVMConstInt(i64_t, obj_ast->array_len, 0);
 			if (s_obj) {
 				base_ptr = s_obj->val;
 			} else {
-				base_ptr = codegen_expr(c, obj);
+				base_ptr = get_address(c, obj, NULL);
 			}
 			base_ptr = LLVMBuildGEP2(c->builder, elem_t, base_ptr,
 				(LLVMValueRef[]){ LLVMConstInt(i64_t, 0, 0) }, 1, "arr_base");
@@ -415,6 +324,7 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 			base_ptr = LLVMBuildExtractValue(c->builder, slice_val, 0, "slice_base");
 			total_len = LLVMBuildExtractValue(c->builder, slice_val, 1, "slice_len");
 		} else if (obj_ast && obj_ast->kind == TYPE_PTR) {
+			wky_require_unsafe(c,n,"slicing a raw pointer");
 			elem_t = get_llvm_type(c, obj_ast->inner);
 			base_ptr = codegen_expr(c, obj);
 			total_len = LLVMConstInt(i64_t, 0x7FFFFFFF, 0);
@@ -492,7 +402,9 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 	case NODE_CALL: {
 		char func_name[256];
 		LLVMValueRef fn = resolve_callee(c, n->data.call.callee, func_name,
-										 sizeof(func_name));
+									 sizeof(func_name));
+		LLVMValueRef fallible=wky_result_builtin(c,n,func_name);
+		if (fallible) return fallible;
 		LLVMValueRef numeric = wky_numeric_builtin(c, n, func_name);
         if (numeric) return numeric;
 		LLVMValueRef managed = wky_memory_builtin(c, n, func_name);
@@ -550,90 +462,9 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 			}
 			// fall through: user-defined qadd or mismatched types.
 		}
-		if (!fn && strcmp(func_name, "make_chan") == 0) {
-			// make_chan(cap): allocate the ring buffer and fill the
-			// {buf, cap, head, count, mask} record. The element type comes
-			// from the assignment context (chan<T>). Ring byte size is
-			// derived from a null-GEP -- no target data needed at compile
-			// time. The allocation is rounded up to a power of two so
-			// send/recv index with `& mask` instead of `% cap`; cap stays
-			// the user-visible blocking threshold.
-			Type *chan_t = n->data_type;
-			if (!chan_t || chan_t->kind != TYPE_CHAN) {
-				still_diag_help("annotate the binding: `let ch: chan<i32> = "
-						   "make_chan(...)`");
-				still_error(STILL_E_TYPE, n, "make_chan requires a chan<T> context");
-				exit(1);
-			}
-			LLVMContextRef ctx = c->context;
-			LLVMTypeRef ct = get_llvm_type(c, chan_t);
-			LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
-			LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
-			LLVMTypeRef i8ptr =
-				LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
+		LLVMValueRef channel=wky_channel_builtin(c,n,func_name);
+		if (channel) return channel;
 
-			long long cap = 64; // default capacity
-			if (n->data.call.args &&
-				n->data.call.args->type == NODE_LITERAL)
-				cap = n->data.call.args->data.literal.i64_val;
-			if (cap < 1)
-				cap = 1;
-
-			// alloc = next power of two >= cap.
-			long long alloc = 1;
-			while (alloc < cap)
-				alloc <<= 1;
-			unsigned long long mask = (unsigned long long)alloc - 1;
-
-			LLVMTypeRef malloc_t =
-				LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_t}, 1, 0);
-			LLVMValueRef malloc_f =
-				LLVMGetNamedFunction(c->module, "malloc");
-			if (!malloc_f)
-				malloc_f = LLVMAddFunction(c->module, "malloc", malloc_t);
-
-			// sizeof(elem) = ptrtoint(gep null[1]).
-			LLVMValueRef null_elem_ptr =
-				LLVMConstNull(LLVMPointerType(elem_t, 0));
-			LLVMValueRef one_gep = LLVMBuildGEP2(
-				c->builder, elem_t, null_elem_ptr,
-				(LLVMValueRef[]){LLVMConstInt(i64_t, 1, 0)}, 1,
-				"elem_sz_probe");
-			LLVMValueRef elem_sz =
-				LLVMBuildPtrToInt(c->builder, one_gep, i64_t, "elem_sz");
-			LLVMValueRef ring_bytes = LLVMBuildMul(
-				c->builder, elem_sz,
-				LLVMConstInt(i64_t, (unsigned long long)alloc, 0),
-				"ring_bytes");
-
-			LLVMValueRef buf_v = LLVMBuildCall2(c->builder, malloc_t,
-												malloc_f, &ring_bytes, 1,
-												"chan_ring");
-
-			LLVMValueRef alloca =
-				create_entry_block_alloca(c, ct, "chan_new");
-			LLVMTypeRef buf_fld_t = LLVMPointerType(elem_t, 0);
-			LLVMBuildStore(
-				c->builder,
-				LLVMBuildPointerCast(c->builder, buf_v, buf_fld_t,
-									 "ring_cast"),
-				LLVMBuildStructGEP2(c->builder, ct, alloca, 0, ""));
-			LLVMBuildStore(c->builder,
-						   LLVMConstInt(i64_t,
-										(unsigned long long)cap, 0),
-						   LLVMBuildStructGEP2(c->builder, ct, alloca, 1,
-											   ""));
-			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, 0, 0),
-						   LLVMBuildStructGEP2(c->builder, ct, alloca, 2,
-											   ""));
-			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, 0, 0),
-						   LLVMBuildStructGEP2(c->builder, ct, alloca, 3,
-											   ""));
-			LLVMBuildStore(c->builder, LLVMConstInt(i64_t, mask, 0),
-						   LLVMBuildStructGEP2(c->builder, ct, alloca, 4,
-											   ""));
-			return LLVMBuildLoad2(c->builder, ct, alloca, "chan_val");
-		}
 		if (!fn && (strcmp(func_name, "sum") == 0 ||
 					strcmp(func_name, "max") == 0 ||
 					strcmp(func_name, "min") == 0 ||
@@ -936,8 +767,19 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		FunctionSignature *source_signature = NULL;
 		for (FunctionSignature *s = c->function_signatures; s; s = s->next)
 			if (s->function == fn) { source_signature=s; break; }
+		if (source_signature && source_signature->declaration->data.func.is_unsafe)
+			wky_require_unsafe(c,n,"calling an unsafe function");
+		wky_check_call_safety(c,n,fn);
+		if (!LLVMCountBasicBlocks(fn) && !LLVMGetStringAttributeAtIndex(fn,LLVMAttributeFunctionIndex,
+		    "wky.source",sizeof("wky.source")-1) && strncmp(func_name,"__wky_",sizeof("__wky_")-1)) {
+			const char *safe[]={"sqrt","sqrtf","sin","sinf","cos","cosf","tan","tanf","exp","expf","log","logf", "log2","log2f","log10","log10f","pow","powf","fabs","fabsf","floor","floorf","ceil","ceilf","round","roundf","fmod","fmodf","abs","labs","llabs",NULL};
+			int allowed=0; for (unsigned i=0; safe[i]; ++i) if (!strcmp(func_name,safe[i])) allowed=1;
+			if (!allowed) wky_require_unsafe(c,n,"calling foreign code");
+		}
 		ASTNode *source_parameter=source_signature ? source_signature->declaration->data.func.args : NULL;
 		Type **parameter_ast=arena_alloc(c->arena,sizeof(*parameter_ast)*(param_count ? param_count : 1));
+		DeferFrame *saved_argument_defers=c->defer_stack;
+		LLVMValueRef *argument_guards=arena_alloc(c->arena,sizeof(*argument_guards)*(arg_count ? arg_count : 1));
 		for (int i=0; i<param_count; ++i) {
 			parameter_ast[i]=source_signature && source_signature->parameters ? source_signature->parameters[i] : source_parameter ? source_parameter->data_type : NULL;
 			if (source_parameter) source_parameter=source_parameter->next;
@@ -946,8 +788,9 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 			arg_node=evaluation_order[evaluation_index];
 			int i=0;
 			while (parameter_order[i]!=arg_node) ++i;
-			Type *actual = wky_expr_type(c, arg_node);
 			Type *expected_ast = i<param_count ? wky_resolve_type(c,parameter_ast[i]) : NULL;
+			wky_literal_context(c,arg_node,expected_ast);
+			Type *actual = wky_expr_type(c, arg_node);
 			if (wky_contains_managed(c, actual, 0) && !expected_ast) {
 				still_error(STILL_E_TYPE, arg_node, "managed values require a typed Whisky parameter");
 				exit(1);
@@ -957,19 +800,24 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 				still_error(STILL_E_TYPE, arg_node, "managed argument type must exactly match its parameter; use ref_of to borrow");
 				exit(1);
 			}
+            if (i<param_count && expected_ast) {
+                LLVMValueRef view=wky_array_view(c,arg_node,expected_ast);
+                if (view) { llvm_args[i]=view; continue; }
+            }
 			// Array -> slice decay: passing an `[N]T` lvalue where a
 			// `[]T` param is expected builds a {&arr[0], N} view in one
 			// constant pair -- no copy, no runtime work.
 			if (i < param_count && arg_node->type == NODE_VAR_REF) {
 				Scope *sv = scope_find(c, arg_node->data.var_ref.name);
-				if (sv && sv->node && sv->node->data_type &&
-					sv->node->data_type->kind == TYPE_ARRAY) {
+			if (sv && sv->node && sv->node->data_type &&
+				sv->node->data_type->kind == TYPE_ARRAY) {
 					Type *at = sv->node->data_type;
 					Type slice_t = {0};
 					slice_t.kind = TYPE_SLICE;
 					slice_t.inner = at->inner;
 					LLVMTypeRef want = get_llvm_type(c, &slice_t);
 					if (param_types[i] == want) {
+						wky_require_mutable(c,arg_node);
 						LLVMTypeRef ignored;
 						LLVMValueRef arr_addr =
 							get_address(c, arg_node, &ignored);
@@ -1004,6 +852,7 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 				Scope *sv = scope_find(c, arg_node->data.var_ref.name);
 				if (sv && sv->node && sv->node->data_type &&
 					sv->node->data_type->kind == TYPE_ARRAY) {
+					wky_require_mutable(c,arg_node);
 					LLVMTypeRef ignored;
 					llvm_args[i] = get_address(c, arg_node, &ignored);
 					arg_node = arg_node->next;
@@ -1042,6 +891,7 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 						LLVMTypeRef pointee = NULL;
 						LLVMValueRef addr =
 							get_address(c, arg_node, &pointee);
+						wky_require_mutable(c,arg_node);
 						if (addr && pointee &&
 							LLVMGetTypeKind(pointee) ==
 								LLVMStructTypeKind) {
@@ -1142,10 +992,19 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 										 "float_prom");
 			}
 			llvm_args[i] = val;
+			Type *argument_type=wky_expr_type(c,arg_node);
+			if (wky_contains_managed(c,argument_type,1) || (argument_type && argument_type->kind==TYPE_HANDLE)) {
+				LLVMValueRef guard=create_entry_block_alloca(c,LLVMTypeOf(val),"argument_cleanup");
+				LLVMBuildStore(c->builder,val,guard); wky_memory_defer_value(c,guard,argument_type);
+				argument_guards[i]=guard;
+			}
 			arg_node = arg_node->next;
 		}
 		LLVMValueRef call = LLVMBuildCall2(c->builder, func_type, fn,
 										   llvm_args, arg_count, "");
+		for (int i=0; i<arg_count; ++i)
+			if (argument_guards[i]) LLVMBuildStore(c->builder,LLVMConstNull(LLVMTypeOf(llvm_args[i])),argument_guards[i]);
+		c->defer_stack=saved_argument_defers;
 		// Self-recursion in tail position: mark it so the backend emits a
 		// jmp instead of call+ret (no stack growth on tail-recursive loops).
 		// Only safe when this call is the whole result of the function --
@@ -1153,6 +1012,10 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		// inside a coroutine body.
 		if (fn == c->current_func && !c->in_coroutine)
 			LLVMSetTailCall(call, true);
+		if (source_signature && source_signature->declaration->data.func.is_drip) {
+			n->data_type=source_signature->return_type;
+			return wky_coro_handle(c,call);
+		}
 		return call;
 	}
 
@@ -1346,290 +1209,16 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 	}
 
 
-	case NODE_SEND: {
-		// ch <- v: if the ring is full, yield and re-poll; else store at
-		// slot (head+count) & mask and bump count. Ready path: 1 load,
-		// 1 store, 1 add, 1 mask.
-		LLVMContextRef ctx = c->context;
-		Type *chan_t = n->data.send.chan->data_type;
-		if (!chan_t && n->data.send.chan->type == NODE_VAR_REF) {
-			Scope *sc = scope_find(c,
-								   n->data.send.chan->data.var_ref.name);
-			chan_t = (sc && sc->node) ? sc->node->data_type : NULL;
-			n->data.send.chan->data_type = chan_t;
-		}
-		if (!chan_t || chan_t->kind != TYPE_CHAN) {
-			still_error(STILL_E_TYPE, n, "send requires a chan<T>");
-			exit(1);
-		}
-		LLVMTypeRef ct = get_llvm_type(c, chan_t);
-		LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
-		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
+	case NODE_SEND: case NODE_RECV:
+		return wky_channel_operation(c,n);
 
-		// Purity probe: when the sent expression is side-effect-free we
-		// evaluate it AFTER the capacity check passes, so its SSA value
-		// never spans a suspension point -- coro-split then keeps it in a
-		// register instead of spilling through the coroutine frame on every
-		// iteration of a send-heavy loop. Impure values (calls, chan ops,
-		// assignments) keep the evaluate-first order: blocking must not
-		// re-run their side effects.
-		int val_pure = expr_is_pure(c, n->data.send.value);
-
-		LLVMValueRef chan_addr =
-			get_address(c, n->data.send.chan, NULL);
-
-		LLVMValueRef cnt_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 3, "cnt_p");
-		LLVMValueRef cap_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 1, "cap_p");
-		LLVMValueRef head_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "head_p");
-		LLVMValueRef mask_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 4, "mask_p");
-		LLVMValueRef buf_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "buf_p");
-
-		LLVMValueRef val = NULL;
-		if (!val_pure) {
-			val = codegen_expr(c, n->data.send.value);
-			val = coerce_value(c, val, n->data.send.value->data_type,
-							   elem_t, chan_t->inner);
-		}
-
-		// check_bb is a true loop header: every coroutine resume re-enters
-		// it, so capacity is re-read fresh after each suspension -- no
-		// volatiles needed, the CFG carries the ordering.
-		LLVMBasicBlockRef check_bb =
-			wky_append_block(c->current_func, "send_check");
-		LLVMBasicBlockRef retry_bb =
-			wky_append_block(c->current_func, "send_full");
-		LLVMBasicBlockRef do_send_bb =
-			wky_append_block(c->current_func, "send_put");
-		LLVMBasicBlockRef done_bb =
-			wky_append_block(c->current_func, "send_done");
-
-		LLVMBuildBr(c->builder, check_bb);
-		LLVMPositionBuilderAtEnd(c->builder, check_bb);
-		LLVMValueRef cur_cnt =
-			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt");
-		LLVMValueRef cur_cap =
-			LLVMBuildLoad2(c->builder, i64_t, cap_p, "cap");
-		LLVMValueRef full =
-			LLVMBuildICmp(c->builder, LLVMIntUGE, cur_cnt, cur_cap,
-						  "is_full");
-		set_branch_weights(c, LLVMBuildCondBr(c->builder, full, retry_bb,
-											  do_send_bb),
-						   1, 99);
-
-		// Full: cooperative block -- suspend; resumption loops back to
-		// re-poll rather than falling into the store.
-		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
-		if (c->in_coroutine && c->current_coro_hdl) {
-			chan_yield(c);
-			LLVMBuildBr(c->builder, check_bb);
-		} else {
-			// Outside any coroutine there is nothing to yield to: a full
-			// ring here is a program bug. Trap like a bounds failure.
-			LLVMValueRef msg = LLVMBuildGlobalStringPtr(
-				c->builder, "send on full channel", "trap_msg");
-			LLVMValueRef file_v = LLVMBuildGlobalStringPtr(
-				c->builder,
-				c->source_filename ? c->source_filename : "?",
-				"trap_file");
-			LLVMValueRef targs[3] = {
-				msg, file_v,
-				LLVMConstInt(LLVMInt32TypeInContext(ctx),
-							 n->line > 0 ? n->line : 0, 1)};
-			LLVMValueRef tf = get_or_declare_trap_fn(c);
-			LLVMBuildCall2(c->builder,
-						   LLVMGlobalGetValueType(tf), tf, targs, 3,
-						   "");
-			LLVMBuildUnreachable(c->builder);
-		}
-
-		LLVMPositionBuilderAtEnd(c->builder, do_send_bb);
-		if (val_pure) {
-			// Post-check evaluation: no suspension separates this value
-			// from its store, so it lives entirely in registers.
-			val = codegen_expr(c, n->data.send.value);
-			val = coerce_value(c, val, n->data.send.value->data_type,
-							   elem_t, chan_t->inner);
-		}
-		cur_cnt = LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt2");
-		LLVMValueRef head =
-			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
-		LLVMValueRef mask_v =
-			LLVMBuildLoad2(c->builder, i64_t, mask_p, "mask");
-		LLVMValueRef buf =
-			LLVMBuildLoad2(c->builder,
-						   LLVMPointerType(elem_t, 0), buf_p, "ring");
-		// head is monotonic; the write slot is (head+count) & mask. Since
-		// count never exceeds cap <= alloc, unread slots are never
-		// overwritten -- FIFO holds with no wrap store on the send path.
-		LLVMValueRef end = LLVMBuildAdd(c->builder, head, cur_cnt,
-										"end");
-		LLVMValueRef slot_idx = LLVMBuildAnd(c->builder, end, mask_v,
-											 "slot");
-		LLVMValueRef slot =
-			LLVMBuildGEP2(c->builder, elem_t, buf, &slot_idx, 1,
-						  "slot_p");
-		LLVMBuildStore(c->builder, val, slot);
-		LLVMBuildStore(c->builder,
-					   LLVMBuildNUWAdd(c->builder, cur_cnt,
-									   LLVMConstInt(i64_t, 1, 0),
-									   "cnt_inc"),
-					   cnt_p);
-		LLVMBuildBr(c->builder, done_bb);
-		LLVMPositionBuilderAtEnd(c->builder, done_bb);
-		return val;
-	}
-
-	case NODE_RECV: {
-		// <-ch: if empty, yield and re-poll; else load head, advance it
-		// modulo cap, decrement count.
-		LLVMContextRef ctx = c->context;
-		Type *chan_t = n->data.recv.chan->data_type;
-		if (!chan_t && n->data.recv.chan->type == NODE_VAR_REF) {
-			Scope *sc = scope_find(c,
-								   n->data.recv.chan->data.var_ref.name);
-			chan_t = (sc && sc->node) ? sc->node->data_type : NULL;
-			n->data.recv.chan->data_type = chan_t;
-			if (chan_t && chan_t->inner)
-				n->data_type = chan_t->inner;
-		}
-		if (!chan_t || chan_t->kind != TYPE_CHAN) {
-			still_error(STILL_E_TYPE, n, "receive requires a chan<T>");
-			exit(1);
-		}
-		LLVMTypeRef ct = get_llvm_type(c, chan_t);
-		LLVMTypeRef elem_t = get_llvm_type(c, chan_t->inner);
-		LLVMTypeRef i64_t = LLVMInt64TypeInContext(ctx);
-
-		LLVMValueRef chan_addr =
-			get_address(c, n->data.recv.chan, NULL);
-
-		LLVMValueRef cnt_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 3, "rcnt_p");
-		LLVMValueRef head_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 2, "rhead_p");
-		LLVMValueRef mask_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 4, "rmask_p");
-		LLVMValueRef buf_p =
-			LLVMBuildStructGEP2(c->builder, ct, chan_addr, 0, "rbuf_p");
-
-		// Same loop-header discipline as send: resume re-enters the check
-		// with freshly loaded count/head, never a stale snapshot.
-		LLVMBasicBlockRef check_bb =
-			wky_append_block(c->current_func, "recv_check");
-		LLVMBasicBlockRef retry_bb =
-			wky_append_block(c->current_func, "recv_empty");
-		LLVMBasicBlockRef do_recv_bb =
-			wky_append_block(c->current_func, "recv_get");
-		LLVMBasicBlockRef done_bb =
-			wky_append_block(c->current_func, "recv_done");
-
-		LLVMBuildBr(c->builder, check_bb);
-		LLVMPositionBuilderAtEnd(c->builder, check_bb);
-		LLVMValueRef cur_cnt =
-			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt");
-		set_branch_weights(
-			c,
-			LLVMBuildCondBr(c->builder,
-							LLVMBuildICmp(c->builder, LLVMIntEQ, cur_cnt,
-										  LLVMConstInt(i64_t, 0, 0),
-										  "is_empty"),
-							retry_bb, do_recv_bb),
-			1, 99);
-
-		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
-		if (c->in_coroutine && c->current_coro_hdl) {
-			chan_yield(c);
-			LLVMBuildBr(c->builder, check_bb);
-		} else {
-			// Same as send: nothing to schedule us -- trap.
-			LLVMValueRef msg2 = LLVMBuildGlobalStringPtr(
-				c->builder, "receive on empty channel", "trap_msg");
-			LLVMValueRef file_v2 = LLVMBuildGlobalStringPtr(
-				c->builder,
-				c->source_filename ? c->source_filename : "?",
-				"trap_file");
-			LLVMValueRef targs2[3] = {
-				msg2, file_v2,
-				LLVMConstInt(LLVMInt32TypeInContext(ctx),
-							 n->line > 0 ? n->line : 0, 1)};
-			LLVMValueRef tf2 = get_or_declare_trap_fn(c);
-			LLVMBuildCall2(c->builder,
-						   LLVMGlobalGetValueType(tf2), tf2, targs2, 3,
-						   "");
-			LLVMBuildUnreachable(c->builder);
-		}
-
-		LLVMPositionBuilderAtEnd(c->builder, do_recv_bb);
-		LLVMValueRef head =
-			LLVMBuildLoad2(c->builder, i64_t, head_p, "head");
-		LLVMValueRef mask_v =
-			LLVMBuildLoad2(c->builder, i64_t, mask_p, "mask");
-		LLVMValueRef buf =
-			LLVMBuildLoad2(c->builder, LLVMPointerType(elem_t, 0), buf_p,
-						   "ring");
-		// Read slot is head & mask over the monotonic counter; the stored
-		// head just advances -- no division anywhere on the data path.
-		LLVMValueRef slot_idx = LLVMBuildAnd(c->builder, head, mask_v,
-											 "slot");
-		LLVMValueRef slot =
-			LLVMBuildGEP2(c->builder, elem_t, buf, &slot_idx, 1,
-						  "slot_p");
-		LLVMValueRef out = LLVMBuildLoad2(c->builder, elem_t, slot,
-										  "recv_val");
-		LLVMValueRef new_head = LLVMBuildNUWAdd(
-			c->builder, head, LLVMConstInt(i64_t, 1, 0), "head1");
-		LLVMBuildStore(c->builder, new_head, head_p);
-		LLVMValueRef cnt_now =
-			LLVMBuildLoad2(c->builder, i64_t, cnt_p, "cnt3");
-		LLVMBuildStore(
-			c->builder,
-			LLVMBuildNSWSub(c->builder, cnt_now,
-							LLVMConstInt(i64_t, 1, 0), "cnt_dec"),
-			cnt_p);
-		LLVMBuildBr(c->builder, done_bb);
-		LLVMPositionBuilderAtEnd(c->builder, done_bb);
-		return out;
-	}
-
-	case NODE_SIP: {
-		LLVMValueRef hdl = codegen_expr(c, n->data.sip.handle);
-		LLVMValueRef is_done = LLVMBuildCall2(c->builder, c->coro_done_type,
-											  c->coro_done, &hdl, 1, "is_done");
-		LLVMBasicBlockRef resume_bb =
-			wky_append_block(c->current_func, "sip_resume");
-		LLVMBasicBlockRef cont_bb =
-			wky_append_block(c->current_func, "sip_cont");
-		LLVMBuildCondBr(c->builder, is_done, cont_bb, resume_bb);
-		LLVMPositionBuilderAtEnd(c->builder, resume_bb);
-		LLVMBuildCall2(c->builder, c->coro_resume_type, c->coro_resume, &hdl, 1,
-					   "");
-		LLVMBuildBr(c->builder, cont_bb);
-		LLVMPositionBuilderAtEnd(c->builder, cont_bb);
-		LLVMValueRef promise_ptr_void = LLVMBuildCall2(
-			c->builder, c->coro_promise_type, c->coro_promise,
-			(LLVMValueRef[]){
-				hdl,
-				LLVMConstInt(LLVMInt32TypeInContext(c->context),
-							 c->drip_promise_index, 0),
-				LLVMConstInt(LLVMInt1TypeInContext(c->context), 0, 0)},
-			3, "prom_ptr_void");
-		LLVMValueRef promise_ptr = LLVMBuildPointerCast(
-			c->builder, promise_ptr_void,
-			LLVMPointerType(LLVMInt32TypeInContext(c->context), 0), "prom_ptr");
-		LLVMValueRef val =
-			LLVMBuildLoad2(c->builder, LLVMInt32TypeInContext(c->context),
-						   promise_ptr, "sip_val");
-		LLVMSetVolatile(val, 1);
-		attach_tbaa(c, val, LLVMInt32TypeInContext(c->context));
-		return val;
-	}
+	case NODE_SIP: return wky_coro_sip(c,n);
 
 	case NODE_CAST: {
+		Type *source=wky_expr_type(c,n->data.cast.val), *destination=wky_resolve_type(c,n->data_type);
+		if ((source && (source->kind==TYPE_PTR || source->kind==TYPE_AMP)) ||
+		    (destination && (destination->kind==TYPE_PTR || destination->kind==TYPE_AMP)))
+			wky_require_unsafe(c,n,"raw pointer cast");
 		LLVMValueRef val = codegen_expr(c, n->data.cast.val);
 		// Bare variable refs carry no parser-side type; resolve from their
 		// declaration so sign-aware casts (sitofp vs uitofp) pick right.
@@ -1649,6 +1238,7 @@ static LLVMValueRef codegen_expr_inner(StillCompiler *c, ASTNode *n) {
 		return codegen_brew(c, n);
 
 	case NODE_ASM: {
+		wky_require_unsafe(c,n,"inline assembly");
 		// Inline asm as a side-effecting barrier expression. No operand
 		// plumbing in v1: the template runs verbatim (AT&T dialect).
 		LLVMTypeRef asm_t = LLVMFunctionType(
@@ -2049,7 +1639,6 @@ static LLVMValueRef build_str_eq(StillCompiler *c, LLVMTypeRef view_t,
 	// Known literal bytes + constant length: the length test and the
 	// chunk compares all go into the CURRENT block as one and-chain --
 	// no extra branches for the optimizer to duplicate or reschedule.
-	size_t klen = 0;
 	const unsigned char *kb =
 		lbytes ? lbytes : rbytes ? rbytes : NULL;
 	if (const_len && kb && LLVMIsAConstantInt(ll) && LLVMIsAConstantInt(rl)) {
@@ -2245,6 +1834,36 @@ LLVMValueRef build_binop(StillCompiler *c, ASTNode *n, LLVMValueRef l,
 
 	LLVMTypeRef l_ty = LLVMTypeOf(l);
 	LLVMTypeRef r_ty = LLVMTypeOf(r);
+    int string_relation=(op==TOK_ISEQ || op==TOK_NOTEQ || op==TOK_LANGLE || op==TOK_RANGLE || op==TOK_LEQ || op==TOK_REQ) &&
+        str_relational(c,n->data.bin_op.left) && str_relational(c,n->data.bin_op.right);
+    if (!string_relation && (LLVMGetTypeKind(l_ty)==LLVMPointerTypeKind || LLVMGetTypeKind(r_ty)==LLVMPointerTypeKind)) {
+        Type *left=wky_expr_type(c,n->data.bin_op.left), *right=wky_expr_type(c,n->data.bin_op.right);
+        int lp=LLVMGetTypeKind(l_ty)==LLVMPointerTypeKind, rp=LLVMGetTypeKind(r_ty)==LLVMPointerTypeKind;
+        if (lp && rp && (op==TOK_ISEQ || op==TOK_NOTEQ))
+            return LLVMBuildICmp(c->builder,op==TOK_ISEQ ? LLVMIntEQ : LLVMIntNE,l,r,"pointer_equal");
+        wky_require_unsafe(c,n,"raw pointer arithmetic");
+        if (op==TOK_PLUS && !lp && rp) { LLVMValueRef tmp=l; l=r; r=tmp; left=right; lp=1; rp=0; }
+        if (lp && !rp && (op==TOK_PLUS || op==TOK_MINUS) && LLVMGetTypeKind(LLVMTypeOf(r))==LLVMIntegerTypeKind) {
+            LLVMTypeRef index_type=LLVMInt64TypeInContext(c->context);
+            r=coerce_value(c,r,right,index_type,NULL);
+            if (op==TOK_MINUS) r=LLVMBuildNeg(c->builder,r,"pointer_back");
+            LLVMTypeRef element=get_llvm_type(c,left && left->inner ? left->inner : &(Type){.kind=TYPE_U8});
+            n->data_type=left;
+            return LLVMBuildGEP2(c->builder,element,l,&r,1,"raw_pointer_offset");
+        }
+        if (lp && rp && op==TOK_MINUS && wky_types_same(left,right)) {
+            n->data_type=arena_alloc(c->arena,sizeof(Type)); n->data_type->kind=TYPE_I64;
+            LLVMTypeRef index_type=LLVMInt64TypeInContext(c->context);
+            LLVMValueRef bytes=LLVMBuildSub(c->builder,LLVMBuildPtrToInt(c->builder,l,index_type,"left_address"),
+                LLVMBuildPtrToInt(c->builder,r,index_type,"right_address"),"pointer_bytes");
+            if (LLVMIsAInstruction(bytes)) {
+                LLVMMetadataRef marker=LLVMMDNodeInContext2(c->context,NULL,0);
+                LLVMSetMetadata(bytes,LLVMGetMDKindIDInContext(c->context,"wky.pointer.diff",16),LLVMMetadataAsValue(c->context,marker));
+            }
+            return LLVMBuildSDiv(c->builder,bytes,LLVMSizeOf(get_llvm_type(c,left->inner)),"pointer_difference");
+        }
+        still_error(STILL_E_TYPE,n,"unsupported raw pointer operation"); exit(1);
+    }
 
 	// String relations: == != < > <= >= become strcmp(...) OP 0. Content
 	// semantics, not pointer identity. (String literals with identical
@@ -2285,6 +1904,7 @@ LLVMValueRef build_binop(StillCompiler *c, ASTNode *n, LLVMValueRef l,
 				}
 				cmp = build_str_memcmp(c, view_t, l, r);
 			} else {
+				wky_require_unsafe(c,n,"reading a raw C string");
 				cmp = build_strcmp_call(c, l, r);
 			}
 			return LLVMBuildICmp(c->builder,

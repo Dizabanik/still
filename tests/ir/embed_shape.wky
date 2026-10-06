@@ -13,6 +13,7 @@ struct Employee {
     Person;
     u32 badge;
 }
+#[unsafe]
 fn i32 main() {
     Employee e = { .badge = 7 };
     e.name = "ada";

@@ -22,6 +22,27 @@ Work order:
   Suffix type annotations and `let Type name` are rejected with E0001.
   Destructuring infers binding types; field labels and renames retain colons.
   Boolean literals carry bool types rather than falling back to integers.
+  Comma declarations initialize in source order; inferred bindings need their
+  own initializers. Array literals accept positional variables as well as literals.
+- Const is enforced for local/global bindings, inline fields and arrays,
+  consuming operations, mutable view/address creation and pointer receivers.
+  Const owner/ref bindings do not freeze their referents. Orbit expressions
+  reevaluate in their declaration environment on every read, including after
+  alias writes/calls and under lexical shadowing. Side effects/owned results
+  are rejected, including impure custom index getters; LLVM may reuse reads
+  it proves unchanged.
+- Raw pointer access/arithmetic/casts, foreign calls, raw slice construction,
+  inline assembly and unchecked blocks require an unsafe context. `unsafe fn`
+  and `#[unsafe]` require callers to establish preconditions. Vetted scalar
+  math and standard-library wrappers retain their existing contracts.
+  Source calls cannot gain privileges from a private runtime name. Formatted
+  byte arrays/slices use their length, preserve embedded null bytes and evaluate
+  once; raw C-string pointer printing requires unsafe.
+  Large field widths stream padding in bounded chunks; high float precision
+  uses a correctly sized temporary. Minimum signed integers and negative zero
+  format without signed overflow or loss of their sign.
+  This migrates existing raw programs with explicit annotations, without
+  changing their output contracts or disabling managed checks.
 - Managed allocation identity: zero-initialized owner/ref/arena allocations,
   byte extents, checked indexing/slicing/forward offsets, process-lived pooled
   descriptors, thread confinement, and generation retirement. The reference
@@ -29,11 +50,33 @@ Work order:
 - Affine owner bindings: explicit move/clone, implicit copy rejection, branch
   and loop state tracking, reassignment, and LIFO scope cleanup through return,
   break, continue, filter/press, and ordinary exits.
-- Stack owning values: nested structs/fixed arrays use compact static ownership
+  Global owning values register reverse-declaration cleanup at normal program
+  exit, including cancellation of started global coroutine handles.
+- Stack owning values: nested structs/fixed arrays/tagged enums use compact static ownership
   layouts for move, deep clone, replacement and scope cleanup. Whole-value heap
   transfers register/detach their owned fields. Owned spreads release replaced
   fields; implicit aggregate copies and borrowing an owned temporary are rejected.
   Clone failure rolls back all new allocations and produces an all-zero value.
+- Typed option<T>/result<T,E>: inline Some/None and Ok/Err values, constructors,
+  exhaustive matching, `try` across typed functions or compatible dregs handlers,
+  result-returning `press`, owned success/error payload transfer, void payloads,
+  and structural generic/overload keys including both T and E. Failure paths
+  run LIFO cleanup without unwinding. Fallible functions cannot silently
+  synthesize success on a reachable fallthrough. Partial literal construction
+  and owning arguments already evaluated before a later failure are guarded.
+- Coroutine handles share managed identity and ownership metadata: affine moves,
+  nested aggregate/channel/result storage, automatic cancellation, cleanup at
+  initial/intermediate/final suspension, completed promise retention, and pins
+  preventing active-frame destruction. LLVM computes exact frame size and may
+  perform proven frame elision; no fixed frame buffer or unconditional claim
+  of elision remains. Owning handles and aggregates containing them cannot be
+  cloned; borrowed handle views can be copied as aliases.
+- Cooperative chan<T>: managed ring, exact positive requested capacity with
+  power-of-two physical backing, owned FIFO transfers, queued/pending message
+  cleanup, closed-channel traps, discard/select cleanup, and single evaluation
+  of channel/message expressions. Suspended operations revalidate managed
+  containing storage before accessing metadata. Select supports eight cases
+  and polls in declaration order; operating-system thread messaging is deferred.
 - Typed filter/dregs payloads also own their fields: handlers clean up on
   fallthrough or return, or transfer the payload with move. Handler bindings
   remain local to the catch body and participate in affine state checking.
@@ -58,6 +101,12 @@ Work order:
   Comptime evaluation respects widths, short circuiting, and typed rounding.
 - Effects: transitive pure, noalloc, and nocapture checking before optimization,
   including memory copies, reachable pointers, and indirect/unknown calls.
+  Pure functions can perform checked reference reads and view construction;
+  runtime validation/instrumentation is separated from application mutation in
+  the analysis copy without changing production inlining or managed guards.
+  Handle/arena cleanup and arena-object removal conservatively reject noalloc
+  because destruction can invoke user callbacks with unknown allocation effects.
+  Plain owning-buffer transfers and cleanup still satisfy noalloc.
   Address provenance follows scalar encoding, enum payload words, selected
   aggregate fields and helper return values. Recursive field permutations join
   conservatively; scalar reads and slice lengths remain ordinary values.
@@ -108,9 +157,10 @@ reverse index order; each owned allocation drops its children in reverse
 acquisition order. Scope bindings and explicit defers retain LIFO order.
 Aggregate cleanup/replacement checks every affected ownership tree before
 changing any payload. Duplicate roots are detected in linear time using
-temporary descriptor marks; descriptors retain their existing size.
+temporary descriptor marks. Resource descriptors also carry destruction state
+and an optional callback for coroutine cancellation.
 A fixed array contributes one repeated layout entry rather than one entry per
-element. Aggregate glue allocates no heap storage; explicit clone allocates
+element. Aggregate layout glue allocates no heap storage; explicit clone allocates
 only the owned allocations it copies. Embedded arenas support move/drop and
 are rejected by clone.
 
@@ -135,102 +185,72 @@ unchecked after removing its allocation.
 
 ## Evidence and measurement
 
-The regression runner checks behavior and diagnostics at O0, O2, and O3.
-The latest complete language checkpoint has 884 passing cases and all eight
-CTest suites passing. The sanitized runtime suite
-uses a two-bit generation counter and exercises clone allocation failures,
-resize retirement/reparenting, pinned descendants, cycles, callback writes,
-and a 50,000-node deep clone/drop without recursion. Subobject coverage adds
-exact extents, empty/one-past views, stale construction and output/header aliasing.
-The runtime now has 30 sanitized cases, including nested value layouts,
-duplicate roots and byte-for-byte preservation of pinned aggregates when
-cleanup or replacement traps. Value-clone failures exercise every byte budget
-before all three source allocations can be copied.
-The additional optimization-report suite checks emitted IR against reports,
-execution counters, source spans and unchanged native object bytes.
-Declaration regressions add 27 cases at O0/O2/O3, including malformed nested
-types, contextual type names, explicit composite bindings and inference.
-Unsigned tuple literals and function-return destructuring preserve values above
-the signed 64-bit range. Explicit wrapping and truncation have independent
-modular-arithmetic oracles.
-Tooling checks twenty invalid declaration forms in check and format modes,
-formatter round trips with execution oracles, and byte-identical bitcode,
-IR and native objects for equivalent explicit/inferred declarations at all
-three optimization levels. Existing output fixtures remain unchanged.
+The strict regression runner checks successful execution, exact output,
+diagnostics, IR contracts and deliberate traps at O0, O2 and O3. Managed safety
+failures must be checked aborts, never segmentation faults. New semantic,
+fallible and concurrency fixtures cover comma declarations, const through
+aliases/views, orbit dependencies, single evaluation, owned enum layouts,
+propagating partial construction/calls, nested handles, cancellation, blocked
+owned sends/receives/selects, close/drain, and stale channel containers.
 
-scripts/bench_memory.py verifies 80 edge runs, two sanitized C runs and eight
-separately instrumented workloads for each reference or subobject walk.
-scripts/bench_owners.py verifies 40 edge runs, two
-sanitized C runs, and four separately instrumented lifecycle workloads. Both
-use the same descriptor runtime, ABI, initialization, and arithmetic policy as
-their C counterparts. Timings use fresh, uninstrumented processes, balanced
-randomized execution, warmups, and median/MAD. Lifecycle results also preserve
-individual OS high-water RSS samples, binary sizes, hashes, and compiler
-versions. These are whole-process timings, not isolated cleanup latency.
-Historical benchmark verification also covers all 17 Whisky/C/Rust triples.
-Hash and tuple kernels use explicit wrapping; intentional truncation uses
-lossy_u32, with unsigned masks and shifts. The C/Rust algorithms are unchanged.
-Their fixed-input differential checks remain weaker than independent oracles
-and establish no language performance ranking. These gates pass on native
-macOS ARM64 and Linux x86-64, as do the managed and compiler-tools gates.
+The sanitized C runtime suite checks two-bit generation retirement, byte budgets
+for clone failure, 50,000-node iterative clone/drop, pins/cycles, conditional
+active-tag layouts with garbage inactive payloads, resource adoption, nested
+cleanup and reentrant replacement/destruction. Metadata is retired before a
+resource callback runs. Callback-capable trees temporarily protect their
+containing storage; plain leaf allocations retain a fast path. Opaque LLVM
+coroutine frame bytes are excluded from payload metrics; adopted handles count
+as resources and occupy descriptor storage.
 
-The 100,000-node/eight-trial native lifecycle measurement was 83.963/83.073 ms
-for Whisky/C chains (MAD 2.531/1.011 ms) and 67.305/62.691 ms for fanout
-(MAD 1.000/1.025 ms). Allocation, free, copied-byte, descriptor-byte, and
-index-check counters match. These local
-measurements do not establish performance on other workloads or machines.
-The Homebrew sanitizer runtime on this host stalls before main; verification
-uses the working Xcode sanitizer runtime and records its separate version.
+All nine CTest suites also cover check mode, formatting, artifact repeatability,
+branding, optimization reports, smoke and harness behavior. Final validation on
+macOS ARM64 and Linux x86-64 passes the same 1,202 regression combinations across
+412 fixtures at O0/O2/O3, with no expected failures or skips. This adds 106
+Whisky fixtures. The sanitized runtime suite passes 38 success/trap cases.
+Four sanitized print-runtime cases independently check exact bytes for minimum
+integers, buffer boundaries, large widths/precision, negative zero and binary data.
+The native run passes all nine CTest suites. Linux checks the final rebuilt
+compiler with four independent fixture workers and runs the other eight suites.
+The emulated unit timeout is configurable
+with STILL_UNIT_TEST_TIMEOUT; the default remains 600 seconds.
+Result JSON and logs stay in ignored build directories. Thirty-nine complete
+programs from nine guides are compiled and run, including the deliberate process
+exit example's status and stderr. Earlier fragment checks retain their recorded
+results.
 
-The field-view workload constructs two bounded views per iteration in both
-Whisky and C, with identical runtime, row layout, initialization and arithmetic.
-Its instrumented runs verify four indexed validations per checked iteration,
-or zero indexed validations with two pins per iteration plus one outer pin.
-Both modes create exactly two views per iteration. The stable variant measures
-guard churn deliberately; it is not a claim that per-iteration pins are faster.
-At ten million sequential iterations, private runtime helpers reduced the
-local Whisky median from 83.876 to 77.021 ms (MAD 0.307/0.159 ms), with C at
-71.240/72.049 ms. The Whisky executable shrank from 70,376 to 51,896 bytes.
-Each run uses seven samples/two warmups and verifies the full timed input.
+Existing matched/historical comparison programs explicitly annotate raw access.
+Their algorithms and independent/differential output policies are preserved.
+Compound assignment evaluates its target once; C counterparts reuse the same
+validated address, and managed validation-count formulas reflect this behavior.
+Scalar pointer difference remains a count for provenance checking; encoded raw
+addresses retain their taint.
 
-The owning-value workload clones four buffers inside a 136-byte value and
-transfers that value either between stack bindings or through a managed heap
-slot. Its static layout shape matches C's. With 100,000 elements per buffer
-and 64 trials, the local Whisky/C medians were 66.029/65.493 ms for stack
-transfers (MAD 0.566/0.640 ms) and 65.383/65.109 ms for heap transfers
-(MAD 0.183/0.918 ms). Seven samples/two warmups run without instrumentation.
-The separate instrumentation verifies 512/576 allocations and frees,
-204,800,000 copied bytes, zero final live payload bytes, and
-76,800,128/76,800,320 indexed validations in stack/heap modes respectively.
-Both implementations use the same runtime, arithmetic, zero initialization,
-cleanup and ownership layouts. These results establish no general language
-ranking.
+`bench_semantics.py` adds three equal-policy Whisky/C comparisons: typed result
+propagation, owned enum clone/consuming match, and owned FIFO channel transfer.
+It builds O0/O2/O3 pairs, instrumented O3 pairs and untimed C ASan/UBSan binaries.
+Independent closed-form Python equations check checksums, error/owned/message
+counts, allocations, frees, peak/cloned/live bytes and indexed validations.
+The normal gate verifies 120 edge runs, 15 sanitized runs and six full-input
+instrumented runs. Timing uses fresh uninstrumented processes, balanced random
+order, warmups, raw samples, median/MAD, peak RSS, executable sizes, source/runtime/
+oracle/binary hashes and compiler versions. CI runs correctness without speed
+thresholds. These whole-process workloads establish no general language ranking.
 
-scripts/bench_tools.py uses four versioned, deterministic source corpora with
-independent execution checksums, formatter fixed points and repeatable
-bitcode/IR/object hashes. It measures check, format and build separately with
-fresh processes and a warm filesystem. Version 2 adds 64 kernels using nested
-owners, references, qualified bindings, ref arrays and generic struct instances.
-Those kernels include checked/stable access and owning scope cleanup; their
-execution checksum comes from a separate arithmetic formula. No new timings
-are claimed for this corpus version. Version 1 median build times were
-66.985 ms for 12 kernels, 385.419 ms for 256 kernels, and 106.760 ms for 64 kernels calling
-17 nested generic helpers at four widths. Short/noisy check and format samples
-are flagged; no compiler-cache hit rate or cold-cache claim is invented.
+`bench_memory.py`, `bench_owners.py`, `bench_tools.py` and the six matched/17
+historical triples remain correctness gates. The runtime/oracle policies and
+benchmark interpretation are in bench/README.md. Prior recorded timings refer
+to earlier sources and are not claimed for this implementation. New measurements
+must use a fresh report. Compiler checks and runtime metrics remain independent:
+a missing IR call/tag alone is not proof that a runtime check was eliminated.
+The fresh native semantics report uses 100 million scalar iterations and two
+million iterations for each owning workload, seven samples and two warmups.
+Builds, sanitizers and instrumented runs are separate from timing. Native timing
+runs after the Linux validation completes, so its compiler work does not compete
+with measured programs.
 
-Native Darwin object emission uses the macOS product deployment version instead
-of an outdated Darwin-kernel conversion and passes the same target to the linker.
-The deployment override is checked, and successful tooling builds reject
-unexpected linker warnings.
-
-Repository CI covers Linux and macOS with the same strict contracts and
-untimed benchmark verification. Linux links libm after the generated object;
-runtime-input sqrt/cos regression cases keep math calls live at O0/O2/O3,
-rather than letting constant folding hide a missing linker dependency.
-Native object emission uses LLVM's PIC relocation model so ELF objects can
-link with Linux toolchains that default to PIE. The tooling suite also forces
-PIE linking at O0/O2/O3, checks the ELF executable type, and verifies output
-from global data, string literals, and managed memory.
+Repository CI runs Linux x86-64 and macOS ARM64. Native ELF objects use PIC for
+PIE linkers; libc math is linked after the generated object. Distribution builds
+use STILL_NATIVE_CPU=OFF and freshly generate both embedded runtimes with LLVM21.
 
 ## Remaining scope
 
@@ -238,18 +258,15 @@ The future-contract manifests still describe the full design scope; their
 planned status is not used as a passing-test count. Several concrete contracts
 now have executable coverage, but no entire future feature is claimed complete.
 
-Owned enum payloads and their cleanup/transfer glue remain restricted.
-Typed Option/Result propagation,
-coroutine cancellation cleanup, channel ownership transfer/shared regions,
-UTF-8 str versus bytes and C-string contracts, explicit raw/unsafe/FFI
-boundaries, shaped numerical/complex library work, and optimization reporting
-refinements are still required. Reports currently expose exact static IR facts
-and conservative source associations, not complete LLVM proof traces or
-executed-operation counts. Legacy raw pointers retain their prior semantics
-until the explicit boundary migration is implemented.
-Legacy orbit bindings currently evaluate their initializer once; dependency
-updates do not recompute them. The existing `tests/test.wky` output contract
-records this limitation, which is separate from declaration spelling.
+The remaining design scope includes shared regions and cross-thread channel
+handoff, UTF-8 str versus bytes and C-string contracts, full C/C++ interoperability,
+shaped numerical/complex library work, and optimization-report refinements.
+Reports currently expose static IR facts and conservative source associations,
+not complete LLVM proof traces or executed-operation counts. References stay
+thread-confined. Coroutine promises are currently i32, brew does not implicitly
+capture locals. Automatic global cleanup does not run on process abort. Void errors
+propagate through result returns; typed dregs bindings require a payload.
+Raw pointer operations remain programmer-checked inside their explicit boundary.
 
 Design constraints: reference identity cannot depend on an allocation's address;
 descriptor storage survives its payload; exhausted generations retire; checking

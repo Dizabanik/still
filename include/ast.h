@@ -32,7 +32,9 @@ typedef enum {
 	TYPE_ENUM,
 	TYPE_OWNER,
 	TYPE_REF,
-	TYPE_ARENA
+	TYPE_ARENA,
+	TYPE_OPTION,
+	TYPE_RESULT
 } TypeKind;
 
 typedef struct Type {
@@ -41,6 +43,7 @@ typedef struct Type {
 				   // 0 for unsigned integer (u8/16/32/64), bool, char, void,
 				   // and any other kind. Conservatively defaults to 0.
 	struct Type *inner; // For set<T>, T* or [N]T; the element type of []T
+	struct Type *error; // Error payload of result<T, E>
 	char *name;			// For struct/alias/enum names
 	long array_len;		// For [N]T fixed-size arrays
 } Type;
@@ -56,6 +59,7 @@ typedef struct EnumVariant {
 
 typedef struct StructInitItem {
 	char *field_name; // NULL if positional
+	int is_shorthand; // bare identifier; positional when contextualized as an array
 	struct ASTNode *value;
 	// `..base` spread: copy remaining fields from this expression. The
 	// item carrying it is ignored as a value source.
@@ -104,6 +108,7 @@ typedef enum {
 	NODE_EXTERN_FN,
 	NODE_ASM,
 	NODE_UNCHECKED_BLOCK,
+	NODE_UNSAFE_BLOCK,
 	NODE_STABLE,
 	NODE_SEND,
 	NODE_RECV,
@@ -156,6 +161,7 @@ struct ASTNode {
 			ASTNode *body;
 			Type *ret_type;
 			int is_pure;
+			int is_unsafe;
 			int is_drip;
 			int is_test;   // #[test] attribute
 			int is_ignored; // #[ignore]
@@ -239,6 +245,7 @@ struct ASTNode {
 		struct {
 			ASTNode *callee;
 			ASTNode *args;
+			int compiler_generated;
 		} call;
 		struct {
 			ASTNode *items;
@@ -289,7 +296,7 @@ struct ASTNode {
 			ASTNode *try_block;
 			char *err_var;
 			ASTNode *catch_block;
-			Type *err_type; // payload type (`dregs (e: ParseErr)`); NULL = i32
+			Type *err_type; // payload type (`dregs (ParseErr e)`); NULL = i32
 		} filter;
 		struct {
 			char *name;

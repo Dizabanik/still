@@ -1,0 +1,8 @@
+i32 cleaned=0;
+fn drip work(i32 number) { defer { cleaned+=number; } drop(number); }
+fn main() {
+ { chan<handle> pipe=make_chan(2); handle a=work(3), b=work(5); sip(a); sip(b);
+   pipe<-move(a); pipe<-move(b); handle first=<-pipe; cancel(first);
+   println("{cleaned}"); }
+ println("{cleaned} {mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0;
+}

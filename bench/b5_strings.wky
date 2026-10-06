@@ -5,7 +5,7 @@ import stdc;
 // content comparisons on every 16th word against a literal.
 const str CORPUS = "the quick brown fox jumps over the lazy dog the quick brown fox pack my box with five dozen liquor jugs pack my box with five how vexingly quick daft zebras jump how vexingly quick daft zebras sphinx of black quartz judge my vow sphinx of black quartz judge ";
 
-fn u32 fnv(str w) {
+unsafe fn u32 fnv(str w) {
     u32 h = 2166136261;
     for (u32 i = 0; i < w.len; i += 1) {
         h = wrap_mul(h ^ (u32)w.data[i], 16777619);
@@ -13,7 +13,7 @@ fn u32 fnv(str w) {
     return h;
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     const i64 ROUNDS = 2000000;
     const u32 clen = CORPUS.len;
     u64 acc = 0;

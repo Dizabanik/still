@@ -11,6 +11,8 @@ enum Status {
     Err(i32)
 }
 
+#[unsafe]
+
 fn f64 area(Shape s) {
     return match s {
         Circle(r) => 3.141592653589793 * r * r,
@@ -19,6 +21,8 @@ fn f64 area(Shape s) {
         else => -1.0
     };
 }
+
+#[unsafe]
 
 fn void print_status(Status st) {
     match st {
@@ -30,6 +34,8 @@ fn void print_status(Status st) {
         }
     }
 }
+
+#[unsafe]
 
 fn void describe_shape(Shape s) {
     match s {
@@ -44,6 +50,8 @@ fn void describe_shape(Shape s) {
         }
     }
 }
+
+#[unsafe]
 
 fn i32 main() {
     let c = Shape.Circle(5.0);

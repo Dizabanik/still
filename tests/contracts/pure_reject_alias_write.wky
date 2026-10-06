@@ -1,2 +1,4 @@
+#[unsafe]
 pure fn i32 bad(i32* p) { let q=p; *q=9; return 0; }
+#[unsafe]
 fn i32 main() { return 0; }

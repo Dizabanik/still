@@ -1,17 +1,15 @@
-# Standard Library: `std.process`
+# Standard library: `std.process`
 
-The `std.process` namespace provides access to process execution metadata, command-line arguments, and process termination.
+The `std.process` module provides access to process execution arguments and process termination.
 
----
+## Command-line arguments
 
-## 1. Command-Line Arguments
-
-Whisky automatically captures `argc` and `argv` from the operating system entry point into private module globals during the `@main` function prologue.
+Whisky captures `argc` and `argv` from the host operating system entry point during program startup.
 
 ### Functions
 
-* `std.process.arg_count() -> i32`: Returns the number of command-line arguments passed to the program.
-* `std.process.arg_at(i32 index) -> str`: Returns the argument at the given index as a string slice view.
+* `std.process.arg_count() -> i32`: Returns the number of command-line arguments passed to the process.
+* `std.process.arg_at(i32 index) -> str`: Returns the argument at the specified index as a string slice view.
 
 ### Example
 
@@ -22,7 +20,7 @@ fn i32 main() {
     let count = std.process.arg_count();
     println("Total arguments: {count}");
 
-    for i in 0..count {
+    for (i in 0..count) {
         let arg = std.process.arg_at(i);
         println("  arg[{i}] = {arg}");
     }
@@ -31,38 +29,37 @@ fn i32 main() {
 }
 ```
 
-Running the compiled program:
-```bash
-./myprog foo bar 123
-# Output:
-# Total arguments: 4
-#   arg[0] = ./myprog
-#   arg[1] = foo
-#   arg[2] = bar
-#   arg[3] = 123
+Running the executable:
+```sh
+./myprog foo bar
 ```
 
----
+Output:
+```
+Total arguments: 3
+  arg[0] = ./myprog
+  arg[1] = foo
+  arg[2] = bar
+```
 
-## 2. Process Termination: `std.process.exit`
+## Process termination: `std.process.exit`
 
-`std.process.exit(i32 code)` terminates the current process immediately with the specified exit status code.
+`std.process.exit(i32 code)` terminates the current process immediately with the specified exit status:
 
 ```wky
 import stdc;
 
-fn void validate_input(i32 val) {
-    if val < 0 {
-        std.io.eputs("Fatal: negative value not permitted\n");
-        std.process.exit(1);
+fn void check_limit(i32 val) {
+    if (val < 0) {
+        std.io.eputs("Error: negative value not permitted\n");
+        unsafe { std.process.exit(1); }
     }
 }
 
 fn i32 main() {
-    validate_input(-5);
-    println("This line is never reached");
+    check_limit(-1);
     return 0;
 }
 ```
 
-The compiler attaches LLVM's `noreturn` attribute to `std.process.exit`, allowing LLVM to eliminate dead code and omit unnecessary epilogues following an exit call.
+The compiler attaches LLVM's `noreturn` attribute to `std.process.exit`, enabling dead-code elimination and omitting epilogues for code following an exit call.

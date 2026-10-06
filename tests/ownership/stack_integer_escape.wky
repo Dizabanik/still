@@ -1,2 +1,4 @@
+#[unsafe]
 fn u64 bad(){i32 local=42;return (u64)&local;}
+#[unsafe]
 fn main(){return 0;}

@@ -1,0 +1,4 @@
+fn result<i32,T> failure(T error) { return err(error); }
+fn i64 read(result<i32,i32> value) { return match value {Ok(v)=>v,Err(e)=>e}; }
+fn i64 read(result<i32,i64> value) { return match value {Ok(v)=>v,Err(e)=>e}; }
+fn main() { i32 a=7; i64 b=9000000000; println("{read(failure(a))} {read(failure(b))}"); return 0; }

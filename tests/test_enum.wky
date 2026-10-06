@@ -4,6 +4,8 @@ enum Roast { LIGHT, MEDIUM = 5, DARK };
 enum Brew { ESPRESSO = -2, FILTER, COLD };
 enum Size { SMALL = 4, BIG = 64 };
 
+#[unsafe]
+
 fn int main() {
     let x = Roast_MEDIUM;
     const i32 n = Roast_DARK;

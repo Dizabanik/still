@@ -1,0 +1,1 @@
+fn i64 next() { println("effect"); return 1; } fn main() { orbit x := next(); return 0; }

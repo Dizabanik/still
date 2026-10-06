@@ -1,0 +1,12 @@
+struct Grid { [2]i32 cells; }
+impl Grid {
+    pure fn i32 self_index(self, i64 index) { return self.cells[index]; }
+}
+fn main() {
+    Grid grid = {cells: {7, 11}};
+    orbit i32 value := grid[0];
+    println("{value}");
+    grid.cells[0] = 9;
+    println("{value}");
+    return 0;
+}

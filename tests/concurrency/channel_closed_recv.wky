@@ -1,0 +1,1 @@
+fn main() { chan<i64> pipe=make_chan(1); close_chan(pipe); let x=<-pipe; return 0; }

@@ -1,0 +1,4 @@
+{
+  "kind": "run",
+  "stdout": "42\ntrue\n0\n"
+}

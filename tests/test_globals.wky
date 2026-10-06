@@ -30,6 +30,8 @@ fn u32 compute() {
     return acc;
 }
 
+#[unsafe]
+
 fn i32 main() {
     stdc.printf("answer=%d depth=%lld\n", ANSWER, DEPTH);
     stdc.printf("ratio=%.2f\n", RATIO);

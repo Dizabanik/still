@@ -246,5 +246,29 @@
       "comparison": "Same algorithm, safety contract, layout, allocator and scheduling; differing implementations reported separately.",
       "required_instrumentation": "Compiler/runtime counters and a native implementation are required before reporting measurements."
     }
-  ]
+  ],
+  "implementation_evidence": {
+    "result_propagation": {
+      "runner": "scripts/bench_semantics.py",
+      "sources": [
+        "bench/managed/typed_result.wky",
+        "bench/managed/typed_result.c"
+      ]
+    },
+    "owner_lifecycle.tagged_values": {
+      "runner": "scripts/bench_semantics.py",
+      "sources": [
+        "bench/managed/owned_enum.wky",
+        "bench/managed/owned_enum.c"
+      ]
+    },
+    "shared_region_pipeline.cooperative_ownership_only": {
+      "runner": "scripts/bench_semantics.py",
+      "sources": [
+        "bench/managed/owned_channel.wky",
+        "bench/managed/owned_channel.c"
+      ],
+      "limitation": "Single-thread FIFO; no shared-region synchronization or cross-thread handoff."
+    }
+  }
 }

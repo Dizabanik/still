@@ -152,6 +152,8 @@ static int is_likely_cast(Parser *p) {
 	// Identifier types are ambiguous: (x) could be cast (Type) or grouping
 	// (var)
 	if (t1.type == TOK_IDENTIFIER) {
+		ASTNode *binding=find_decl(p,t1.text);
+		if (binding && (binding->type==NODE_VAR_DECL || binding->type==NODE_CONST_DECL)) return 0;
 		Token t2 = lexer_next(&temp);
 		// If followed by ')' it's likely a type cast: (User).
 		// If followed by '*' AND another identifier/')' it's a pointer
@@ -279,11 +281,21 @@ static void consume_type_end(Parser *p) {
 static Type *parse_type(Parser *p) {
 	Type *t = arena_alloc(p->arena, sizeof(Type));
 	TokenType tok = p->cur.type;
+	if (tok==TOK_IDENTIFIER && (!strcmp(p->cur.text,"option") || !strcmp(p->cur.text,"result")) &&
+	    lexer_peek(p->lexer).type==TOK_LANGLE) {
+		t->kind=!strcmp(p->cur.text,"option") ? TYPE_OPTION : TYPE_RESULT;
+		advance(p); advance(p);
+		t->inner=parse_type(p);
+		if (t->kind==TYPE_RESULT) { consume(p,TOK_COMMA,"result requires success and error types"); t->error=parse_type(p); }
+		consume_type_end(p);
+		return t;
+	}
 	if (tok == TOK_IDENTIFIER && strcmp(p->cur.text, "arena") == 0) {
 		advance(p);
 		t->kind = TYPE_ARENA;
 		return t;
 	}
+	if (tok==TOK_IDENTIFIER && !strcmp(p->cur.text,"handle")) { advance(p); t->kind=TYPE_HANDLE; return t; }
 	if (tok == TOK_IDENTIFIER &&
 		(!strcmp(p->cur.text, "owner") || !strcmp(p->cur.text, "ref")) &&
 		lexer_peek(p->lexer).type == TOK_LANGLE) {
@@ -937,7 +949,19 @@ static const char *type_to_suffix(Arena *arena, Type *t) {
 	case TYPE_F32:  return "f32";
 	case TYPE_F64:  return "f64";
 	case TYPE_STRUCT:
+	case TYPE_ENUM:
+	case TYPE_ALIAS:
 		return t->name ? t->name : "struct";
+	case TYPE_HANDLE: return "handle";
+	case TYPE_ARENA: return "arena";
+	case TYPE_OWNER: case TYPE_REF: case TYPE_CHAN: case TYPE_OPTION: case TYPE_RESULT: {
+		const char *in=type_to_suffix(arena,t->inner);
+		const char *error=t->error ? type_to_suffix(arena,t->error) : "";
+		size_t len=strlen(in)+strlen(error)+64;
+		char *buf=arena_alloc(arena,len);
+		snprintf(buf,len,"k%d_i%zu_%s_e%zu_%s",t->kind,strlen(in),in,strlen(error),error);
+		return buf;
+	}
 	case TYPE_PTR: {
 		const char *in = type_to_suffix(arena, t->inner);
 		size_t len = strlen(in) + 5;
@@ -1056,6 +1080,7 @@ static Type *clone_and_subst_type(Arena *arena, Type *src, int param_count,
 	dst->name = src->name ? arena_strdup(arena, src->name) : NULL;
 	dst->inner = clone_and_subst_type(arena, src->inner, param_count, params,
 									  concretes, gen_struct, inst_struct);
+	dst->error=clone_and_subst_type(arena,src->error,param_count,params,concretes,gen_struct,inst_struct);
 	return dst;
 }
 
@@ -1362,6 +1387,7 @@ static ASTNode *parse_struct_literal(Parser *p) {
 			// Field-init shorthand: `Vec { x, y }` means `.x = x, .y = y`
 			// -- the identifier names the field AND supplies the value.
 			item->field_name = p->cur.text;
+			item->is_shorthand = 1;
 			item->value = parse_expr(p);
 		} else {
 			item->value = parse_expr(p);
@@ -1733,6 +1759,7 @@ static ASTNode *parse_primary(Parser *p) {
 	} else if (p->cur.type == TOK_BREW) {
 		advance(p);
 		n->type = NODE_BREW;
+		int saved_declarations=p->decl_count;
 		consume(p, TOK_LBRACE, "{");
 		ASTNode *body = arena_alloc(p->arena, sizeof(ASTNode));
 		body->type = NODE_BLOCK;
@@ -1743,6 +1770,7 @@ static ASTNode *parse_primary(Parser *p) {
 				tail = &(*tail)->next;
 		}
 		consume(p, TOK_RBRACE, "}");
+		p->decl_count=saved_declarations;
 		n->data.brew.body = body;
 		n->data_type = arena_alloc(p->arena, sizeof(Type));
 		n->data_type->kind = TYPE_HANDLE;
@@ -1828,6 +1856,14 @@ static Type *deduce_node_type(Parser *p, ASTNode *n) {
 		ASTNode *callee = n->data.call.callee;
 		if (callee && callee->type == NODE_VAR_REF) {
 			const char *name = callee->data.var_ref.name;
+			if (!strcmp(name,"try")) {
+				Type *input=deduce_node_type(p,n->data.call.args);
+				if (input && (input->kind==TYPE_OPTION || input->kind==TYPE_RESULT)) return input->inner;
+			}
+			if (!strcmp(name,"some")) {
+				Type *inner=deduce_node_type(p,n->data.call.args);
+				if (inner) { Type *result=arena_alloc(p->arena,sizeof(*result)); result->kind=TYPE_OPTION; result->inner=inner; return result; }
+			}
 			for (int si = p->fn_sig_count - 1; si >= 0; si--) {
 				if (strcmp(p->fn_sigs[si].name, name) == 0) {
 					return call_return_type(p,si,n->data.call.args);
@@ -1862,13 +1898,23 @@ static Type *deduce_node_type(Parser *p, ASTNode *n) {
 	}
 	return NULL;
 }
+static int has_type_parameter(Type *type) {
+    return type && ((type->kind==TYPE_STRUCT && type->name && !strcmp(type->name,"T")) ||
+        has_type_parameter(type->inner) || has_type_parameter(type->error));
+}
+static Type *infer_type_parameter(Type *formal, Type *actual) {
+    if (!formal || !actual) return NULL;
+    if (formal->kind==TYPE_STRUCT && formal->name && !strcmp(formal->name,"T")) return actual;
+    Type *found=infer_type_parameter(formal->inner,actual->inner);
+    return found ? found : infer_type_parameter(formal->error,actual->error);
+}
+
 /* Printing and inferred locals need the same concrete return shape as
  * specialization. A generic ref<T> parameter infers T from its element,
  * and named argument order never chooses the wrong inference operand. */
 static Type *call_return_type(Parser *p,int signature,ASTNode *arguments) {
-	Type *ret=p->fn_sigs[signature].ret, *leaf=ret;
-	while (leaf && leaf->inner) leaf=leaf->inner;
-	if (!leaf || leaf->kind!=TYPE_STRUCT || !leaf->name || strcmp(leaf->name,"T"))
+	Type *ret=p->fn_sigs[signature].ret;
+	if (!has_type_parameter(ret))
 		return ret;
 	ASTNode *position=arguments;
 	for (ASTNode *parameter=p->fn_sigs[signature].parameters; parameter; parameter=parameter->next) {
@@ -1882,12 +1928,10 @@ static Type *call_return_type(Parser *p,int signature,ASTNode *arguments) {
 		}
 		Type *formal=parameter->data_type;
 		Type *actual=deduce_node_type(p,argument);
-		while (formal && formal->inner && actual && actual->inner) {
-			formal=formal->inner; actual=actual->inner;
-		}
-		if (formal && formal->kind==TYPE_STRUCT && formal->name && !strcmp(formal->name,"T") && actual) {
+		Type *inferred=infer_type_parameter(formal,actual);
+		if (inferred) {
 			char *name="T";
-			return clone_and_subst_type(p->arena,ret,1,&name,&actual,NULL,NULL);
+			return clone_and_subst_type(p->arena,ret,1,&name,&inferred,NULL,NULL);
 		}
 	}
 	return ret;
@@ -1903,6 +1947,7 @@ static ASTNode *make_call_node(Parser *p, int line, const char *fn_name, ASTNode
 	call->line = line;
 	call->data.call.callee = callee;
 	call->data.call.args = args;
+	call->data.call.compiler_generated = 1;
 	Type *void_t = arena_alloc(p->arena, sizeof(Type));
 	void_t->kind = TYPE_VOID;
 	call->data_type = void_t;
@@ -2072,7 +2117,14 @@ static void append_print_expr(Parser *p, int line, ASTNode **head, ASTNode ***ta
 			return;
 		}
 		case TYPE_SLICE:
-		case TYPE_ARRAY:
+		case TYPE_ARRAY: {
+			if (t->inner && (t->inner->kind == TYPE_U8 || t->inner->kind == TYPE_CHAR)) {
+				ASTNode *call = make_call_node(p, line, "__wky_print_view", arg);
+				append_print_stmt(head, tail, call);
+				return;
+			}
+			break;
+		}
 		case TYPE_PTR:
 		case TYPE_AMP: {
 			if (t->inner && (t->inner->kind == TYPE_U8 || t->inner->kind == TYPE_CHAR)) {
@@ -3561,7 +3613,7 @@ static int is_c_style_declaration(Parser *p) {
 	if (p->cur.type != TOK_IDENTIFIER) return next.type == TOK_LBRACKET;
 	if (next.type == TOK_LANGLE &&
 		(!strcmp(p->cur.text, "owner") || !strcmp(p->cur.text, "ref") ||
-		 !strcmp(p->cur.text, "chan")))
+		 !strcmp(p->cur.text, "chan") || !strcmp(p->cur.text,"option") || !strcmp(p->cur.text,"result")))
 		return generic_type_decl_follows(p, TOK_LANGLE);
 	if (next.type == TOK_LPAREN) {
 		for (int i = 0; i < p->generic_struct_count; i++)
@@ -3686,6 +3738,18 @@ static ASTNode *parse_match(Parser *p) {
 			arm->data.match_arm.variant_name = vname;
 
 			EnumVariant *ev = find_enum_variant_in_parser(p, ename, vname);
+			EnumVariant builtin={0};
+			if (target_type && (target_type->kind==TYPE_OPTION || target_type->kind==TYPE_RESULT)) {
+				int success=!strcmp(vname,target_type->kind==TYPE_OPTION ? "Some" : "Ok");
+				int failure=!strcmp(vname,target_type->kind==TYPE_OPTION ? "None" : "Err");
+				if (success || failure) {
+					Type *payload=success ? target_type->inner : target_type->error;
+					builtin.payload_count=payload && payload->kind!=TYPE_VOID;
+					builtin.payload_types[0]=payload;
+					ev=&builtin;
+					if (!ename) arm->data.match_arm.enum_name=NULL;
+				}
+			}
 
 			if (p->cur.type == TOK_LPAREN) {
 				advance(p); // eat '('
@@ -3739,8 +3803,8 @@ static ASTNode *parse_match(Parser *p) {
 		p->decl_count = saved_decls; // unbind arm pattern variables
 
 		arm->data.match_arm.body = body;
-		if (body && body->data_type && !inferred_arm_type) {
-			inferred_arm_type = body->data_type;
+		if (body && body->data_type) {
+			inferred_arm_type = unify_types(p,inferred_arm_type,body->data_type);
 		}
 
 		*arms_tail = arm;
@@ -3792,13 +3856,14 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 		return n;
 	}
 	if (p->cur.type == TOK_IDENTIFIER &&
-		strcmp(p->cur.text, "unchecked") == 0 &&
+		(!strcmp(p->cur.text, "unchecked") || !strcmp(p->cur.text,"unsafe")) &&
 		lexer_peek(p->lexer).type == TOK_LBRACE) {
 		// unchecked { ... } (IDEAS 2.3): no bounds checks are generated
 		// inside, even in debug builds. Contextual keyword -- user code
 		// can still name a variable `unchecked`.
 		ASTNode *n = arena_alloc(p->arena, sizeof(ASTNode));
-		n->type = NODE_UNCHECKED_BLOCK;
+		n->type = !strcmp(p->cur.text,"unsafe") ? NODE_UNSAFE_BLOCK : NODE_UNCHECKED_BLOCK;
+		int saved_declarations=p->decl_count;
 		advance(p);
 		consume(p, TOK_LBRACE, "Expected '{' after unchecked");
 		n->data.block.stmts = NULL;
@@ -3816,6 +3881,7 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			n->data.block.stmts = body;
 		}
 		consume(p, TOK_RBRACE, "Expected '}' to close unchecked");
+		p->decl_count=saved_declarations;
 		return n;
 	}
 	if (p->cur.type == TOK_ASM) {
@@ -3901,76 +3967,45 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			}
 		}
 
-		char *name = p->cur.text;
-		consume(p, TOK_IDENTIFIER, "Expected variable name");
-
-		if (p->cur.type == TOK_COLON) {
-			report_declaration_style_error(p);
-			return NULL;
-		}
-
-		ASTNode *init = NULL;
-		if (is_orbit) {
-			consume(p, TOK_COLON_ASSIGN, "Expected ':=' for orbit");
-			init = parse_expr(p);
-		} else {
-			if (p->cur.type == TOK_ASSIGN) {
-				advance(p);
-				// Optional `comptime` marker (IDEAS 2.1): documents that
-				// the initializer must fold. `const X = comptime fib(10);`
-				// The marker is advisory -- any const expr that folds,
-				// does -- but it makes intent explicit like Zig's.
-				if (p->cur.type == TOK_IDENTIFIER &&
-					strcmp(p->cur.text, "comptime") == 0 &&
-					lexer_peek(p->lexer).type != TOK_COLON_ASSIGN)
-					advance(p);
-				init = parse_expr(p);
-			}
-		}
-		if (is_let && !init) {
-			report_error(p, "'let' requires an initializer to infer its type; use 'Type name' for an uninitialized binding");
-			return NULL;
-		}
-
-		// A builtin constructor inherits the DECLARED type when its own
-		// inference can't know it (`chan<i32> ch = make_chan(4)`).
-		if (type && !is_orbit && init && init->type == NODE_CALL &&
-			!init->data_type)
-			init->data_type = type;
-		// FIX: Type Inference
-		if (!type) {
-			if (init && init->data_type) {
-				type = init->data_type; // Infer from expression
-			} else if (init && init->type == NODE_CALL && is_const) {
-				// Comptime call: the parser has no return-type table entry
-				// for pure fns called at comptime... actually fn_sigs covers
-				// it; fall through to u32 only when unknown.
-				type = arena_alloc(p->arena, sizeof(Type));
-				type->kind = TYPE_I64;
-			} else {
-				type = arena_alloc(p->arena, sizeof(Type));
-				type->kind = TYPE_U32; // Fallback
-			}
-		}
-
-		consume(p, TOK_SEMICOLON, "Expected ';'");
-
-		ASTNode *node = arena_alloc(p->arena, sizeof(ASTNode));
-		node->type = NODE_VAR_DECL;
-		node->data.var_decl.name = name;
-		node->data.var_decl.init = init;
-		node->data.var_decl.is_orbit = is_orbit;
-		node->data.var_decl.is_const = is_const;
-		node->data_type = type;
-
-		if (p->decl_count < 256) {
-			p->decls[p->decl_count].name = name;
-			p->decls[p->decl_count].node = node;
-			p->decl_count++;
-		}
-		if (is_orbit)
-			register_dependencies(p, init, node);
-		return node;
+        Type *declared_type=type;
+        ASTNode *head=NULL, **tail=&head;
+        do {
+            type=declared_type; // each inferred declarator gets its own type
+            char *name=p->cur.text;
+            consume(p,TOK_IDENTIFIER,"Expected variable name");
+            if (p->cur.type==TOK_COLON) { report_declaration_style_error(p); return NULL; }
+            ASTNode *init=NULL;
+            if (is_orbit) {
+                consume(p,TOK_COLON_ASSIGN,"Expected ':=' for orbit");
+                init=parse_expr(p);
+            } else if (p->cur.type==TOK_ASSIGN) {
+                advance(p);
+                if (p->cur.type==TOK_IDENTIFIER && !strcmp(p->cur.text,"comptime") &&
+                    lexer_peek(p->lexer).type!=TOK_COLON_ASSIGN) advance(p);
+                init=parse_expr(p);
+            }
+            if ((is_let || is_const) && !init) {
+                report_error(p,"inferred and const declarations require an initializer"); return NULL;
+            }
+            if (type && init && init->type==NODE_CALL && !init->data_type) init->data_type=type;
+            if (!type) type=deduce_node_type(p,init);
+            if (!type) {
+                type=arena_alloc(p->arena,sizeof(*type)); type->kind=TYPE_U32;
+            }
+            ASTNode *node=arena_alloc(p->arena,sizeof(*node));
+            node->type=NODE_VAR_DECL; node->line=stmt_line;
+            node->data.var_decl.name=name; node->data.var_decl.init=init;
+            node->data.var_decl.is_orbit=is_orbit; node->data.var_decl.is_const=is_const;
+            node->data_type=type;
+            if (p->decl_count>=1024) { report_error(p,"too many visible declarations"); return NULL; }
+            p->decls[p->decl_count].name=name; p->decls[p->decl_count++].node=node;
+            if (is_orbit) register_dependencies(p,init,node);
+            *tail=node; tail=&node->next;
+            if (p->cur.type!=TOK_COMMA) break;
+            advance(p);
+        } while (!p->had_error);
+        consume(p,TOK_SEMICOLON,"Expected ';'");
+        return head;
 	}
 	if (p->cur.type == TOK_RETURN) {
 		advance(p);
@@ -4374,7 +4409,6 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			struct SelectCase *cs =
 				arena_alloc(p->arena, sizeof(struct SelectCase));
 			cs->chan = chan_expr;
-			cs->body = parse_block(p);
 			cs->next = NULL;
 			// Bind the received value as a fresh const-like decl.
 			if (var_name) {
@@ -4391,6 +4425,13 @@ static ASTNode *parse_statement_inner(Parser *p, int stmt_line) {
 			} else {
 				cs->var_decl = NULL;
 			}
+            int saved_case_decls=p->decl_count;
+            if (cs->var_decl && p->decl_count<1024) {
+                p->decls[p->decl_count].name=var_name;
+                p->decls[p->decl_count++].node=cs->var_decl;
+            }
+            cs->body=parse_block(p);
+            p->decl_count=saved_case_decls;
 			(void)var_t;
 			*tail = cs;
 			tail = &cs->next;
@@ -4584,6 +4625,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 	int attr_is_ignored = 0;
 	int attr_noalloc = 0;
 	int attr_nocapture = 0;
+	int attr_unsafe=0;
 	unsigned fp_permissions = 0;
 	while (p->cur.type == TOK_ATTRIBUTE) {
 		if (strcmp(p->cur.text, "test") == 0)
@@ -4594,6 +4636,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 			attr_noalloc = 1;
 		else if (strcmp(p->cur.text,"nocapture")==0)
 			attr_nocapture=1;
+		else if (!strcmp(p->cur.text,"unsafe")) attr_unsafe=1;
 		else if (strcmp(p->cur.text, "fp_contract") == 0)
 			fp_permissions |= 1;
 		else if (strcmp(p->cur.text, "fp_reassoc") == 0)
@@ -4605,6 +4648,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 	int is_pure = (p->cur.type == TOK_PURE);
 	if (is_pure)
 		advance(p);
+	if (p->cur.type==TOK_IDENTIFIER && !strcmp(p->cur.text,"unsafe")) { attr_unsafe=1; advance(p); }
 	consume(p, TOK_FN, "Expected 'fn'");
 
 	int is_drip = (p->cur.type == TOK_DRIP);
@@ -4770,6 +4814,7 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 	fn_node->type = NODE_FUNC_DECL;
 	fn_node->line = p->prev.line; // `fn` keyword line, for debug info
 	fn_node->data.func.is_pure = is_pure;
+	fn_node->data.func.is_unsafe=attr_unsafe;
 	fn_node->data.func.is_drip = is_drip;
 	fn_node->data.func.is_test = attr_is_test;
 	fn_node->data.func.is_ignored = attr_is_ignored;
@@ -4785,12 +4830,16 @@ void parse_function(Parser *p, ASTNode ***tail, char *prefix, int is_pub) {
 	// `let x = name(...)` calls inside infer the declared return type.
 	// Generic templates (return type is a bare `T`) are excluded: their
 	// concrete type only exists per instantiation.
-	if (p->fn_sig_count < 512 && ret_type) {
+	if (p->fn_sig_count < 512 && (ret_type || is_drip)) {
 		int np = 0;
 		for (ASTNode *a = args_head; a; a = a->next)
 			np++;
 		p->fn_sigs[p->fn_sig_count].name = func_name;
 	p->fn_sigs[p->fn_sig_count].ret = ret_type;
+	if (is_drip) {
+		Type *handle=arena_alloc(p->arena,sizeof(*handle)); handle->kind=TYPE_HANDLE;
+		p->fn_sigs[p->fn_sig_count].ret=handle;
+	}
 	p->fn_sigs[p->fn_sig_count].parameters = args_head;
 		p->fn_sigs[p->fn_sig_count].nparams = np;
 		p->fn_sig_count++;
@@ -5004,6 +5053,7 @@ ASTNode *parse_program(Parser *p) {
 		}
 
 		if (p->cur.type == TOK_FN || p->cur.type == TOK_PURE ||
+            (p->cur.type==TOK_IDENTIFIER && !strcmp(p->cur.text,"unsafe") && lexer_peek(p->lexer).type==TOK_FN) ||
 			p->cur.type == TOK_ATTRIBUTE) {
 			// #[soa] belongs to a struct declaration, not a function.
 			int leading_soa = 0;

@@ -1,0 +1,1 @@
+fn main() { const [2]i32 values={1,2}; let view=values[0..2]; return 0; }

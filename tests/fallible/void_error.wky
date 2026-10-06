@@ -1,0 +1,3 @@
+fn result<i32,void> empty(bool fail) { if(fail) {return err();} return ok(9); }
+fn result<i32,void> relay(bool fail) { return ok(try(empty(fail))+1); }
+fn main() { println("{match relay(false) {Ok(v)=>v,Err=>-1}} {match relay(true) {Ok(v)=>v,Err=>-1}}"); return 0; }

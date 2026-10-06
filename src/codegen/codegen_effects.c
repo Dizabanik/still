@@ -30,6 +30,11 @@ static int allocation_trace(LLVMValueRef fn, LLVMValueRef *path, unsigned depth,
     for (LLVMBasicBlockRef bb=LLVMGetFirstBasicBlock(fn);bb;bb=LLVMGetNextBasicBlock(bb)) {
         for (LLVMValueRef in=LLVMGetFirstInstruction(bb);in;in=LLVMGetNextInstruction(in)) {
             if (!LLVMIsACallInst(in) && !LLVMIsAInvokeInst(in)) continue;
+            unsigned cleanup_kind=LLVMGetMDKindIDInContext(LLVMGetTypeContext(LLVMTypeOf(in)),
+                "wky.cleanup.callback",sizeof("wky.cleanup.callback")-1);
+            if (LLVMGetMetadata(in,cleanup_kind)) {
+                snprintf(trace,capacity,"%s -> resource cleanup (allocation effect is unknown)",name); return 1;
+            }
             char child[2048];
             if (allocation_trace(LLVMGetCalledValue(in),path,depth,child,sizeof(child))) {
                 snprintf(trace,capacity,"%s -> %s",name,child); return 1;

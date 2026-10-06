@@ -28,8 +28,8 @@ def main():
         source = root / 'input.wky'
         raw = r'''import stdc;
 // import "missing-comment.wky"; untouched comment ż
-#[nocapture] fn i32 read(i32* p){return *p;}
-fn main(){let text="import \"missing-string.wky\"; ż\x00Z";
+#[nocapture] unsafe fn i32 read(i32* p){return *p;}
+unsafe fn main(){let text="import \"missing-string.wky\"; ż\x00Z";
 i32 x=41; stdc.printf("%d %d %d\n",read(&x),text.len,(i32)'\x41');
 if(x==41){println("yes");}else{println("no");}return 0;}
 '''.encode()
@@ -165,6 +165,25 @@ fn int main(){
             assert builds[0] == builds[1], f'declaration spelling changed emitted code at O{opt}'
         print('PASS declaration lowering: identical bitcode, IR and native objects at O0/O2/O3')
 
+        source.write_text('''fn main() {
+    i64 minimum = -9223372036854775807 - 1;
+    f64 number = 1.25;
+    println("{minimum:70000d}");
+    println("{minimum:070000d}");
+    println("{number:.100f}");
+    return 0;
+}
+''')
+        minimum = str(-(1 << 63))
+        expected = (minimum.rjust(70000) + '\n' + minimum.zfill(70000) + '\n' + format(1.25, '.100f') + '\n').encode()
+        for opt in (0, 2, 3):
+            compiled = run(f'-O{opt}', source, '-o', root / 'large-format')
+            assert not compiled.stderr, compiled
+            executed = invoke([str(root / 'large-format')], root)
+            assert executed.returncode == 0 and not executed.stderr, executed
+            assert executed.stdout == expected, (opt, len(executed.stdout), len(expected))
+        print('PASS formatted output: large width/precision and minimum signed integer at O0/O2/O3')
+
         source.write_text('fn main(){ println("ż"); owner<i64> a=own(1); release(a); println("{a[0]}"); return 0; }')
         result = run('--check', '--diagnostic-format=json', source, status=1)
         diagnostic = json.loads(result.stderr.splitlines()[0])
@@ -263,7 +282,7 @@ fn int main(){
             # absolute x86 ELF relocations even on systems defaulting to non-PIE.
             source.write_text('''import stdc;
 i64 answer=41;
-fn main(){
+unsafe fn main(){
     owner<i64> values=own(1); values[0]=answer+1;
     stdc.printf("%s %lld\\n", "Whisky", values[0]);
     return 0;

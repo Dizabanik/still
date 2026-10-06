@@ -1,0 +1,1 @@
+import stdc; fn main() { printf("x"); return 0; }

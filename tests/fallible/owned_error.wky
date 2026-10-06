@@ -1,0 +1,7 @@
+fn result<i64,owner<i64>> fail() { owner<i64> e=own(1); e[0]=19; return err(move(e)); }
+fn result<i64,owner<i64>> relay() { owner<i64> local=own(3); defer println("defer {mem_metric(2)}"); return ok(try(fail())); }
+fn main() {
+ filter { let v=try(relay()); println("unexpected {v}"); }
+ dregs(owner<i64> e) { println("error {e[0]} {mem_metric(2)}"); }
+ println("{mem_metric(2)} {mem_metric(0) == mem_metric(1)}"); return 0;
+}

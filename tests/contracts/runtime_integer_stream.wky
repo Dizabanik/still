@@ -1,10 +1,13 @@
 // Multiple runtime seeds/counts; oracle is generated independently in Python.
+#[unsafe]
 fn i64 input(i32 arg) {
     char* text=std.process.arg_at(arg); i64 value=0;
     for(i64 i=0;text[i]!=0;i+=1) { value=value*10+((i64)text[i])-48; }
     return value;
 }
+#[unsafe]
 fn u32 next(u32 value) { u32 multiplier=1664525; u32 increment=1013904223; return value*multiplier+increment; }
+#[unsafe]
 fn i32 main() {
     u32 state=(u32)input(1); i64 count=input(2); [17]u32 data;
     for(i64 i=0;i<17;i+=1) { state=next(state ^ (u32)i); data[i]=state; }

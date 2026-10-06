@@ -1,0 +1,2 @@
+fn result<i64,i32> check(i64 x) { if (x < 0) { press e = 13; } return ok(x); }
+fn main() { println("{match check(-1) { Ok(v) => v, Err(e) => -(i64)e }}"); return 0; }

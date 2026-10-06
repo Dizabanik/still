@@ -4,12 +4,14 @@ struct Grid { [4]i32 cells; }
 struct Names { [3]str names; }
 
 impl Grid {
+    #[unsafe]
     fn i32 self_index(self, i64 i) {
         if (i < 0 || i >= 4) {
             return -1;
         }
         return self.cells[i];
     }
+    #[unsafe]
     fn void self_index_set(self* g, i64 i, i32 v) {
         if (i < 0 || i >= 4) {
             return;
@@ -19,6 +21,7 @@ impl Grid {
 }
 
 impl Names {
+    #[unsafe]
     fn str self_index(self, i64 i) {
         if (i < 0 || i >= 3) {
             return "?";
@@ -26,6 +29,8 @@ impl Names {
         return self.names[i];
     }
 }
+
+#[unsafe]
 
 fn i32 main() {
     Grid g;

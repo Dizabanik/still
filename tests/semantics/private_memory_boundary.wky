@@ -1,0 +1,6 @@
+fn main() {
+    owner<i64> values = own(1);
+    values[0] = 7;
+    __wky_mem_address(0, 0, 0, 0, 0, 8);
+    return 0;
+}

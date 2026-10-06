@@ -1,0 +1,4 @@
+ref<chan<i32>> view;
+fn main() { owner<chan<i32>> channels=own(1); channels[0]=make_chan(1); view=ref_of(channels);
+ let task=brew { select { case value=<-view[0]: {drop(value);} } };
+ sip(task); release(channels); sip(task); return 0; }

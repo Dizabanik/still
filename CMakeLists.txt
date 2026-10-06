@@ -127,6 +127,11 @@ find_package(Threads REQUIRED)
 target_link_libraries(memory_runtime_test PRIVATE Threads::Threads)
 add_test(NAME memory-runtime COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/test_memory_runtime.py $<TARGET_FILE:memory_runtime_test>)
+add_executable(print_runtime_test tests/runtime/printing.c src/runtime/wky_runtime.c)
+target_compile_options(print_runtime_test PRIVATE -UNDEBUG -O2 -fsanitize=address,undefined -fno-omit-frame-pointer)
+target_link_options(print_runtime_test PRIVATE -fsanitize=address,undefined)
+add_test(NAME print-runtime COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/scripts/test_print_runtime.py $<TARGET_FILE:print_runtime_test>)
 add_test(NAME check-mode COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/test_check_mode.py $<TARGET_FILE:still>)
 add_test(NAME tooling COMMAND ${Python3_EXECUTABLE}
@@ -147,7 +152,8 @@ add_test(NAME unit
 	COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test.py
 		--still $<TARGET_FILE:still> --strict
 		--json ${CMAKE_BINARY_DIR}/unit-results.json)
-set_tests_properties(unit PROPERTIES TIMEOUT 600)
+set(STILL_UNIT_TEST_TIMEOUT 600 CACHE STRING "Regression suite timeout in seconds; increase for CPU emulation")
+set_tests_properties(unit PROPERTIES TIMEOUT ${STILL_UNIT_TEST_TIMEOUT})
 
 add_test(NAME harness
 	COMMAND ${Python3_EXECUTABLE} -m unittest discover
@@ -199,5 +205,18 @@ add_custom_target(bench-subobjects
 add_custom_target(bench-tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_tools.py
         --still $<TARGET_FILE:still> --json ${CMAKE_BINARY_DIR}/compiler-tools-benchmark.json
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL DEPENDS still)
+
+add_custom_target(bench-semantics
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_semantics.py
+        --still $<TARGET_FILE:still> --json ${CMAKE_BINARY_DIR}/semantics-benchmark.json
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL DEPENDS still)
+
+add_custom_target(bench-semantics-verify
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench_semantics.py
+        --still $<TARGET_FILE:still> --rounds 2048 --result-rounds 4096 --verify-only
+        --json ${CMAKE_BINARY_DIR}/semantics-verification.json
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL DEPENDS still)

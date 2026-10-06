@@ -3,26 +3,33 @@ import stdc;
 struct Vec2 { f32 x; f32 y; }
 
 impl Vec2 {
+    #[unsafe]
     fn Vec2 self_add(self, Vec2 o) {
         Vec2 r = { .x = self.x + o.x, .y = self.y + o.y };
         return r;
     }
+    #[unsafe]
     fn Vec2 self_sub(self, Vec2 o) {
         Vec2 r = { .x = self.x - o.x, .y = self.y - o.y };
         return r;
     }
+    #[unsafe]
     fn Vec2 self_mul(self, f32 k) {
         Vec2 r = { .x = self.x * k, .y = self.y * k };
         return r;
     }
+    #[unsafe]
     fn Vec2 self_neg(self) {
         Vec2 r = { .x = -self.x, .y = -self.y };
         return r;
     }
+    #[unsafe]
     fn bool self_eq(self, Vec2 o) {
         return self.x == o.x && self.y == o.y;
     }
 }
+
+#[unsafe]
 
 fn i32 main() {
     Vec2 a = { .x = 1.0, .y = 2.0 };

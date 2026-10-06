@@ -9,7 +9,13 @@ import sys
 p = argparse.ArgumentParser()
 p.add_argument('binary')
 a = p.parse_args()
-cases = {'valid': None, 'value': None,
+cases = {'valid': None, 'value': None, 'tagged': None, 'resource': None,
+         'resource_pin': 'invalidation during stable',
+         'resource_clone': 'cannot clone an opaque resource',
+         'resource_drop_reentry': 'reentrant ownership mutation',
+         'resource_value_reentry': 'reentrant ownership mutation',
+         'resource_store_reentry': 'invalidation during stable',
+         'resource_shrink_reentry': 'reentrant ownership mutation',
          'value_drop_pinned': 'invalidation during stable',
          'value_store_pinned': 'invalidation during stable',
          'value_take_pinned': 'invalidation during stable',

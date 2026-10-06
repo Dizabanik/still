@@ -4,7 +4,7 @@ pure fn u32 hash_step(u32 h, u32 v) {
     return wrap_add(wrap_mul(h, 31), v);
 }
 
-fn i32 main() {
+unsafe fn i32 main() {
     [256]u32 data;
     u32 i = 0;
     while (i < 256) {

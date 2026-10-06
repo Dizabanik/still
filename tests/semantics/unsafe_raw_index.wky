@@ -1,0 +1,1 @@
+fn main() { [2]i64 x={1,2}; i64* p=x; return p[0]; }

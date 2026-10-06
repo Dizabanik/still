@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "fallible function may reach its end"
+}

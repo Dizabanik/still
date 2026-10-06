@@ -1,0 +1,1 @@
+fn result<i64,i64> value() { return err(1); } fn main() { filter { try(value()); } dregs(i32 e) {} return 0; }

@@ -1,0 +1,3 @@
+#[noalloc]
+fn void destroy_region(arena region) { release(region); }
+fn main() { return 0; }

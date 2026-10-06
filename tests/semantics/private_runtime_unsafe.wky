@@ -1,0 +1,8 @@
+fn main() {
+    println("prefix");
+    unsafe {
+        __wky_print_cstr("direct");
+        __wky_print_nl();
+    }
+    return 0;
+}

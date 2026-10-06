@@ -1,5 +1,7 @@
 import stdc;
 
+#[unsafe]
+
 fn i32 main() {
     // len 1 (byte-only path)
     if ("a" == "a") { stdc.printf("1eq "); }

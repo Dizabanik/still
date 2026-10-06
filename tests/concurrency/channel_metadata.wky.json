@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "metadata is read-only"
+}

@@ -17,6 +17,8 @@ typedef struct WkyValueLayout WkyValueLayout;
 typedef struct {
     uint64_t offset, count, stride;
     const WkyValueLayout *layout;
+    int64_t tag;
+    uint64_t conditional; /* select this field only for the active enum tag */
 } WkyOwnedField;
 struct WkyValueLayout {
     uint64_t size, count;
@@ -32,6 +34,9 @@ int32_t __wky_mem_value_clone(void *out, void *source, const WkyValueLayout *,
                               const WkyRef *container);
 
 int32_t __wky_mem_alloc(WkyRef *out, uint64_t count, uint64_t size);
+/* Adopt an opaque resource. Its callback releases the external allocation;
+ * descriptor lifetime, transfer, pinning and recursive drop remain shared. */
+int32_t __wky_mem_adopt(WkyRef *out, void *resource, void (*destroy)(void *));
 void __wky_mem_drop(WkyRef *owner);
 void __wky_mem_replace(WkyRef *slot, WkyRef *incoming);
 /* Transfer a whole owner into/out of managed storage. Validate the container

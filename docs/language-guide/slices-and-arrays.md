@@ -1,21 +1,17 @@
-# Slices, Arrays & Memory Safety
+# Slices and arrays
 
-Whisky treats memory buffers through two distinct representations: fixed-size contiguous **Arrays** and lightweight, non-owning **Slices**.
+Whisky handles contiguous sequences through fixed-size arrays and non-owning slice views.
 
----
+## Fixed-size arrays: `[N]T`
 
-## 1. Fixed-Size Arrays: `[N]T`
-
-Arrays are fixed-size collections of elements stored contiguously on the stack or in global data:
+Arrays have compile-time fixed lengths and are stored contiguously on the stack or in static data:
 
 ```wky
 import stdc;
 
 fn i32 main() {
-    // Array declaration and initialization
     [4]i32 numbers = {10, 20, 30, 40};
 
-    // Indexing
     let first = numbers[0];
     numbers[3] = 99;
 
@@ -24,30 +20,19 @@ fn i32 main() {
 }
 ```
 
-The length of an array is a compile-time constant accessible via `.len`.
+The length of an array is a constant accessible through `.len`.
 
----
+## Slices: `[]T`
 
-## 2. Slice Views: `[]T`
-
-A slice is a non-owning fat pointer consisting of a pointer to the data and an integer length:
-
-```wky
-struct Slice(T) {
-    T* data;
-    i64 len;
-}
-```
-
-Slices can view arrays, heap memory, or sub-regions of other slices:
+A slice is a fat pointer consisting of a pointer to element data and a 64-bit integer length:
 
 ```wky
 import stdc;
 
 fn i64 sum_slice([]i64 s) {
     let total = 0;
-    for i in 0..s.len {
-        total = total + s[i];
+    for (i in 0..s.len) {
+        total += s[i];
     }
     return total;
 }
@@ -55,8 +40,8 @@ fn i64 sum_slice([]i64 s) {
 fn i32 main() {
     [6]i64 buffer = {1, 2, 3, 4, 5, 6};
 
-    // Slice a sub-region [start..end]
-    []i64 sub_view = buffer[1..5]; // elements 2, 3, 4, 5
+    // Subslice [start..end]
+    []i64 sub_view = buffer[1..5];
 
     println("sub_view.len = {sub_view.len}");
     println("sub_view sum = {sum_slice(sub_view)}");
@@ -70,22 +55,33 @@ sub_view.len = 4
 sub_view sum = 14
 ```
 
----
+Slices expose two fields:
+* `.len`: The number of elements in the slice.
+* `.data`: A pointer to the underlying element buffer.
 
-## 3. Bounds-Checking Policy
+An array can decay into a slice view when passed to a function or assigned to a slice variable. Mutations through the slice mutate the underlying array elements.
 
-Whisky provides fine-grained control over bounds-checking via the `--bounds-check` compiler flag:
+### Range slicing syntax
 
-| Policy | Flag | Description |
+Slices can be constructed using range syntax:
+* `arr[start..end]`: Half-open subslice from `start` up to `end - 1`.
+* `arr[..end]`: Subslice starting from index 0 up to `end - 1`.
+* `arr[start..]`: Subslice starting from `start` through the end of the buffer.
+* `arr[start..=end]`: Inclusive subslice from `start` up to and including `end`.
+
+## Bounds-checking policies
+
+The compiler controls runtime index checks through the `--bounds-check` option:
+
+| Mode | Command flag | Behavior |
 |:---|:---|:---|
-| **Safe (Default)** | `--bounds-check=safe` | Checks indices at runtime unless proven safe by static analysis. |
-| **Always** | `--bounds-check=always` | Checks all array and slice accesses at runtime. Violations trap immediately. |
-| **Never** | `--bounds-check=never` | Elides all bounds checks (for maximum performance in trusted inner loops). |
+| Safe (default) | `--bounds-check=safe` | Checks indices at runtime unless proven safe by static analysis. |
+| Always | `--bounds-check=always` | Checks all array and slice index operations at runtime. Violations trap immediately. |
+| Never | `--bounds-check=never` | Omits bounds checks in generated code. |
 
-### Static Bounds-Check Elimination
-Under `--bounds-check=safe` (the default), `still` statically elides bounds checks in two common scenarios:
+### Static bounds-check elimination
 
-1. **Constant Folding**: When an index is a constant less than the known array length (e.g. `arr[2]` where `arr` has length 4), the bounds check is proven safe and eliminated at compile time.
-2. **Induction Variable Analysis**: In range-based loops (`for i in 0..N`) where `N <= arr.len`, the compiler proves the loop variable cannot exceed the buffer boundary and completely removes the bounds check from the generated loop kernel.
+Under `--bounds-check=safe`, the compiler eliminates bounds checks in two situations:
 
-In benchmark `b13_bounds` (51.2M array accesses), Whisky with elided bounds checks runs in **0.013s**, matching unchecked C clock-for-clock.
+1. Constant folding: When an index expression is a constant smaller than the statically known array length (for example, `arr[2]` on an array of length 4), the check is proven safe and omitted during lowering.
+2. Induction variables: In range-based loops (`for i in 0..N`) where `N <= arr.len`, the induction variable cannot exceed the buffer boundary, so the loop kernel runs without dynamic bounds checks.

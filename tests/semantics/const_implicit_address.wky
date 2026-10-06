@@ -1,0 +1,1 @@
+struct P { i64 x; } unsafe fn void update(P* p) { p.x=2; } fn main() { const P p={x:1}; unsafe { update(p); } return 0; }

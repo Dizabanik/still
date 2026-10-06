@@ -49,20 +49,16 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 
 	case NODE_CALL:
 	case NODE_SEND:
-		if (wky_contains_managed(c,wky_expr_type(c,n),1)) {
-			LLVMValueRef value = codegen_expr(c, n);
+	case NODE_RECV: {
+		LLVMValueRef value=codegen_expr(c,n);
+		Type *type=wky_expr_type(c,n);
+		if (wky_contains_managed(c,type,1) || (type && type->kind==TYPE_HANDLE)) {
 			LLVMValueRef slot = create_entry_block_alloca(c, LLVMTypeOf(value), "discarded_owner");
 			LLVMBuildStore(c->builder, value, slot);
-			wky_memory_cleanup_value(c,slot,wky_expr_type(c,n));
-			return;
+			wky_memory_cleanup_value(c,slot,type);
 		}
-		// `ch <- v;` as a statement: the send's value is discarded.
-		(void)codegen_expr(c, n);
 		return;
-	case NODE_RECV:
-		// `<-ch;` drains one element.
-		(void)codegen_expr(c, n);
-		return;
+	}
 	case NODE_SIP: // `sip(h);` as a statement: run it for the resume side effect
 	case NODE_SET_POUR:
 		codegen_expr(c, n);
@@ -87,10 +83,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 
     case NODE_VAR_DECL: {
         wky_check_value_type(c,n,n->data_type);
-		if (wky_contains_managed(c,n->data_type,1) && c->in_coroutine) {
-			still_error(STILL_E_TYPE, n, "managed owners in coroutines require cancellation cleanup support");
-			exit(1);
-		}
+		if (n->data.var_decl.is_orbit) wky_check_orbit(c,n);
 		LLVMTypeRef var_type = get_llvm_type(c, n->data_type);
 		LLVMValueRef val_ptr =
 			create_entry_block_alloca(c, var_type, n->data.var_decl.name);
@@ -103,53 +96,10 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 				!n->data.var_decl.init->data_type)
 				n->data.var_decl.init->data_type = n->data_type;
 
-			// Array -> slice binding: build the view from the ARRAY'S
-			// ADDRESS, not from a loaded copy -- slices are views, so
-			// writes through them must land in the original storage.
-			int handled_slice_view = 0;
-			if (LLVMGetTypeKind(var_type) == LLVMStructTypeKind &&
-				n->data_type && n->data_type->kind == TYPE_SLICE &&
-				n->data.var_decl.init->type == NODE_VAR_REF) {
-				Scope *sv0 = scope_find(
-					c, n->data.var_decl.init->data.var_ref.name);
-				if (sv0 && sv0->node && sv0->node->data_type &&
-					sv0->node->data_type->kind == TYPE_ARRAY) {
-					Type *at = sv0->node->data_type;
-					Type elem_ref = {0};
-					elem_ref.kind = at->inner ? at->inner->kind : TYPE_I32;
-					elem_ref.inner = at->inner ? at->inner->inner : NULL;
-					elem_ref.is_signed =
-						at->inner ? at->inner->is_signed : 0;
-					LLVMTypeRef elem = get_llvm_type(c, at->inner);
-					LLVMValueRef arr_addr = sv0->val;
-					LLVMValueRef data = LLVMBuildGEP2(
-						c->builder, elem, arr_addr,
-						(LLVMValueRef[]){LLVMConstInt(
-							LLVMInt64TypeInContext(c->context), 0, 0)},
-						1, "view_data");
-					init_val = LLVMGetUndef(var_type);
-					init_val = LLVMBuildInsertValue(
-						c->builder, init_val, data, 0, "view_ins_data");
-					init_val = LLVMBuildInsertValue(
-						c->builder, init_val,
-						LLVMConstInt(LLVMInt64TypeInContext(c->context),
-									 (unsigned long long)at->array_len, 0),
-						1, "view_ins_len");
-					handled_slice_view = 1;
-				}
-			}
+            init_val=wky_array_view(c,n->data.var_decl.init,n->data_type);
+            int handled_slice_view=init_val!=NULL;
 			if (!handled_slice_view) {
-			// Brew binding: let the coro emitter see this decl + the
-			// statement list so it can prove the handle never escapes
-			// and put the frame on the stack.
-			ASTNode *saved_brew_decl = c->cur_brew_decl;
-			c->cur_brew_decl =
-				(n->data.var_decl.init->type == NODE_BREW ||
-				 n->data.var_decl.init->type == NODE_CAST)
-					? n
-					: NULL;
 			init_val = codegen_expr(c, n->data.var_decl.init);
-			c->cur_brew_decl = saved_brew_decl;
 			// Bare var refs carry no parser-side type; stamp from their
 			// declaration so shape-aware coercions (array -> slice) fire.
 			if (!n->data.var_decl.init->data_type &&
@@ -172,12 +122,13 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		// A declaration becomes visible after its initializer. Shadowing
 		// reads the outer binding; a self-initializer cannot load this alloca.
 		scope_push(c, n->data.var_decl.name, val_ptr, var_type, n);
-		if (wky_contains_managed(c,n->data_type,1)) wky_memory_defer_value(c,val_ptr,n->data_type);
+		if (wky_contains_managed(c,n->data_type,1) || n->data_type->kind==TYPE_HANDLE) wky_memory_defer_value(c,val_ptr,n->data_type);
 		return;
 	}
 
 	case NODE_ASSIGN: {
 		ASTNode *target = n->data.assign.target;
+		wky_require_mutable(c,target);
 		// Operator-provided indexed store (IDEAS 1.2): `base[i] = v` on a
 		// struct with impl `self_index_set` becomes that call. Checked
 		// before the ordinary lvalue path so library types never need
@@ -246,8 +197,24 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 								target->data.index.index->data_type,
 								idx_want, &dsti);
 						}
-						LLVMValueRef val = codegen_expr(
-							c, n->data.assign.value);
+                        wky_check_call_safety(c,n,setter);
+                        LLVMValueRef val;
+                        ASTNode *rhs=n->data.assign.value;
+                        if (rhs->type==NODE_BINARY_OP && rhs->data.bin_op.left==target) {
+                            char getter_name[256]; snprintf(getter_name,sizeof(getter_name),"%s__self_index",bt->name);
+                            LLVMValueRef getter=LLVMGetNamedFunction(c->module,getter_name);
+                            if (!getter) { still_error(STILL_E_TYPE,n,"compound indexed assignment requires self_index"); exit(1); }
+                            wky_check_call_safety(c,n,getter);
+                            LLVMTypeRef recv=LLVMTypeOf(LLVMGetParam(getter,0));
+                            LLVMValueRef self=LLVMGetTypeKind(recv)==LLVMPointerTypeKind ? base_addr :
+                                LLVMBuildLoad2(c->builder,recv,base_addr,"indexed_self");
+                            Type index_type={.kind=TYPE_I64,.is_signed=1};
+                            LLVMValueRef gi=coerce_value(c,idx,&index_type,LLVMTypeOf(LLVMGetParam(getter,1)),&index_type);
+                            LLVMValueRef old=LLVMBuildCall2(c->builder,LLVMGlobalGetValueType(getter),getter,
+                                (LLVMValueRef[]){self,gi},2,"indexed_old_value");
+                            val=build_binop(c,rhs,old,codegen_expr(c,rhs->data.bin_op.right));
+                        } else val=codegen_expr(c,rhs);
+                        val=coerce_value(c,val,wky_expr_type(c,rhs),LLVMTypeOf(LLVMGetParam(setter,2)),NULL);
 						// LLVM forbids naming instructions that
 						// produce no value -- void calls must pass "".
 						LLVMBuildCall2(
@@ -309,43 +276,16 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 			}
 		}
 
-		// Slice target + array source: bind a view over the ORIGINAL
-		// array storage (same reasoning as the decl path).
-		LLVMValueRef val = NULL;
-		int handled_slice_view = 0;
-		Type *tgt_ast = target->data_type;
-		if (!tgt_ast && target->type == NODE_VAR_REF) {
-			Scope *tv = scope_find(c, target->data.var_ref.name);
-			if (tv && tv->node)
-				tgt_ast = tv->node->data_type;
-		}
-		if (LLVMGetTypeKind(target_type) == LLVMStructTypeKind &&
-			tgt_ast && tgt_ast->kind == TYPE_SLICE &&
-			n->data.assign.value->type == NODE_VAR_REF) {
-			Scope *sv0 = scope_find(
-				c, n->data.assign.value->data.var_ref.name);
-			if (sv0 && sv0->node && sv0->node->data_type &&
-				sv0->node->data_type->kind == TYPE_ARRAY) {
-				Type *at = sv0->node->data_type;
-				LLVMTypeRef elem = get_llvm_type(c, at->inner);
-				LLVMValueRef data = LLVMBuildGEP2(
-					c->builder, elem, sv0->val,
-					(LLVMValueRef[]){LLVMConstInt(
-						LLVMInt64TypeInContext(c->context), 0, 0)},
-					1, "view_data");
-				val = LLVMGetUndef(target_type);
-				val = LLVMBuildInsertValue(c->builder, val, data, 0,
-											"view_ins_data");
-				val = LLVMBuildInsertValue(
-					c->builder, val,
-					LLVMConstInt(LLVMInt64TypeInContext(c->context),
-								 (unsigned long long)at->array_len, 0),
-					1, "view_ins_len");
-				handled_slice_view = 1;
-			}
-		}
-		if (!handled_slice_view)
-			val = codegen_expr(c, n->data.assign.value);
+        LLVMValueRef val=wky_array_view(c,n->data.assign.value,target_ast);
+        int handled_slice_view=val!=NULL;
+        if (!handled_slice_view) {
+            ASTNode *value=n->data.assign.value;
+            if (value && value->type==NODE_BINARY_OP && value->data.bin_op.left==target) {
+                LLVMValueRef old=LLVMBuildLoad2(c->builder,target_type,target_ptr,"compound_value");
+                LLVMValueRef right=codegen_expr(c,value->data.bin_op.right);
+                val=build_binop(c,value,old,right);
+            } else val=codegen_expr(c,value);
+        }
 		if (!handled_slice_view) {
 		if (!n->data.assign.value->data_type &&
 			n->data.assign.value->type == NODE_VAR_REF) {
@@ -358,7 +298,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 						   target->data_type);
 		}
         if (owning_field) {
-            wky_memory_store_owner(c,target_ptr,val,container);
+            wky_memory_store_owner(c,target_ptr,val,container,target_ast);
             return;
         }
         if (wky_contains_managed(c,target_ast,1)) {
@@ -434,8 +374,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		// for init; cond; step { body }
 		// Lowered as its own block structure so `continue` lands on the
 		// step (not the condition) and per-iteration allocas stay scoped.
-		if (n->data.for_stmt.init)
-			codegen_stmt(c, n->data.for_stmt.init);
+		for (ASTNode *init=n->data.for_stmt.init; init; init=init->next) codegen_stmt(c,init);
 
 		LLVMBasicBlockRef cond_bb =
 			wky_append_block(c->current_func, "for_cond");
@@ -772,6 +711,8 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 	}
 
 	case NODE_RETURN: {
+		if (n->data.ret_stmt.expr && !c->in_coroutine)
+			wky_literal_context(c,n->data.ret_stmt.expr,c->current_ret_node_type);
 		if (n->data.ret_stmt.expr &&
 			n->data.ret_stmt.expr->type == NODE_STRUCT_LITERAL &&
 			!n->data.ret_stmt.expr->data_type) {
@@ -791,7 +732,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 			// bare `return;` -- runs defers, then leaves. Valid in void
 			// functions; in drips it finishes without a final value.
 			if (c->in_coroutine) {
-				LLVMBuildBr(c->builder, c->coro_cleanup_block);
+				LLVMBuildBr(c->builder, c->coro_finish_block);
 			} else if (LLVMGetTypeKind(c->current_ret_type) ==
 					   LLVMVoidTypeKind) {
 				LLVMBuildRetVoid(c->builder);
@@ -813,7 +754,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 					LLVMBuildStore(c->builder, ret_val, c->current_promise_ptr);
 				LLVMSetVolatile(store, 1);
 			}
-			LLVMBuildBr(c->builder, c->coro_cleanup_block);
+			LLVMBuildBr(c->builder, c->coro_finish_block);
 		} else {
 			if (c->uses_print && c->current_func && strcmp(LLVMGetValueName(c->current_func), "main") == 0) {
 				LLVMValueRef flush_fn = declare_wky_runtime_fn(c, "__wky_flush");
@@ -851,18 +792,22 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 
 		struct SelectCase *cases[8] = {0};
 		LLVMValueRef chan_addrs[8] = {0};
+		LLVMValueRef chan_containers[8] = {0};
+		Type *chan_types[8] = {0};
 		LLVMTypeRef chan_ts[8] = {0};
 		int ci = 0;
 		for (struct SelectCase *cs2 = n->data.select_stmt.cases; cs2;
 			 cs2 = cs2->next, ci++) {
 			cases[ci] = cs2;
-			Type *ct2 = cs2->chan->data_type;
+			Type *ct2 = wky_expr_type(c,cs2->chan);
 			if (!ct2 || ct2->kind != TYPE_CHAN) {
 				still_error(STILL_E_TYPE, n, "select case requires a chan<T>");
 				exit(1);
 			}
 			chan_ts[ci] = get_llvm_type(c, ct2);
-			chan_addrs[ci] = get_address(c, cs2->chan, NULL);
+			chan_types[ci]=ct2;
+			chan_addrs[ci]=wky_memory_lvalue(c,cs2->chan,NULL,&chan_containers[ci]);
+			if (!chan_addrs[ci]) chan_addrs[ci] = get_address(c, cs2->chan, NULL);
 		}
 
 		LLVMBasicBlockRef retry_bb =
@@ -882,8 +827,9 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		// first with cnt > 0 wins, a fully-empty chain falls to none_bb.
 		LLVMPositionBuilderAtEnd(c->builder, retry_bb);
 		for (int k = 0; k < ncases; k++) {
+			LLVMValueRef checked=wky_channel_validate(c,n,chan_types[k],chan_addrs[k],chan_containers[k]);
 			LLVMValueRef cnt_p = LLVMBuildStructGEP2(
-				c->builder, chan_ts[k], chan_addrs[k], 3, "");
+				c->builder, chan_ts[k], checked, 3, "");
 			LLVMValueRef cnt =
 				LLVMBuildLoad2(c->builder, i64_t, cnt_p, "sel_cnt");
 			LLVMValueRef ready = LLVMBuildICmp(
@@ -913,17 +859,23 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 			recv_node.data_type = elem_ast;
 			recv_node.line = n->line;
 			recv_node.data.recv.chan = cs->chan;
-			LLVMValueRef val = codegen_expr(c, &recv_node);
+			LLVMValueRef val = wky_channel_operation_at(c,&recv_node,chan_addrs[k],chan_containers[k]);
 
 			Scope *saved_scope = c->scope_stack;
+			DeferFrame *saved_defers=c->defer_stack;
 			if (cs->var_decl) {
 				LLVMValueRef vptr = create_entry_block_alloca(
 					c, LLVMTypeOf(val), cs->var_decl->data.var_decl.name);
 				LLVMBuildStore(c->builder, val, vptr);
+				cs->var_decl->data_type=elem_ast;
+				if (wky_contains_managed(c,elem_ast,1)) wky_memory_defer_value(c,vptr,elem_ast);
 				scope_push(c, cs->var_decl->data.var_decl.name, vptr,
 						   LLVMTypeOf(val), cs->var_decl);
 			}
 			codegen_stmt(c, cs->body);
+			if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+				for (DeferFrame *d=c->defer_stack; d && d!=saved_defers; d=d->next) run_defer_frame(c,d);
+			c->defer_stack=saved_defers;
 			c->scope_stack = saved_scope;
 			if (!LLVMGetBasicBlockTerminator(
 					LLVMGetInsertBlock(c->builder)))
@@ -956,7 +908,7 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 						resume_bb2);
 			LLVMAddCase(sw,
 						LLVMConstInt(LLVMInt8TypeInContext(ctx), 1, 0),
-						c->coro_cleanup_block);
+						wky_coro_cancel_block(c));
 			LLVMPositionBuilderAtEnd(c->builder, resume_bb2);
 			LLVMBuildBr(c->builder, retry_bb);
 		} else {
@@ -976,15 +928,14 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		// filter { ... } dregs (err) { ... }: try body with an explicit
 		// error slot. `press` stores into the slot and jumps to catch_bb.
 		// No unwinding -- press is a plain branch, so nounwind survives.
-		// The slot carries the declared payload type (`dregs (e: ParseErr)`);
+		// The slot carries the declared payload type (`dregs (ParseErr e)`);
 		// a typeless dregs keeps the legacy i32 slot.
 		LLVMContextRef ctx = c->context;
 		Type *payload = n->data.filter.err_type;
-        wky_check_value_type(c,n,payload);
-        if (c->in_coroutine && wky_contains_managed(c,payload,1)) {
-            still_error(STILL_E_OWNERSHIP,n,"owned error payloads in coroutines require cancellation cleanup support");
-            exit(1);
+        if (payload && wky_concrete_type(c,payload)->kind==TYPE_VOID) {
+            still_error(STILL_E_TYPE,n,"a dregs handler requires an error payload; void is not a handler type"); exit(1);
         }
+        wky_check_value_type(c,n,payload);
 		LLVMTypeRef slot_t =
 			payload ? get_llvm_type(c, payload)
 					: LLVMInt32TypeInContext(ctx);
@@ -1046,9 +997,15 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 
 	case NODE_PRESS: {
 		if (!c->filter_stack) {
-			still_error(STILL_E_SCOPE, n,
-				 "press outside of filter/dregs: nothing to catch");
-			exit(1);
+			Type *ret=wky_concrete_type(c,c->current_ret_node_type);
+			if (!ret || ret->kind!=TYPE_RESULT) {
+				still_error(STILL_E_SCOPE,n,"press requires a filter/dregs handler or result<T, E> return type"); exit(1);
+			}
+			wky_literal_context(c,n->data.press.target,ret->error);
+			LLVMValueRef value=codegen_expr(c,n->data.press.target);
+			value=coerce_value(c,value,wky_expr_type(c,n->data.press.target),get_llvm_type(c,ret->error),ret->error);
+			wky_propagate_failure(c,n,value,ret->error);
+			return;
 		}
 		FilterFrame *target = c->filter_stack;
 		LLVMContextRef ctx = c->context;
@@ -1105,7 +1062,9 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		return;
 
 	case NODE_DROP: {
+		if (!c->in_coroutine) { still_error(STILL_E_TYPE,n,"drop requires a coroutine"); exit(1); }
 		LLVMValueRef val = codegen_expr(c, n->data.drop.val);
+		val=coerce_value(c,val,wky_expr_type(c,n->data.drop.val),LLVMInt32TypeInContext(c->context),NULL);
 		if (c->current_promise_ptr) {
 			LLVMValueRef store =
 				LLVMBuildStore(c->builder, val, c->current_promise_ptr);
@@ -1127,12 +1086,13 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 0, 0),
 					resume_bb);
 		LLVMAddCase(sw, LLVMConstInt(LLVMInt8TypeInContext(c->context), 1, 0),
-					c->coro_cleanup_block);
+					wky_coro_cancel_block(c));
 		LLVMPositionBuilderAtEnd(c->builder, resume_bb);
 		return;
 	}
 
 	case NODE_UNCHECKED_BLOCK:
+		wky_require_unsafe(c,n,"disabling bounds checks");
 		// No bounds checks inside, even at --debug. The depth counter
 		// makes nesting work for free; every check site asks
 		// `c->unchecked_depth || !c->debug_build`.
@@ -1141,12 +1101,18 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 			codegen_stmt(c, n->data.block.stmts);
 		c->unchecked_depth--;
 		return;
+	case NODE_UNSAFE_BLOCK:
+		c->unsafe_depth++;
+		if (n->data.block.stmts) codegen_stmt(c,n->data.block.stmts);
+		c->unsafe_depth--;
+		return;
 
 	case NODE_MATCH:
 		codegen_match(c, n, NULL, NULL);
 		return;
 
 	case NODE_ASM: {
+		wky_require_unsafe(c,n,"inline assembly");
 		const char *cons =
 			n->data.asm_block.constraints ? n->data.asm_block.constraints : "";
 		LLVMTypeRef asm_t = LLVMFunctionType(
@@ -1172,17 +1138,19 @@ void codegen_stmt(StillCompiler *c, ASTNode *n) {
 }
 
 void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMTypeRef res_type) {
+    DeferFrame *match_defers=c->defer_stack;
 	ASTNode *target = n->data.match_stmt.target;
 	LLVMValueRef target_val = codegen_expr(c, target);
 	LLVMTypeRef enum_t = LLVMTypeOf(target_val);
 	Type *target_type = wky_expr_type(c,target);
-	if (!target_type || target_type->kind != TYPE_ENUM || LLVMGetTypeKind(enum_t) != LLVMStructTypeKind) {
+	if (!wky_is_tagged(target_type) || LLVMGetTypeKind(enum_t) != LLVMStructTypeKind) {
 		still_error(STILL_E_TYPE, n, "match requires a tagged enum value");
 		exit(1);
 	}
 
 	LLVMValueRef match_slot = create_entry_block_alloca(c, enum_t, "match_target");
 	LLVMBuildStore(c->builder, target_val, match_slot);
+	if (wky_contains_managed(c,target_type,1)) wky_memory_defer_value(c,match_slot,target_type);
 
 	LLVMValueRef tag_ptr = LLVMBuildStructGEP2(c->builder, enum_t, match_slot, 0, "match_tag_ptr");
 	LLVMValueRef tag = LLVMBuildLoad2(c->builder, LLVMInt64TypeInContext(c->context), tag_ptr, "match_tag");
@@ -1214,7 +1182,8 @@ void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMType
 		}
 	}
 
-	ASTNode *enum_decl = enum_name ? find_enum_decl(c, enum_name) : NULL;
+	ASTNode *enum_decl=wky_tagged_decl(c,target_type);
+	enum_name=enum_decl ? enum_decl->data.enum_decl.name : enum_name;
 	if (!enum_decl || LLVMGetTypeKind(enum_t) != LLVMStructTypeKind) {
 		still_error(STILL_E_TYPE, n, "match requires a tagged enum value");
 		exit(1);
@@ -1303,6 +1272,7 @@ void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMType
 
 		LLVMPositionBuilderAtEnd(c->builder, arm_bb);
 		Scope *saved_scope = c->scope_stack;
+		DeferFrame *saved_defers=c->defer_stack;
 
 		if (ev && ev->payload_count > 0 && a->data.match_arm.bindings) {
 			LLVMTypeRef param_ts[16];
@@ -1321,19 +1291,29 @@ void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMType
 				LLVMValueRef val = LLVMBuildLoad2(c->builder, param_ts[pi], fld_ptr, b->data.var_decl.name);
 				LLVMValueRef b_slot = create_entry_block_alloca(c, param_ts[pi], b->data.var_decl.name);
 				LLVMBuildStore(c->builder, val, b_slot);
+				b->data_type=wky_concrete_type(c,ev->payload_types[pi]);
+				if (wky_contains_managed(c,b->data_type,1)) {
+					LLVMBuildStore(c->builder,LLVMConstNull(param_ts[pi]),fld_ptr);
+					wky_memory_defer_value(c,b_slot,b->data_type);
+				}
 				scope_push(c, b->data.var_decl.name, b_slot, param_ts[pi], b);
 			}
 		}
 
-		if (res_slot != NULL) {
-			LLVMValueRef arm_val = codegen_expr(c, a->data.match_arm.body);
-			arm_val = coerce_value(c, arm_val, a->data.match_arm.body ? a->data.match_arm.body->data_type : NULL,
-				res_type, a->data_type);
-			LLVMBuildStore(c->builder, arm_val, res_slot);
+        if (res_slot != NULL) {
+            wky_literal_context(c,a->data.match_arm.body,n->data_type);
+            LLVMValueRef arm_val=codegen_expr(c,a->data.match_arm.body);
+            if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+                arm_val=coerce_value(c,arm_val,wky_expr_type(c,a->data.match_arm.body),res_type,n->data_type);
+                LLVMBuildStore(c->builder,arm_val,res_slot);
+            }
 		} else {
 			codegen_stmt(c, a->data.match_arm.body);
 		}
 
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder)))
+			for (DeferFrame *d=c->defer_stack; d && d!=saved_defers; d=d->next) run_defer_frame(c,d);
+		c->defer_stack=saved_defers;
 		c->scope_stack = saved_scope;
 		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
 			LLVMBuildBr(c->builder, exit_bb);
@@ -1342,11 +1322,13 @@ void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMType
 
 	if (else_arm) {
 		LLVMPositionBuilderAtEnd(c->builder, else_bb);
-		if (res_slot != NULL) {
-			LLVMValueRef arm_val = codegen_expr(c, else_arm->data.match_arm.body);
-			arm_val = coerce_value(c, arm_val, else_arm->data.match_arm.body ? else_arm->data.match_arm.body->data_type : NULL,
-				res_type, else_arm->data_type);
-			LLVMBuildStore(c->builder, arm_val, res_slot);
+        if (res_slot != NULL) {
+            wky_literal_context(c,else_arm->data.match_arm.body,n->data_type);
+            LLVMValueRef arm_val=codegen_expr(c,else_arm->data.match_arm.body);
+            if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+                arm_val=coerce_value(c,arm_val,wky_expr_type(c,else_arm->data.match_arm.body),res_type,n->data_type);
+                LLVMBuildStore(c->builder,arm_val,res_slot);
+            }
 		} else {
 			codegen_stmt(c, else_arm->data.match_arm.body);
 		}
@@ -1364,5 +1346,7 @@ void codegen_match(StillCompiler *c, ASTNode *n, LLVMValueRef res_slot, LLVMType
 		LLVMBuildUnreachable(c->builder);
 	}
 
-	LLVMPositionBuilderAtEnd(c->builder, exit_bb);
+    LLVMPositionBuilderAtEnd(c->builder,exit_bb);
+    for (DeferFrame *d=c->defer_stack; d && d!=match_defers; d=d->next) run_defer_frame(c,d);
+    c->defer_stack=match_defers;
 }

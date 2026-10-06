@@ -1,0 +1,1 @@
+unsafe fn i64 read(i64* p) { return *p; } fn main() { i64 x=1; return read(&x); }

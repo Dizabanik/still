@@ -1,0 +1,15 @@
+i32 cleaned=0;
+struct Job { handle task; i64 id; }
+enum Jobs { Empty, Task(handle) }
+fn drip work(i32 number) { defer { cleaned+=number; } drop(number); }
+fn result<handle,i32> start(i32 number) { return ok(work(number)); }
+fn result<i32,i32> consume(i32 number) { handle task=try(start(number)); return ok(sip(task)); }
+fn main() {
+ { Job a={task:work(1),id:7}; println("{sip(a.task)}"); }
+ { owner<handle> tasks=own(1); tasks[0]=work(2); println("{sip(tasks[0])}"); }
+ { handle task=work(4); sip(task); Jobs value=Jobs.Task(move(task));
+   match move(value) { Task(h)=>{ println("{sip(h)}"); }, Empty=>{} }
+ }
+ { println("{match consume(8) { Ok(value)=>value, Err(e)=>e }}"); }
+ println("{cleaned} {mem_metric(2)} {mem_metric(0)==mem_metric(1)}"); return 0;
+}

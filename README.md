@@ -10,7 +10,8 @@ owners, bounded references, arenas, and explicit stability scopes.
 
 The language is under active development. Managed memory and ownership have
 executable regression coverage; the complete safety model is still being
-implemented. Legacy raw pointers retain their existing semantics. See
+implemented. Raw operations require `unsafe`; owned aggregates, typed errors,
+coroutines and channels share cleanup and transfer rules. See
 [IMPLEMENTATION.md](IMPLEMENTATION.md) for implemented behavior and remaining work.
 
 ## Build
@@ -65,7 +66,10 @@ fn i32 main() {
 
 Explicit declarations put the type first: `int x = 10;`,
 `owner<i64> numbers = own(2);`, or `ref<i64> view = ref_of(numbers);`.
-Use `let k = 10;` to infer a binding's type from its initializer.
+Use `let k = 10;` to infer a binding's type from its initializer. Multiple
+bindings work too: `let x = 2, y = 10;`.
+See [ownership and typed errors](docs/language-guide/memory-and-errors.md) for
+`option<T>`, `result<T,E>`, `try(...)`, and explicit raw access.
 
 ```sh
 ./build-cmake/still examples/hello.wky -o build-cmake/hello

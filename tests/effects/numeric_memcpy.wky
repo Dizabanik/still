@@ -1,7 +1,9 @@
 import stdc;
 struct Numbers { i32 a; i32 b; }
 Numbers saved;
+#[unsafe]
 fn Numbers copied(Numbers value){Numbers copy={..value};return copy;}
+#[unsafe]
 fn main(){
     Numbers input={.b=7,.a=42};
     stdc.memcpy(&saved,&input,sizeof(Numbers));

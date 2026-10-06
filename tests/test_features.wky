@@ -1,9 +1,12 @@
 import stdc;
 
 // Pure function: optimizer can hoist/CSE/delete calls
+#[unsafe]
 pure fn u64 square(u64 x) {
     return x * x;
 }
+
+#[unsafe]
 
 fn i32 main() {
     // Fixed-size arrays

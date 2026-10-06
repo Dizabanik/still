@@ -1,0 +1,7 @@
+struct Grid { [2]i32 values; }
+impl Grid { fn i32 self_index(self, i64 index) { return self.values[index]; }
+ unsafe fn void self_index_set(self* grid, i64 index, i32 value) { grid->values[index]=value; } }
+i32 calls=0;
+fn i64 index() { calls+=1; return 0; }
+fn main() { Grid grid={values:{7,11}}; unsafe { grid[index()]+=5; }
+ println("{calls} {grid.values[0]} {grid.values[1]}"); return 0; }

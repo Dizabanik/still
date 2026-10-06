@@ -73,6 +73,31 @@ the default integer payload. Destructuring with `let` infers each binding's type
 Colons in struct field labels, destructuring renames, named call arguments, and
 control-flow labels are unrelated to type annotations.
 
+Comma-separated declarations initialize in source order: `let x = 2, y = 10;`
+or `i64 x = 2, y = 10;`. Inferred bindings need individual initializers.
+Use `orbit name := expression;` for a read-only derived expression, not a
+mutable cached binding. Const qualifies inline storage; crossing an owner/ref
+indirection does not make its referent immutable.
+Orbit callees, including custom index getters, must have verified pure effects.
+
+Use `option<T>`/`result<T, E>` and `some`/`none`/`ok`/`err` for typed optional
+and fallible values. Propagate with `try(expression)`, or handle errors with
+`filter { ... } dregs (Error error) { ... }`. Explicitly move owning payloads.
+
+Raw operations belong inside `unsafe { ... }`. A function whose callers must
+establish raw preconditions is `unsafe fn` (or `#[unsafe]`); a function can
+keep a safe interface when it establishes those preconditions internally.
+Prefer the smallest boundary whose assumptions can be reviewed. `unchecked`
+requires an unsafe context and does not disable managed identity checks.
+
+Use the language's printing and memory operations instead of calling private
+`__wky_` helpers. The compiler distinguishes generated helper calls from source
+calls; a private name does not grant a source call privileged access. Formatted
+byte arrays and slices retain their lengths, while raw C-string pointers require
+an unsafe context.
+Coroutine handles are `handle` values: `sip(task)` resumes, `drop(value)` yields,
+and `cancel(task)` destroys. Do not use Rust-style declaration annotations.
+
 ## Formatting and file organization
 
 Use C11, `.clang-format`, and `.editorconfig`. Follow the surrounding indentation

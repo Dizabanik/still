@@ -64,7 +64,7 @@ int main(int argc,char **argv) {
             if (!__wky_mem_clone(&copy,&root)) abort();
             if (size) {
                 Node *p=node(copy);
-                uint64_t value=node(copy)->value+1;
+                uint64_t value=p->value+1;
                 *(uint64_t *)__wky_mem_write_address(&copy,&p->value,8)=value;
             }
             originals+=chain_sum(root); copies+=chain_sum(copy);
@@ -82,7 +82,7 @@ int main(int argc,char **argv) {
             if (size) {
                 WkyRef leaf=*owner_at(copy,0);
                 uint64_t *p=word(leaf);
-                uint64_t value=*word(*owner_at(copy,0))+1;
+                uint64_t value=*p+1;
                 *(uint64_t *)__wky_mem_write_address(&leaf,p,8)=value;
             }
             originals+=fanout_sum(root); copies+=fanout_sum(copy);

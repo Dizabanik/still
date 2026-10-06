@@ -5,6 +5,7 @@ struct ParseErr {
     i32 code;
     i32 line;
 }
+#[unsafe]
 fn i32 main() {
     filter {
         ParseErr p = { .code = 7, .line = 3 };

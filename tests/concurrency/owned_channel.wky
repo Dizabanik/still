@@ -1,0 +1,17 @@
+chan<owner<i64>> pipe = make_chan(2);
+fn main() {
+    {
+        owner<i64> a = own(1); a[0] = 42;
+        pipe <- move(a);
+        owner<i64> b = <-pipe;
+        println("{b[0]} {pipe.count}");
+        owner<i64> c = own(1); c[0] = 7;
+        pipe <- move(c);
+    }
+    println("{mem_metric(0) == mem_metric(1) + 2}");
+    owner<i64> remaining = <-pipe;
+    println("{remaining[0]}");
+    release(remaining); release(pipe);
+    println("{mem_metric(2)}");
+    return 0;
+}

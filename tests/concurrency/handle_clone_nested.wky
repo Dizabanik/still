@@ -1,0 +1,2 @@
+struct Job { handle task; }
+fn main() { Job a={task:brew {drop(1);}}; let b=clone(a); release(b); return 0; }

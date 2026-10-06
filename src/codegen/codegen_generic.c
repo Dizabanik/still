@@ -3,17 +3,6 @@
 /* Resolve under the caller's types, then clone a concrete instance. Nested
  * instantiation never replaces a caller's T map or rewrites a shared template.
  * A structural key distinguishes owner/ref/pointer and fixed-array extents. */
-static size_t key_size(Type *t) {
-    return t ? 64+(t->name ? strlen(t->name) : 0)+key_size(t->inner) : 4;
-}
-static char *key_write(char *out,Type *t) {
-    if (!t) { memcpy(out,"end",4); return out+3; }
-    size_t length=t->name ? strlen(t->name) : 0;
-    out+=sprintf(out,"k%d_a%ld_n%zu_",t->kind,t->array_len,length);
-    if (length) { memcpy(out,t->name,length); out+=length; }
-    *out++='_';
-    return key_write(out,t->inner);
-}
 static void return_type(StillCompiler *c,ASTNode *call,LLVMValueRef fn) {
     for (FunctionSignature *s=c->function_signatures; s; s=s->next)
         if (s->function==fn) { call->data_type=s->return_type; return; }
@@ -26,6 +15,23 @@ static Type *argument_type(StillCompiler *c,ASTNode *arg) {
         if (fn) type=wky_expr_type(c,arg);
     }
     return wky_concrete_type(c,type);
+}
+static int has_parameter(Type *type) {
+    return type && ((type->kind==TYPE_STRUCT && type->name && !strcmp(type->name,"T")) ||
+        has_parameter(type->inner) || has_parameter(type->error));
+}
+static Type *infer_parameter(StillCompiler *c, ASTNode *argument, Type *formal, Type *actual) {
+    if (!has_parameter(formal)) return NULL;
+    if (formal->kind==TYPE_STRUCT && formal->name && !strcmp(formal->name,"T")) {
+        if (!actual || has_parameter(actual)) { still_error(STILL_E_TYPE,argument,"cannot infer a concrete generic type"); exit(1); }
+        return actual;
+    }
+    if (!actual || (formal->kind!=actual->kind && !(formal->kind==TYPE_SLICE && actual->kind==TYPE_ARRAY)) ||
+        (formal->kind==TYPE_ARRAY && formal->array_len!=actual->array_len)) {
+        still_error(STILL_E_TYPE,argument,"generic argument has incompatible type structure"); exit(1);
+    }
+    Type *found=infer_parameter(c,argument,formal->inner,actual->inner);
+    return found ? found : infer_parameter(c,argument,formal->error,actual->error);
 }
 LLVMValueRef wky_generic_function(StillCompiler *c,ASTNode *call,const char *name) {
     ASTNode *template=NULL;
@@ -55,30 +61,17 @@ LLVMValueRef wky_generic_function(StillCompiler *c,ASTNode *call,const char *nam
     if (provided!=count) { still_error(STILL_E_ARITY,call,"generic call requires %u arguments",count); exit(1); }
     char *names[8]; Type *types[8]; unsigned bindings=0;
     for (unsigned i=0; i<count; ++i) {
-        Type *parameter=parameters[i]->data_type, *actual=argument_type(c,arguments[i]);
-        while (parameter && parameter->inner) {
-            if (!actual || (actual->kind!=parameter->kind &&
-                !(parameter->kind==TYPE_SLICE && actual->kind==TYPE_ARRAY)) ||
-                (parameter->kind==TYPE_ARRAY && parameter->array_len!=actual->array_len)) {
-                still_error(STILL_E_TYPE,arguments[i],"generic argument has incompatible type structure"); exit(1);
-            }
-            parameter=parameter->inner; actual=actual->inner;
-        }
-        if (!parameter || parameter->kind!=TYPE_STRUCT || !parameter->name || strcmp(parameter->name,"T")) continue;
-        if (!actual || (actual->kind==TYPE_STRUCT && actual->name && !strcmp(actual->name,"T"))) {
-            still_error(STILL_E_TYPE,arguments[i],"cannot infer a concrete generic type"); exit(1);
-        }
-        /* First declaration of T sets its type; ordinary checked argument
-         * conversion handles later T operands, just like concrete functions. */
-        if (!bindings) { names[bindings]=parameter->name; types[bindings++]=actual; }
+        Type *inferred=infer_parameter(c,arguments[i],parameters[i]->data_type,argument_type(c,arguments[i]));
+        /* First occurrence selects T; checked argument conversion validates
+         * subsequent operands against that concrete signature. */
+        if (inferred && !bindings) { names[bindings]="T"; types[bindings++]=inferred; }
     }
     if (!bindings) { still_error(STILL_E_TYPE,call,"generic type must be inferred from an argument"); exit(1); }
-    size_t length=strlen(name)+64;
-    for (unsigned i=0; i<bindings; ++i) length+=key_size(types[i]);
+    char *keys[8]; size_t length=strlen(name)+32;
+    for (unsigned i=0; i<bindings; ++i) { keys[i]=wky_type_key(c,types[i]); length+=strlen(keys[i])+1; }
     char *mangled=arena_alloc(c->arena,length), *end=mangled;
     end+=sprintf(end,"__wky_generic_%s__",name);
-    for (unsigned i=0; i<bindings; ++i) end=key_write(end,types[i]);
-    *end=0;
+    for (unsigned i=0; i<bindings; ++i) end+=sprintf(end,"%s_",keys[i]);
     LLVMValueRef fn=LLVMGetNamedFunction(c->module,mangled);
     if (!fn) {
         ASTNode *instance=wky_clone_ast(c->arena,template,bindings,names,types,NULL,NULL);

@@ -1,13 +1,10 @@
-# Functions & Operator Overloading
+# Functions and operator overloading
 
-Functions in Whisky are ahead-of-time compiled, obey platform C ABI standards, and emit `nounwind` attributes across the entire call graph for zero stack-unwinding overhead.
+Functions in Whisky compile ahead of time, adhere to standard platform C ABIs, and emit `nounwind` attributes across the call graph.
 
----
+## Function declarations
 
-## 1. Function Declarations
-
-Functions declare their return type before the function name, and each
-parameter's type before its name:
+Functions declare their return type before the function name, followed by parameter declarations:
 
 ```wky
 import stdc;
@@ -28,11 +25,11 @@ fn i32 main() {
 }
 ```
 
----
+Functions that do not return a value specify `void` as their return type.
 
-## 2. Multi-Return Functions
+## Multi-return functions
 
-Functions can return multiple values using first-class tuple return syntax:
+Functions can return multiple values using tuple return types:
 
 ```wky
 import stdc;
@@ -50,13 +47,11 @@ fn i32 main() {
 }
 ```
 
-Multi-return functions pass values in CPU registers according to the SysV/ARM64 ABI without heap allocation or hidden out-parameters.
+Multi-return tuples are returned in CPU registers according to the SysV or ARM64 calling convention without heap allocations.
 
----
+## Pure functions: `pure fn`
 
-## 3. Pure Functions: `pure fn`
-
-A function marked `pure fn` guarantees that it reads only its arguments and produces no side effects:
+A function declared with `pure fn` guarantees that it reads only its arguments and creates no memory side effects:
 
 ```wky
 import stdc;
@@ -72,40 +67,61 @@ fn i32 main() {
 }
 ```
 
-The compiler attaches LLVM's `memory(none)` attribute to `pure fn`, allowing LLVM to aggressively hoist calls out of loops, eliminate common subexpressions, and optimize math kernels.
+The compiler adds LLVM's `memory(none)` attribute to pure functions, allowing common subexpression elimination, loop hoisting, and dead call elimination.
 
----
+## Unsafe functions
 
-## 4. Whitelisted Operator Overloading
+Functions that perform raw pointer arithmetic, unchecked indexing, inline assembly, or foreign calls require an explicit unsafe designation:
 
-Whisky supports operator overloading through a **whitelisted method name mapping**. Operators cannot be defined with arbitrary symbols or custom precedence; they map directly to canonical method names defined in struct `impl` blocks.
+```wky
+import stdc;
 
-### Supported Operator Table
+unsafe fn i32 read_raw(i32* ptr) {
+    return ptr[0];
+}
 
-| Operator | Method Name | Description |
+#[unsafe]
+fn void write_raw(i32* ptr, i32 val) {
+    ptr[0] = val;
+}
+```
+
+Callers must invoke these functions within an `unsafe { ... }` block or from inside an enclosing unsafe function.
+
+## Operator overloading
+
+Whisky supports operator overloading through defined method names inside struct `impl` blocks. Arbitrary custom operator symbols or user-defined precedence rules are not supported.
+
+### Supported operator mappings
+
+| Syntax | Implemented method | Description |
 |:---|:---|:---|
-| `a + b` | `self_add(self, o)` | Binary addition |
-| `a - b` | `self_sub(self, o)` | Binary subtraction |
-| `a * b` | `self_mul(self, o)` | Binary multiplication |
-| `a / b` | `self_div(self, o)` | Binary division |
-| `a % b` | `self_mod(self, o)` / `self_rem(self, o)` | Modulo / Remainder |
-| `a & b` | `self_bitand(self, o)` | Bitwise AND |
-| `a | b` | `self_bitor(self, o)` | Bitwise OR |
-| `a ^ b` | `self_bitxor(self, o)` | Bitwise XOR |
-| `a << b` | `self_shl(self, o)` | Left shift |
-| `a >> b` | `self_shr(self, o)` | Right shift |
+| `a + b` | `self_add(self, other)` | Addition |
+| `a - b` | `self_sub(self, other)` | Subtraction |
+| `a * b` | `self_mul(self, other)` | Multiplication |
+| `a / b` | `self_div(self, other)` | Division |
+| `a % b` | `self_mod(self, other)` or `self_rem(self, other)` | Modulo or remainder |
+| `a & b` | `self_bitand(self, other)` | Bitwise AND |
+| `a | b` | `self_bitor(self, other)` | Bitwise OR |
+| `a ^ b` | `self_bitxor(self, other)` | Bitwise XOR |
+| `a << b` | `self_shl(self, other)` | Left bit shift |
+| `a >> b` | `self_shr(self, other)` | Right bit shift |
 | `-a` | `self_neg(self)` | Unary negation |
 | `~a` | `self_bitnot(self)` | Bitwise NOT |
 | `!a` | `self_not(self)` | Logical NOT |
-| `a == b` | `self_eq(self, o)` | Equality |
-| `a != b` | `self_ne(self, o)` | Inequality |
-| `a < b` | `self_lt(self, o)` | Less than |
-| `a <= b` | `self_le(self, o)` | Less than or equal |
-| `a > b` | `self_gt(self, o)` | Greater than |
-| `a >= b` | `self_ge(self, o)` | Greater than or equal |
-| `a += b` .. `a >>= b` | Compound assignments | Desugared automatically via binary op |
+| `a == b` | `self_eq(self, other)` | Equality comparison |
+| `a != b` | `self_ne(self, other)` | Inequality comparison |
+| `a < b` | `self_lt(self, other)` | Less than |
+| `a <= b` | `self_le(self, other)` | Less than or equal |
+| `a > b` | `self_gt(self, other)` | Greater than |
+| `a >= b` | `self_ge(self, other)` | Greater than or equal |
+| `a[i]` | `self_index(self, i)` | Index read |
+| `a[i] = v` | `self_index_set(self*, i, v)` | Index write |
+| `a += b` | Evaluates target once, calls `self_add` | Compound assignment |
 
-### Complete Example
+Compound assignment operators (`+=`, `-=`, `*=`, `/=`, etc.) desugar automatically to the corresponding binary arithmetic method.
+
+### Complete operator example
 
 ```wky
 import stdc;
@@ -143,11 +159,11 @@ fn i32 main() {
 
     let v3 = v1 + v2;
     let v4 = -v1;
-    let are_equal = (v1 == v2);
+    let equal = (v1 == v2);
 
     println("v3 = ({v3.x:.1f}, {v3.y:.1f})");
     println("v4 = ({v4.x:.1f}, {v4.y:.1f})");
-    println("are_equal = {are_equal}");
+    println("equal = {equal}");
     return 0;
 }
 ```
@@ -156,5 +172,5 @@ Output:
 ```
 v3 = (15.0, 35.0)
 v4 = (-10.0, -20.0)
-are_equal = false
+equal = false
 ```

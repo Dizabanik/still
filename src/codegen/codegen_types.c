@@ -42,11 +42,12 @@ Type *wky_resolve_type(StillCompiler *c, Type *type) {
 
 Type *wky_concrete_type(StillCompiler *c, Type *type) {
 	type=wky_resolve_type(c,type);
-	if (!type || !type->inner) return type;
+	if (!type) return type;
 	Type *inner=wky_concrete_type(c,type->inner);
-	if (inner==type->inner) return type;
+	Type *error=wky_concrete_type(c,type->error);
+	if (inner==type->inner && error==type->error) return type;
 	Type *result=arena_alloc(c->arena,sizeof(*result));
-	*result=*type; result->inner=inner;
+	*result=*type; result->inner=inner; result->error=error;
 	return result;
 }
 
@@ -302,6 +303,8 @@ ASTNode *find_enum_decl(StillCompiler *c, const char *name) {
 			strcmp(s->data.enum_decl.name, name) == 0)
 			return s;
 	}
+	for (ASTNode *s=c->builtin_tagged_types; s; s=s->next)
+		if (!strcmp(s->data.enum_decl.name,name)) return s;
 	return NULL;
 }
 
@@ -324,10 +327,6 @@ int get_enum_max_payload_words(StillCompiler *c, const char *name) {
 		LLVMTypeRef fields[16];
 		for (int i = 0; i < v->payload_count; i++) {
 			Type *pt = v->payload_types[i];
-			if (wky_contains_managed(c, pt, 1)) {
-				still_error(STILL_E_TYPE, en, "enum owners require recursive drop support; borrow with ref<T>");
-				exit(1);
-			}
 			fields[i] = get_llvm_type(c, pt);
 			if (!LLVMTypeIsSized(fields[i])) {
 				still_error(STILL_E_TYPE, en, "enum payload must have a finite, known layout");
@@ -357,7 +356,7 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 		if (c->generic_instantiating) return get_llvm_type(c,resolved);
 		*t = *resolved;
 	}
-    if ((t->kind == TYPE_SLICE || t->kind == TYPE_CHAN ||
+    if ((t->kind == TYPE_SLICE ||
 		 t->kind == TYPE_PTR || t->kind == TYPE_AMP) && wky_contains_managed(c, t->inner, 1)) {
 		still_diag_error_at(STILL_E_TYPE, c->source_filename, NULL, 0,
 			"owners cannot be embedded in unmanaged storage");
@@ -367,6 +366,7 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 	switch (t->kind) {
 	case TYPE_OWNER:
 	case TYPE_REF:
+	case TYPE_HANDLE:
 	case TYPE_ARENA: {
 		LLVMTypeRef i64 = LLVMInt64TypeInContext(c->context);
 		LLVMTypeRef fields[] = {LLVMPointerTypeInContext(c->context, 0), i64, i64, i64};
@@ -428,10 +428,6 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 		return LLVMPointerType(inner, 0);
 	}
 
-	case TYPE_HANDLE:
-		t->is_signed = 0;
-		return LLVMPointerType(LLVMInt8TypeInContext(c->context), 0);
-
 	case TYPE_ARRAY: {
 		LLVMTypeRef elem = get_llvm_type(c, t->inner);
 		t->is_signed = 0;
@@ -465,9 +461,11 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 			LLVMTypeRef elem = t->inner ? get_llvm_type(c, t->inner)
 										: LLVMInt8TypeInContext(c->context);
 			LLVMTypeRef i64t = LLVMInt64TypeInContext(c->context);
-			LLVMTypeRef fields[] = {LLVMPointerType(elem, 0), i64t, i64t,
-									i64t, i64t};
-			return LLVMStructTypeInContext(c->context, fields, 5, 0);
+			(void)elem;
+			Type buffer={.kind=TYPE_OWNER,.inner=t->inner};
+			LLVMTypeRef fields[] = {get_llvm_type(c,&buffer), i64t, i64t,
+								i64t, i64t,LLVMInt1TypeInContext(c->context)};
+			return LLVMStructTypeInContext(c->context, fields, 6, 0);
 		}
 
 	case TYPE_SLICE:
@@ -519,11 +517,16 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 		return LLVMInt32TypeInContext(c->context);
 	}
 
+	case TYPE_OPTION: case TYPE_RESULT:
+		t=wky_concrete_type(c,t);
+		wky_tagged_decl(c,t);
+		// fall through to the same tagged-union ABI as user enums
 	case TYPE_ENUM: {
 		if (!t->name)
 			return LLVMInt64TypeInContext(c->context);
-		char enum_struct_name[256];
-		snprintf(enum_struct_name, sizeof(enum_struct_name), "enum.%s", t->name);
+		size_t name_size=strlen(t->name)+6;
+		char *enum_struct_name=arena_alloc(c->arena,name_size);
+		snprintf(enum_struct_name,name_size,"enum.%s",t->name);
 		LLVMTypeRef enum_t = LLVMGetTypeByName(c->module, enum_struct_name);
 		if (enum_t)
 			return enum_t;
@@ -548,55 +551,13 @@ LLVMTypeRef get_llvm_type(StillCompiler *c, Type *t) {
 
 // --- Function overloading --------------------------------------------
 
-// Canonical name of a type for symbol mangling. Structs use their own
-// names; slices/arrays/pointers wrap the element name.
-static const char *mangle_type_name(StillCompiler *c, Type *t, char *buf,
-									size_t bufsz) {
-	(void)c;
-	switch (t->kind) {
-	case TYPE_I8: return "i8";
-	case TYPE_U8: return "u8";
-	case TYPE_I16: return "i16";
-	case TYPE_U16: return "u16";
-	case TYPE_I32: return "i32";
-	case TYPE_U32: return "u32";
-	case TYPE_I64: return "i64";
-	case TYPE_U64: return "u64";
-	case TYPE_F16: return "f16";
-	case TYPE_BF16: return "bf16";
-	case TYPE_F32: return "f32";
-	case TYPE_F64: return "f64";
-	case TYPE_BOOL: return "bool";
-	case TYPE_VOID: return "void";
-	case TYPE_SLICE:
-	case TYPE_ARRAY:
-	case TYPE_PTR: {
-		if (!t->inner)
-			return "?ptr";
-		char inner[128];
-		const char *in =
-			mangle_type_name(c, t->inner, inner, sizeof(inner));
-		snprintf(buf, bufsz, t->kind == TYPE_SLICE ? "slice_%s"
-						   : t->kind == TYPE_ARRAY ? "arr%s_%s"
-												 : "ptr_%s",
-				 t->kind == TYPE_ARRAY ? "" : "", in);
-		return buf;
-	}
-	default:
-		if (t->name) {
-			snprintf(buf, bufsz, "%s", t->name);
-			return buf;
-		}
-		return "?";
-	}
-}
-
 // Structural type equality for overload resolution: kinds must match,
 // element/inner types recursively.
 int wky_types_same(Type *a, Type *b) {
 	while (a && b) {
 		if (a->kind != b->kind)
 			return 0;
+		if (a->kind==TYPE_RESULT && !wky_types_same(a->error,b->error)) return 0;
         if (a->kind == TYPE_STRUCT || a->kind == TYPE_ALIAS || a->kind == TYPE_ENUM ||
 			a->kind == TYPE_CHAN) {
 			const char *an = a->name, *bn = b->name;
@@ -617,25 +578,13 @@ int wky_types_same(Type *a, Type *b) {
 }
 
 // Build `bare__t1_t2` from declared param types. Result is arena-owned.
-static char *overload_mangled_name(StillCompiler *c, const char *bare,
-								   ASTNode *args) {
-	size_t need = strlen(bare) + 4;
-	for (ASTNode *a = args; a; a = a->next)
-		need += 24;
-	char *out = arena_alloc(c->arena, need + 1);
-	int n = snprintf(out, need, "%s", bare);
-	char buf[160];
-	int first = 1;
-	for (ASTNode *a = args; a; a = a->next) {
-		if (a->data_type) {
-			n += snprintf(out + n, need - (size_t)n, "%s%s", first ? "__" : "_",
-						  mangle_type_name(c, a->data_type, buf, sizeof(buf)));
-			first = 0;
-		}
-	}
-	if (first)
-		snprintf(out + n, need - (size_t)n, "__");
-	return out;
+static char *overload_mangled_name(StillCompiler *c, const char *bare, ASTNode *args) {
+    size_t need=strlen(bare)+4;
+    for (ASTNode *arg=args; arg; arg=arg->next) need+=strlen(wky_type_key(c,arg->data_type))+1;
+    char *out=arena_alloc(c->arena,need), *end=out;
+    end+=sprintf(end,"%s__",bare);
+    for (ASTNode *arg=args; arg; arg=arg->next) end+=sprintf(end,"%s_",wky_type_key(c,arg->data_type));
+    return out;
 }
 
 // Pass over all decls: register every NODE_FUNC_DECL whose bare name is

@@ -1,0 +1,3 @@
+owner<i64> storage=own(1);
+fn main() { let task=brew { let r=ref_of(storage); stable(r) { drop(4); } };
+ println("{sip(task)}"); cancel(task); resize(storage,2); release(storage); println("{mem_metric(2)}"); return 0; }

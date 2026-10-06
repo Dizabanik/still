@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "calling a private runtime helper requires an unsafe block"
+}

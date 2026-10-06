@@ -6,6 +6,8 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 	Scope *caller_locals = c->function_locals;
 	c->scope_stack = c->global_scope;
 	c->function_locals = NULL;
+	int saved_unsafe=c->unsafe_depth;
+	c->unsafe_depth=cur->data.func.is_unsafe;
 	LLVMContextRef ctx = c->context;
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
     wky_check_value_type(c,cur,cur->data.func.ret_type);
@@ -33,6 +35,7 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 	// signature IS the ABI. implicit_self_struct only contributes the
 	// `Struct__` mangling prefix.
 	int total_arg_cnt = explicit_arg_cnt;
+	wky_verify_semantics(c,cur);
 	wky_verify_ownership(c,cur);
 
 	LLVMTypeRef *param_types =
@@ -94,6 +97,7 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 	for (ASTNode *a=cur->data.func.args; a; a=a->next)
 		signature->parameters[signature_index++]=wky_concrete_type(c,a->data_type);
 	signature->return_type=wky_concrete_type(c,cur->data.func.ret_type);
+	if (cur->data.func.is_drip) { signature->return_type=arena_alloc(c->arena,sizeof(Type)); signature->return_type->kind=TYPE_HANDLE; }
 	signature->next = c->function_signatures;
 	c->function_signatures = signature;
 	char line_buf[32];
@@ -105,6 +109,7 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 		LLVMAddTargetDependentFunctionAttr(c->current_func, "wky.noalloc", "true");
 	if (cur->data.func.is_nocapture)
 		LLVMAddTargetDependentFunctionAttr(c->current_func,"wky.nocapture","true");
+	if (cur->data.func.is_unsafe) LLVMAddTargetDependentFunctionAttr(c->current_func,"wky.unsafe","true");
 	unsigned saved_fp_permissions = c->fp_permissions;
 	c->fp_permissions = cur->data.func.fp_permissions;
 	c->current_ret_type = ret_t;
@@ -195,26 +200,23 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 		LLVMBuildStore(c->builder, p_val, p_alloc);
 		scope_push(c, a->data.var_decl.name, p_alloc, arg_type, a);
 		if (wky_contains_managed(c,a->data_type,1)) {
-			if (cur->data.func.is_drip) {
-				still_error(STILL_E_TYPE, a, "managed owners in coroutines require cancellation cleanup support");
-				exit(1);
-			}
 			wky_memory_defer_value(c,p_alloc,a->data_type);
 		}
 	}
 
 	if (cur->data.func.is_drip) {
 		int was_in_coroutine = c->in_coroutine;
+		LLVMBasicBlockRef old_cleanup=c->coro_cleanup_block, old_suspend=c->coro_suspend_block, old_finish=c->coro_finish_block;
+		LLVMValueRef old_id=c->current_coro_id, old_handle=c->current_coro_hdl, old_promise=c->current_promise_ptr;
 		c->in_coroutine = 1;
 
 		LLVMBasicBlockRef cleanup_bb, suspend_bb;
 		LLVMValueRef hdl =
 			build_coro_frame(c, c->current_func, c->drip_promise_index,
 							 &cleanup_bb, &suspend_bb);
-		LLVMBasicBlockRef old_cleanup = c->coro_cleanup_block;
-		LLVMBasicBlockRef old_suspend = c->coro_suspend_block;
 		c->coro_cleanup_block = cleanup_bb;
 		c->coro_suspend_block = suspend_bb;
+		c->coro_finish_block=wky_append_block(c->current_func,"finish");
 
 		// Position at the resume block (the switch's case-0 successor).
 		LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(c->current_func);
@@ -223,6 +225,11 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 		LLVMPositionBuilderAtEnd(c->builder, bb);
 
 		codegen_stmt(c, cur->data.func.body);
+		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+			for (DeferFrame *d=c->defer_stack; d; d=d->next) run_defer_frame(c,d);
+			LLVMBuildBr(c->builder,c->coro_finish_block);
+		}
+		LLVMPositionBuilderAtEnd(c->builder,c->coro_finish_block);
 		finish_coro_body(c, cleanup_bb, suspend_bb);
 		// finish_coro_body now terminates the shared exit itself (ret hdl
 		// after coro.end); nothing left to emit on that block.
@@ -233,23 +240,27 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 		unsigned KIND =
 			LLVMGetMDKindID("wky.coro.kind", strlen("wky.coro.kind"));
 		LLVMSetMetadata(hdl, KIND, LLVMMetadataAsValue(ctx, md));
-		LLVMBuildRet(c->builder, hdl);
 
 		c->in_coroutine = was_in_coroutine;
 		c->coro_cleanup_block = old_cleanup;
 		c->coro_suspend_block = old_suspend;
-		c->current_promise_ptr = NULL;
+		c->coro_finish_block=old_finish;
+		c->current_promise_ptr=old_promise;
+		c->current_coro_id=old_id; c->current_coro_hdl=old_handle;
 	} else {
 		codegen_stmt(c, cur->data.func.body);
-		// Falling off the end still runs deferred statements first.
-		if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
-			for (DeferFrame *d = c->defer_stack; d; d = d->next)
-				run_defer_frame(c, d);
-			if (LLVMGetTypeKind(ret_t) == LLVMVoidTypeKind)
-				LLVMBuildRetVoid(c->builder);
-			else
-				LLVMBuildRet(c->builder, LLVMConstNull(ret_t));
-		}
+        if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(c->builder))) {
+            if (!wky_block_reachable(c,LLVMGetInsertBlock(c->builder))) LLVMBuildUnreachable(c->builder);
+            else {
+                Type *ret=wky_concrete_type(c,c->current_ret_node_type);
+                if (ret && (ret->kind==TYPE_RESULT || ret->kind==TYPE_OPTION)) {
+                    still_error(STILL_E_TYPE,cur,"fallible function may reach its end without returning a value"); exit(1);
+                }
+                for (DeferFrame *d=c->defer_stack; d; d=d->next) run_defer_frame(c,d);
+                if (LLVMGetTypeKind(ret_t)==LLVMVoidTypeKind) LLVMBuildRetVoid(c->builder);
+                else LLVMBuildRet(c->builder,LLVMConstNull(ret_t));
+            }
+        }
 	}
 
 	// Unused-variable warnings: walk the scope entries this function pushed
@@ -275,4 +286,5 @@ void codegen_func_decl(StillCompiler *c, ASTNode *cur,
 	c->overloads_active = saved_overload_idx;
 	c->scope_stack = caller_scope;
 	c->function_locals = caller_locals;
+	c->unsafe_depth=saved_unsafe;
 }

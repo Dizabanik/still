@@ -1,0 +1,25 @@
+// Runtime inputs and sized argument views keep setup outside the kernels' contracts.
+fn u64 input(i32 arg) {
+ str text=std.process.arg_at(arg); u64 value=0;
+ for(i64 i=0;i<text.len;i+=1) { value=value*10+(u64)text[i]-48; }
+ return value;
+}
+enum Value { Data(owner<u64>), Scalar([4]u64) }
+fn u64 consume(Value value,bool increment) {
+ match move(value) { Data(buffer)=>{if(increment) {buffer[0]+=1;} return buffer[0];}, Scalar(words)=>{return words[2];} }
+}
+fn main() {
+ u64 rounds=input(1), seed=input(2), period=input(3);
+ if(rounds>100000000 || seed>65535 || period<1 || period>256) {return 2;}
+ u64 checksum=0, counted=0;
+ for(u64 i=0;i<rounds;i+=1) {
+  u64 x=seed+i; Value source;
+  if(x%period==0) { source=Value.Scalar({(u64)18446744073709551615,(u64)18446744073709551615,x,(u64)18446744073709551615}); }
+  else { owner<u64> data=own(1); data[0]=x; source=Value.Data(move(data)); counted+=1; }
+  Value copy=clone(source);
+  u64 newer=consume(move(copy),true), original=consume(move(source),false);
+  checksum+=original+3*newer;
+ }
+ println("{checksum} {counted} {mem_metric(0)} {mem_metric(1)} {mem_metric(2)} {mem_metric(3)} {mem_metric(5)} {mem_metric(7)} {mem_metric(4)}");
+ return 0;
+}

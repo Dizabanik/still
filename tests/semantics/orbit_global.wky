@@ -1,0 +1,1 @@
+i64 x = 1; orbit y := x + 2; fn main() { println("{y}"); x = 8; println("{y}"); return 0; }

@@ -1,1 +1,2 @@
+#[unsafe]
 fn i32 main(i32 argc, str* argv) { println("{argc}|{argv[1]}|{argv[1].len}|{argv[2].len}"); return 7; }

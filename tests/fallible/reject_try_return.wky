@@ -1,0 +1,1 @@
+fn result<i64,i32> value() { return err(1); } fn main() { return try(value()); }

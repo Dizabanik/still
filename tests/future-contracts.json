@@ -436,5 +436,33 @@
         }
       ]
     }
-  ]
+  ],
+  "implementation_evidence": {
+    "ownership.active_tag_cleanup": [
+      "tests/managed/owned_enum_nested.wky",
+      "tests/errors/owner_payload.wky",
+      "tests/runtime/memory.c"
+    ],
+    "concurrency.cooperative_transfer_and_cancel": [
+      "tests/concurrency/owned_channel.wky",
+      "tests/concurrency/blocked_send_cancel.wky",
+      "tests/concurrency/blocked_recv_cancel.wky",
+      "tests/concurrency/cancel_select.wky",
+      "tests/concurrency/nested_handles.wky"
+    ],
+    "errors.typed_propagation": [
+      "tests/fallible/result_chain.wky",
+      "tests/fallible/option_chain.wky",
+      "tests/fallible/generic_error_and_overload.wky"
+    ],
+    "errors.owned_cleanup": [
+      "tests/fallible/partial_literal_cleanup.wky",
+      "tests/fallible/partial_call_cleanup.wky",
+      "tests/fallible/owned_error.wky"
+    ],
+    "ffi.explicit_boundary": [
+      "tests/semantics/unsafe_foreign_call.wky",
+      "tests/semantics/unsafe_raw_deref.wky"
+    ]
+  }
 }

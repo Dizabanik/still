@@ -1,0 +1,4 @@
+{
+  "kind": "reject",
+  "diagnostic": "non-exhaustive match"
+}

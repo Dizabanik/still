@@ -1,0 +1,3 @@
+fn result<i32,i32> failure() {return err(7);}
+let value=try(failure());
+fn main() {return 0;}
